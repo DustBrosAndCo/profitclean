@@ -1,0 +1,52 @@
+{
+  "name": "ProfitClean",
+  "short_name": "ProfitClean",
+  "description": "Commercial Cleaning Estimator by Dust Bros & Co.",
+  "start_url": "/",
+  "display": "standalone",
+  "theme_color": "#1E3A5F",
+  "background_color": "#F8FAFC",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "https://via.placeholder.com/72?text=PC",
+      "sizes": "72x72",
+      "type": "image/png"
+    },
+    {
+      "src": "https://via.placeholder.com/96?text=PC",
+      "sizes": "96x96",
+      "type": "image/png"
+    },
+    {
+      "src": "https://via.placeholder.com/128?text=PC",
+      "sizes": "128x128",
+      "type": "image/png"
+    },
+    {
+      "src": "https://via.placeholder.com/144?text=PC",
+      "sizes": "144x144",
+      "type": "image/png"
+    },
+    {
+      "src": "https://via.placeholder.com/152?text=PC",
+      "sizes": "152x152",
+      "type": "image/png"
+    },
+    {
+      "src": "https://via.placeholder.com/192?text=PC",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://via.placeholder.com/384?text=PC",
+      "sizes": "384x384",
+      "type": "image/png"
+    },
+    {
+      "src": "https://via.placeholder.com/512?text=PC",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
