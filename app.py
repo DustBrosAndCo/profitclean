@@ -8,6 +8,7 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 import math
+import json
 from datetime import datetime, date, timedelta
 import os
 
@@ -56,6 +57,22 @@ st.markdown("""
     padding: 1rem;
     margin-bottom: 1rem;
     border: 1px solid #e2e8f0;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+.internal-card {
+    background: #fef3c7;
+    border-radius: 16px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+    border: 1px solid #f59e0b;
+    border-left: 4px solid #f59e0b;
+}
+.worker-card {
+    background: #f0fdf4;
+    border-radius: 16px;
+    padding: 1rem;
+    margin-bottom: 0.5rem;
+    border: 1px solid #bbf7d0;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -68,7 +85,7 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "profitclean.db")
 SALES_TAX_RATE = 0.06
 
 def init_db():
-    """Initialize database tables"""
+    """Initialize all database tables"""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
@@ -97,8 +114,8 @@ def init_db():
         email TEXT,
         address TEXT,
         city TEXT,
-        lat REAL,
-        lon REAL,
+        password TEXT,
+        portal_enabled INTEGER DEFAULT 1,
         notes TEXT,
         created_at DATETIME
     )''')
@@ -106,7 +123,9 @@ def init_db():
     # Estimates
     c.execute('''CREATE TABLE IF NOT EXISTS estimates (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        client_id INTEGER,
         client_name TEXT,
+        client_email TEXT,
         city TEXT,
         property_type TEXT,
         square_feet REAL,
@@ -116,6 +135,16 @@ def init_db():
         estimated_price REAL,
         created_at DATETIME,
         status TEXT DEFAULT 'draft'
+    )''')
+    
+    # Scheduled jobs
+    c.execute('''CREATE TABLE IF NOT EXISTS scheduled_jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        client_id INTEGER,
+        client_name TEXT,
+        scheduled_date DATE,
+        scheduled_time TEXT,
+        status TEXT DEFAULT 'scheduled'
     )''')
     
     # Quick jobs
@@ -141,46 +170,16 @@ def init_db():
         other REAL DEFAULT 0
     )''')
     
-    # Workers table
+    # Workers
     c.execute('''CREATE TABLE IF NOT EXISTS workers (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT,
         phone TEXT,
         email TEXT,
         home_address TEXT,
-        home_lat REAL,
-        home_lon REAL,
-        is_active BOOLEAN DEFAULT 1,
+        is_active INTEGER DEFAULT 1,
         jobs_assigned INTEGER DEFAULT 0,
-        jobs_completed INTEGER DEFAULT 0,
         created_at DATETIME
-    )''')
-    
-    # Assignment queue
-    c.execute('''CREATE TABLE IF NOT EXISTS assignment_queue (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        worker_id INTEGER,
-        position INTEGER,
-        updated_at DATETIME
-    )''')
-    
-    # Scheduled jobs
-    c.execute('''CREATE TABLE IF NOT EXISTS scheduled_jobs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        client_name TEXT,
-        worker_id INTEGER,
-        scheduled_date DATE,
-        scheduled_time TEXT,
-        status TEXT DEFAULT 'scheduled'
-    )''')
-    
-    # Inspections
-    c.execute('''CREATE TABLE IF NOT EXISTS inspections (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        client_name TEXT,
-        inspection_date DATETIME,
-        notes TEXT,
-        status TEXT DEFAULT 'draft'
     )''')
     
     current_month = datetime.now().strftime("%Y-%m")
@@ -195,7 +194,7 @@ def init_db():
 
 FLORIDA_CITIES = [
     "Orlando", "Miami", "Tampa", "Jacksonville", "Cocoa Beach", 
-    "Daytona Beach", "Naples", "Ocala", "Gainesville", "Tallahassee"
+    "Daytona Beach", "Naples", "Ocala", "Gainesville"
 ]
 
 PROPERTY_TYPES = {
@@ -206,25 +205,20 @@ PROPERTY_TYPES = {
     "Retail Store": 1.2,
     "Warehouse": 0.8,
     "Gas Station / C-Store": 1.9,
-    "Hotel / Motel": 1.5,
-    "School / Daycare": 1.4,
-    "Airbnb / Short-Term Rental": 1.0
+    "Airbnb / Short-Term Rental": 1.0,
 }
 
 FREQUENCIES = {
     "Weekly": 1.0,
     "Bi-Weekly": 1.35,
     "Monthly": 1.75,
-    "One-Time": 2.0
+    "One-Time": 2.0,
 }
 
 HOLIDAY_RATES = {
     "Thanksgiving": 0.35,
     "Christmas": 0.50,
     "New Year's": 0.35,
-    "Memorial Day": 0.25,
-    "Independence Day": 0.25,
-    "Labor Day": 0.25
 }
 
 # ============================================
@@ -234,14 +228,10 @@ HOLIDAY_RATES = {
 def calculate_base_price(city, property_type, sqft, frequency, complexity, travel_miles):
     """Calculate base price"""
     coastal = ["Cocoa Beach", "Daytona Beach", "Naples"]
-    rural = ["Ocala", "Gainesville"]
     
     if city in coastal:
         zone_mult = 1.18
         travel_fee = 55
-    elif city in rural:
-        zone_mult = 1.28
-        travel_fee = 65
     else:
         zone_mult = 1.0
         travel_fee = 45
@@ -254,174 +244,16 @@ def calculate_base_price(city, property_type, sqft, frequency, complexity, trave
     subtotal = sqft * price_per_sqft
     travel_cost = (travel_miles * 0.65) + travel_fee
     
-    return subtotal + travel_cost, travel_fee
+    return subtotal + travel_cost
 
-def estimate_toll_cost(origin, destination):
-    """Simple toll estimation"""
-    return 5.00
-
-def apply_holiday_surcharge(price, holiday):
-    """Apply holiday surcharge"""
-    if holiday and holiday in HOLIDAY_RATES:
-        return price * (1 + HOLIDAY_RATES[holiday])
-    return price
-
-def apply_multi_location_discount(price, num_locations):
-    """Apply multi-location discount"""
-    if num_locations >= 5:
-        return price * 0.85
-    elif num_locations >= 3:
-        return price * 0.90
-    elif num_locations >= 2:
-        return price * 0.95
-    return price
-
-def apply_emergency_premium(price, notice_hours):
-    """Apply emergency premium"""
-    if notice_hours <= 12:
-        return price * 1.75
-    elif notice_hours <= 24:
-        return price * 1.50
-    elif notice_hours <= 48:
-        return price * 1.25
-    return price
-
-def apply_contract_discount(price, contract_months):
-    """Apply contract discount"""
-    if contract_months >= 12:
-        return price * 0.85
-    elif contract_months >= 6:
-        return price * 0.90
-    elif contract_months >= 3:
-        return price * 0.95
-    return price
-
-def calculate_price_with_range(city, property_type, sqft, frequency, complexity, travel_miles, 
-                                hours_estimated, materials_cost, holiday, num_locations, 
-                                notice_hours, contract_months):
-    """Calculate all price tiers"""
-    
+def get_business_name():
+    """Get business name from database"""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT hourly_wage, min_job_fee FROM business_profile WHERE id=1")
+    c.execute("SELECT business_name FROM business_profile WHERE id=1")
     row = c.fetchone()
     conn.close()
-    
-    hourly_wage = row[0] if row else 15.0
-    min_job_fee = row[1] if row else 150
-    
-    base_price, travel_fee = calculate_base_price(city, property_type, sqft, frequency, complexity, travel_miles)
-    
-    # Calculate true cost
-    labor_cost = hours_estimated * hourly_wage if hours_estimated else (sqft / 500) * hourly_wage
-    true_cost = labor_cost + materials_cost + travel_fee
-    if true_cost < min_job_fee:
-        true_cost = min_job_fee
-    
-    # Fair market price
-    fair_price = base_price
-    
-    # Apply modifiers
-    fair_price = apply_holiday_surcharge(fair_price, holiday)
-    fair_price = apply_emergency_premium(fair_price, notice_hours)
-    fair_price = apply_multi_location_discount(fair_price, num_locations)
-    fair_price = apply_contract_discount(fair_price, contract_months)
-    
-    # Highest price
-    highest_price = fair_price * 1.3
-    
-    # Lowest price (break-even)
-    lowest_price = true_cost
-    
-    # Round up
-    lowest_price = math.ceil(lowest_price)
-    fair_price = math.ceil(fair_price)
-    highest_price = math.ceil(highest_price)
-    
-    # Calculate tax
-    tax_lowest = lowest_price * SALES_TAX_RATE
-    tax_fair = fair_price * SALES_TAX_RATE
-    tax_highest = highest_price * SALES_TAX_RATE
-    
-    return {
-        "lowest": {
-            "subtotal": lowest_price,
-            "tax": round(tax_lowest, 2),
-            "total": math.ceil(lowest_price + tax_lowest),
-            "profit": 0,
-            "margin": 0
-        },
-        "fair": {
-            "subtotal": fair_price,
-            "tax": round(tax_fair, 2),
-            "total": math.ceil(fair_price + tax_fair),
-            "profit": round(fair_price - true_cost, 2),
-            "margin": round(((fair_price - true_cost) / fair_price) * 100, 1)
-        },
-        "highest": {
-            "subtotal": highest_price,
-            "tax": round(tax_highest, 2),
-            "total": math.ceil(highest_price + tax_highest),
-            "profit": round(highest_price - true_cost, 2),
-            "margin": round(((highest_price - true_cost) / highest_price) * 100, 1)
-        },
-        "true_cost": round(true_cost, 2),
-        "toll_estimate": 5.00
-    }
-
-# ============================================
-# WORKER FUNCTIONS
-# ============================================
-
-def add_worker(name, phone, email, address, lat, lon):
-    """Add a new worker"""
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("""
-        INSERT INTO workers (name, phone, email, home_address, home_lat, home_lon, created_at)
-        VALUES (?,?,?,?,?,?,?)
-    """, (name, phone, email, address, lat, lon, datetime.now().isoformat()))
-    worker_id = c.lastrowid
-    
-    c.execute("SELECT COUNT(*) FROM assignment_queue")
-    queue_size = c.fetchone()[0]
-    c.execute("INSERT INTO assignment_queue (worker_id, position, updated_at) VALUES (?,?,?)",
-              (worker_id, queue_size, datetime.now().isoformat()))
-    conn.commit()
-    conn.close()
-    return worker_id
-
-def get_all_workers():
-    """Get all active workers"""
-    conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query("""
-        SELECT id, name, phone, email, home_address, jobs_assigned, jobs_completed
-        FROM workers WHERE is_active = 1 ORDER BY name
-    """, conn)
-    conn.close()
-    return df
-
-def get_best_workers_for_job(lat, lon, limit=5):
-    """Get best workers (simplified - no geopy)"""
-    conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query("""
-        SELECT id, name, home_lat, home_lon, jobs_assigned
-        FROM workers WHERE is_active = 1
-    """, conn)
-    conn.close()
-    
-    # Simplified distance calculation (no geopy)
-    for idx, row in df.iterrows():
-        if row['home_lat'] and lat:
-            dist = abs(row['home_lat'] - lat) * 69
-        else:
-            dist = 999
-        df.loc[idx, 'distance'] = round(dist, 1)
-    
-    df['score'] = df['jobs_assigned'] * 0.4 + df['distance'] * 0.6
-    df = df.sort_values('score').head(limit)
-    
-    return df.to_dict('records')
+    return row[0] if row else "ProfitClean"
 
 # ============================================
 # SETUP WIZARD
@@ -463,125 +295,68 @@ def setup_wizard():
 # ============================================
 
 def dashboard():
+    business_name = get_business_name()
+    
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    
-    c.execute("SELECT business_name FROM business_profile WHERE id=1")
-    row = c.fetchone()
-    
     c.execute("SELECT SUM(amount_invoiced), SUM(profit) FROM quick_jobs")
     job_data = c.fetchone()
-    
-    c.execute("SELECT COUNT(*) FROM workers WHERE is_active = 1")
-    worker_result = c.fetchone()
-    worker_count = worker_result[0] if worker_result else 0
-    
     conn.close()
     
-    business_name = row[0] if row else "ProfitClean"
     total_revenue = job_data[0] if job_data and job_data[0] else 0
     total_profit = job_data[1] if job_data and job_data[1] else 0
-    
-    if total_revenue > 0:
-        margin = (total_profit / total_revenue) * 100
-    else:
-        margin = 0
+    margin = (total_profit / total_revenue * 100) if total_revenue > 0 else 0
     
     st.title(f"🧹 {business_name}")
     st.caption("Created by Dust Bros & Co.")
-    st.markdown("---")
     
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.markdown(
-            f'<div class="metric-card"><div class="metric-value">${total_revenue:,.0f}</div>'
-            f'<div class="metric-label">Total Revenue</div></div>',
-            unsafe_allow_html=True
-        )
-    
-    with col2:
-        st.markdown(
-            f'<div class="metric-card"><div class="metric-value">${total_profit:,.0f}</div>'
-            f'<div class="metric-label">Total Profit</div></div>',
-            unsafe_allow_html=True
-        )
-    
-    with col3:
-        st.markdown(
-            f'<div class="metric-card"><div class="metric-value">{margin:.0f}%</div>'
-            f'<div class="metric-label">Profit Margin</div></div>',
-            unsafe_allow_html=True
-        )
-    
-    with col4:
-        st.markdown(
-            f'<div class="metric-card"><div class="metric-value">{worker_count}</div>'
-            f'<div class="metric-label">Active Workers</div></div>',
-            unsafe_allow_html=True
-        )
-    
-    st.markdown("---")
-    st.markdown("### Quick Actions")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
+    # Sidebar navigation
+    with st.sidebar:
+        st.markdown("### Navigation")
+        if st.button("🏠 Dashboard", use_container_width=True):
+            st.session_state.page = "dashboard"
+            st.rerun()
         if st.button("📝 New Estimate", use_container_width=True):
             st.session_state.page = "estimate"
             st.rerun()
-    with col2:
         if st.button("⚡ Quick Job", use_container_width=True):
             st.session_state.page = "quick"
             st.rerun()
-    with col3:
         if st.button("👥 Clients", use_container_width=True):
             st.session_state.page = "clients"
             st.rerun()
-    with col4:
-        if st.button("📅 Schedule", use_container_width=True):
-            st.session_state.page = "schedule"
+        if st.button("👤 Client Portal", use_container_width=True):
+            st.session_state.page = "client_login"
             st.rerun()
+        st.markdown("---")
     
-    col1, col2, col3, col4 = st.columns(4)
+    st.markdown("---")
+    
+    col1, col2, col3 = st.columns(3)
     with col1:
-        if st.button("🔍 Inspections", use_container_width=True):
-            st.session_state.page = "inspections"
-            st.rerun()
+        st.markdown(f'<div class="metric-card"><div class="metric-value">${total_revenue:,.0f}</div><div class="metric-label">Total Revenue</div></div>', unsafe_allow_html=True)
     with col2:
-        if st.button("💰 Profit", use_container_width=True):
-            st.session_state.page = "profit"
-            st.rerun()
+        st.markdown(f'<div class="metric-card"><div class="metric-value">${total_profit:,.0f}</div><div class="metric-label">Total Profit</div></div>', unsafe_allow_html=True)
     with col3:
-        if st.button("📋 History", use_container_width=True):
-            st.session_state.page = "history"
-            st.rerun()
-    with col4:
-        if st.button("👥 Workers", use_container_width=True):
-            st.session_state.page = "workers"
-            st.rerun()
+        st.markdown(f'<div class="metric-card"><div class="metric-value">{margin:.0f}%</div><div class="metric-label">Profit Margin</div></div>', unsafe_allow_html=True)
     
     st.markdown("---")
     st.markdown("### 📝 Recent Estimates")
     
     conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query(
-        "SELECT client_name, city, property_type, estimated_price FROM estimates ORDER BY created_at DESC LIMIT 5",
-        conn
-    )
+    df = pd.read_sql_query("SELECT id, client_name, city, property_type, estimated_price, created_at FROM estimates ORDER BY created_at DESC LIMIT 5", conn)
     conn.close()
     
     if df.empty:
-        st.info("No estimates yet. Click 'New Estimate' to create your first one.")
+        st.info("No estimates yet. Click 'New Estimate' to get started.")
     else:
         for _, row in df.iterrows():
-            client = row['client_name'] if row['client_name'] else 'Unnamed'
-            st.markdown(
-                f'<div class="card">'
-                f'<strong>{client}</strong> - {row["city"]}<br>'
-                f'<small>{row["property_type"]} • ${row["estimated_price"]:,.2f}</small>'
-                f'</div>',
-                unsafe_allow_html=True
-            )
+            st.markdown(f"""
+            <div class="card">
+                <strong>{row['client_name'] or 'Unnamed Client'}</strong> - {row['city']}<br>
+                <small>{row['property_type']} • ${row['estimated_price']:,.2f}</small>
+            </div>
+            """, unsafe_allow_html=True)
 
 # ============================================
 # ESTIMATE PAGE
@@ -593,6 +368,7 @@ def estimate_page():
         st.rerun()
     
     st.markdown("### 📝 New Estimate")
+    st.caption(f"💰 Florida sales tax ({SALES_TAX_RATE * 100}%) included, prices rounded up.")
     
     col1, col2 = st.columns(2)
     with col1:
@@ -602,10 +378,12 @@ def estimate_page():
     with col2:
         frequency = st.selectbox("📅 Frequency", list(FREQUENCIES.keys()))
         complexity = st.slider("⚙️ Complexity (1-10)", 1, 10, 3)
-        travel_miles = st.number_input("🚗 Travel Miles", min_value=0, value=25, step=5)
+        travel_miles = st.number_input("🚗 Travel Miles (round trip)", min_value=0, value=25, step=5)
     
-    client_name = st.text_input("👤 Client Name", placeholder="Enter client name")
+    client_name = st.text_input("👤 Client Name")
+    client_email = st.text_input("📧 Client Email", help="For sending estimate notifications")
     
+    # Internal cost estimates
     with st.expander("🔒 INTERNAL ONLY - Cost Estimates"):
         col1, col2 = st.columns(2)
         with col1:
@@ -613,73 +391,93 @@ def estimate_page():
         with col2:
             materials_cost = st.number_input("Materials cost ($)", min_value=0, value=35, step=5)
     
+    # Pricing modifiers
     st.markdown("### 🎯 Pricing Modifiers")
-    
     col1, col2 = st.columns(2)
     with col1:
         holidays = ["None"] + list(HOLIDAY_RATES.keys())
-        holiday = st.selectbox("🎄 Holiday", holidays)
-        notice_options = ["Standard (3+ days)", "2 days", "Next day", "Same day"]
-        notice_map = {"Standard (3+ days)": 72, "2 days": 48, "Next day": 24, "Same day": 12}
-        notice = st.selectbox("🚨 Emergency", notice_options)
-        notice_hours = notice_map[notice]
+        holiday = st.selectbox("🎄 Holiday Service", holidays)
     with col2:
         num_locations = st.number_input("📍 Number of locations", min_value=1, value=1)
-        contract_options = ["No contract", "3 months", "6 months", "12 months", "24 months"]
-        contract_map = {"No contract": 0, "3 months": 3, "6 months": 6, "12 months": 12, "24 months": 24}
-        contract = st.selectbox("📄 Contract", contract_options)
-        contract_months = contract_map[contract]
     
-    result = calculate_price_with_range(
-        city, property_type, sqft, frequency, complexity, travel_miles,
-        hours_estimated, materials_cost, holiday, num_locations, notice_hours, contract_months
-    )
+    # Calculate price
+    base_price = calculate_base_price(city, property_type, sqft, frequency, complexity, travel_miles)
+    
+    # Apply holiday surcharge
+    final_price = base_price
+    if holiday != "None":
+        final_price = final_price * (1 + HOLIDAY_RATES.get(holiday, 0))
+    
+    # Calculate true cost (break-even)
+    hourly_wage = 15.0  # Default, can be fetched from DB
+    true_cost = (hours_estimated * hourly_wage) + materials_cost + (travel_miles * 0.65)
+    
+    # Calculate tiers
+    lowest_price = math.ceil(true_cost)
+    fair_price = math.ceil(final_price)
+    highest_price = math.ceil(final_price * 1.3)
+    
+    # Calculate tax
+    tax_lowest = lowest_price * SALES_TAX_RATE
+    tax_fair = fair_price * SALES_TAX_RATE
+    tax_highest = highest_price * SALES_TAX_RATE
     
     st.markdown("---")
     st.markdown("### 💰 Pricing Options")
     
     col1, col2, col3 = st.columns(3)
-    
     with col1:
-        st.markdown(
-            f'<div style="background:#fef3c7;border-radius:16px;padding:1rem;text-align:center;">'
-            f'<div style="color:#92400e;">🔥 LOWEST</div>'
-            f'<div style="font-size:2rem;font-weight:800;color:#92400e;">${result["lowest"]["total"]}</div>'
-            f'<div>0% margin</div></div>',
-            unsafe_allow_html=True
-        )
-    
+        st.markdown(f"""
+        <div style="background:#fef3c7;border-radius:16px;padding:1rem;text-align:center;">
+            <div style="color:#92400e;">🔥 LOWEST (Break-even)</div>
+            <div style="font-size:2rem;font-weight:800;color:#92400e;">${math.ceil(lowest_price + tax_lowest)}</div>
+            <div>0% margin</div>
+        </div>
+        """, unsafe_allow_html=True)
     with col2:
-        st.markdown(
-            f'<div style="background:#d1fae5;border-radius:16px;padding:1rem;text-align:center;">'
-            f'<div style="color:#065f46;">💰 FAIR MARKET</div>'
-            f'<div style="font-size:2rem;font-weight:800;color:#065f46;">${result["fair"]["total"]}</div>'
-            f'<div>{result["fair"]["margin"]}% margin</div></div>',
-            unsafe_allow_html=True
-        )
-    
+        st.markdown(f"""
+        <div style="background:#d1fae5;border-radius:16px;padding:1rem;text-align:center;">
+            <div style="color:#065f46;">💰 FAIR MARKET</div>
+            <div style="font-size:2rem;font-weight:800;color:#065f46;">${math.ceil(fair_price + tax_fair)}</div>
+            <div>Recommended</div>
+        </div>
+        """, unsafe_allow_html=True)
     with col3:
-        st.markdown(
-            f'<div style="background:#ede9fe;border-radius:16px;padding:1rem;text-align:center;">'
-            f'<div style="color:#5b21b6;">⭐ HIGHEST</div>'
-            f'<div style="font-size:2rem;font-weight:800;color:#5b21b6;">${result["highest"]["total"]}</div>'
-            f'<div>{result["highest"]["margin"]}% margin</div></div>',
-            unsafe_allow_html=True
-        )
+        st.markdown(f"""
+        <div style="background:#ede9fe;border-radius:16px;padding:1rem;text-align:center;">
+            <div style="color:#5b21b6;">⭐ HIGHEST (Premium)</div>
+            <div style="font-size:2rem;font-weight:800;color:#5b21b6;">${math.ceil(highest_price + tax_highest)}</div>
+            <div>Premium service</div>
+        </div>
+        """, unsafe_allow_html=True)
     
     if st.button("💾 Save Estimate", use_container_width=True):
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
+        
+        # Check if client exists
+        c.execute("SELECT id FROM clients WHERE email = ?", (client_email,))
+        existing = c.fetchone()
+        if existing:
+            client_id = existing[0]
+        else:
+            c.execute("INSERT INTO clients (business_name, email, created_at) VALUES (?,?,?)",
+                      (client_name, client_email, datetime.now().isoformat()))
+            client_id = c.lastrowid
+        
         c.execute("""
             INSERT INTO estimates 
-            (client_name, city, property_type, square_feet, frequency, complexity,
-             travel_miles, estimated_price, created_at, status)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
-        """, (client_name, city, property_type, sqft, frequency, complexity,
-              travel_miles, result["fair"]["total"], datetime.now().isoformat(), "sent"))
+            (client_id, client_name, client_email, city, property_type, square_feet,
+             frequency, complexity, travel_miles, estimated_price, created_at, status)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (client_id, client_name, client_email, city, property_type, sqft,
+              frequency, complexity, travel_miles, fair_price, datetime.now().isoformat(), "sent"))
+        
+        estimate_id = c.lastrowid
         conn.commit()
         conn.close()
-        st.success(f"✅ Estimate saved: ${result['fair']['total']}")
+        
+        st.success(f"✅ Estimate #{estimate_id} saved! ${fair_price:.2f}")
         st.balloons()
 
 # ============================================
@@ -703,14 +501,7 @@ def quick_job_page():
             amount = st.number_input("Amount Invoiced", value=350.0)
         
         expenses = st.number_input("Job Expenses", value=25.0)
-        
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("SELECT hourly_wage FROM business_profile WHERE id=1")
-        row = c.fetchone()
-        conn.close()
-        hourly_wage = row[0] if row else 15.0
-        
+        hourly_wage = 15.0
         profit = amount - expenses - (hours * hourly_wage)
         st.metric("Estimated Profit", f"${profit:.2f}")
         
@@ -718,8 +509,7 @@ def quick_job_page():
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
             c.execute("""
-                INSERT INTO quick_jobs 
-                (job_date, description, hours, amount_invoiced, job_expenses, profit, created_at)
+                INSERT INTO quick_jobs (job_date, description, hours, amount_invoiced, job_expenses, profit, created_at)
                 VALUES (?,?,?,?,?,?,?)
             """, (job_date.isoformat(), description, hours, amount, expenses, profit, datetime.now().isoformat()))
             conn.commit()
@@ -738,156 +528,100 @@ def clients_page():
     
     st.markdown("### 👥 Client CRM")
     
-    if st.button("➕ Add Client"):
-        st.session_state.show_client_form = True
-    
-    if st.session_state.get("show_client_form", False):
+    with st.expander("➕ Add New Client"):
         with st.form("new_client_form"):
-            business_name = st.text_input("Business Name")
-            contact_name = st.text_input("Contact Name")
-            phone = st.text_input("Phone")
-            email = st.text_input("Email")
-            address = st.text_input("Address")
-            city = st.text_input("City")
-            notes = st.text_area("Notes")
-            
             col1, col2 = st.columns(2)
             with col1:
-                if st.form_submit_button("Save"):
-                    if business_name:
-                        conn = sqlite3.connect(DB_PATH)
-                        c = conn.cursor()
-                        c.execute("""
-                            INSERT INTO clients (business_name, contact_name, phone, email, address, city, notes, created_at)
-                            VALUES (?,?,?,?,?,?,?,?)
-                        """, (business_name, contact_name, phone, email, address, city, notes, datetime.now().isoformat()))
-                        conn.commit()
-                        conn.close()
-                        st.success(f"✅ {business_name} added!")
-                        st.session_state.show_client_form = False
-                        st.rerun()
+                business_name = st.text_input("Business Name")
+                contact_name = st.text_input("Contact Name")
+                phone = st.text_input("Phone")
             with col2:
-                if st.form_submit_button("Cancel"):
-                    st.session_state.show_client_form = False
+                email = st.text_input("Email")
+                address = st.text_input("Address")
+                city = st.text_input("City")
+            
+            if st.form_submit_button("Save Client"):
+                if business_name:
+                    conn = sqlite3.connect(DB_PATH)
+                    c = conn.cursor()
+                    c.execute("""
+                        INSERT INTO clients (business_name, contact_name, phone, email, address, city, created_at)
+                        VALUES (?,?,?,?,?,?,?)
+                    """, (business_name, contact_name, phone, email, address, city, datetime.now().isoformat()))
+                    conn.commit()
+                    conn.close()
+                    st.success(f"✅ {business_name} added!")
                     st.rerun()
     
     conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query("SELECT business_name, contact_name, phone, city FROM clients ORDER BY business_name", conn)
+    df = pd.read_sql_query("SELECT id, business_name, contact_name, phone, email, city FROM clients ORDER BY business_name", conn)
     conn.close()
     
     if df.empty:
         st.info("No clients yet.")
     else:
         for _, row in df.iterrows():
-            st.markdown(
-                f'<div class="card">'
-                f'<strong>🏢 {row["business_name"]}</strong><br>'
-                f'📞 {row["contact_name"] or "No contact"} • {row["phone"] or "No phone"} • 📍 {row["city"] or "No city"}'
-                f'</div>',
-                unsafe_allow_html=True
-            )
+            st.markdown(f"""
+            <div class="card">
+                <strong>🏢 {row['business_name']}</strong><br>
+                📞 {row['contact_name'] or 'No contact'} • {row['phone'] or 'No phone'} • 📍 {row['city'] or 'No city'}
+            </div>
+            """, unsafe_allow_html=True)
 
 # ============================================
-# WORKERS PAGE
+# CLIENT PORTAL
 # ============================================
 
-def workers_page():
-    if st.button("← Back to Dashboard"):
+def client_login_page():
+    st.markdown("### 👤 Client Portal Login")
+    
+    with st.form("client_login"):
+        email = st.text_input("Email Address")
+        password = st.text_input("Password", type="password")
+        
+        if st.form_submit_button("Login", use_container_width=True):
+            # Simple demo login - in production, verify password properly
+            if email:
+                st.session_state.client_logged_in = True
+                st.session_state.client_name = email.split('@')[0]
+                st.session_state.page = "client_dashboard"
+                st.rerun()
+            else:
+                st.error("Invalid email")
+    
+    if st.button("← Back to Main Site"):
+        st.session_state.page = "dashboard"
+        st.rerun()
+
+def client_dashboard():
+    if st.sidebar.button("🚪 Logout", use_container_width=True):
+        st.session_state.client_logged_in = False
         st.session_state.page = "dashboard"
         st.rerun()
     
-    st.markdown("### 👥 Worker Management")
+    st.markdown(f"### 👋 Welcome, {st.session_state.client_name}")
     
-    tab1, tab2 = st.tabs(["📋 Workers", "➕ Add Worker"])
+    tab1, tab2 = st.tabs(["📝 Estimates", "📅 Schedule"])
     
     with tab1:
-        workers_df = get_all_workers()
-        if workers_df.empty:
-            st.info("No workers added yet.")
+        conn = sqlite3.connect(DB_PATH)
+        df = pd.read_sql_query("SELECT id, city, property_type, estimated_price, created_at, status FROM estimates ORDER BY created_at DESC", conn)
+        conn.close()
+        
+        if df.empty:
+            st.info("No estimates yet.")
         else:
-            st.dataframe(workers_df, use_container_width=True)
+            for _, row in df.iterrows():
+                st.markdown(f"""
+                <div class="card">
+                    <strong>Estimate #{row['id']}</strong> - {row['property_type']} in {row['city']}<br>
+                    <strong>${row['estimated_price']:,.2f}</strong><br>
+                    <small>Status: {row['status']}</small>
+                </div>
+                """, unsafe_allow_html=True)
     
     with tab2:
-        with st.form("add_worker_form"):
-            col1, col2 = st.columns(2)
-            with col1:
-                name = st.text_input("Full Name")
-                phone = st.text_input("Phone")
-                email = st.text_input("Email")
-            with col2:
-                address = st.text_input("Home Address")
-                lat = st.number_input("Latitude", value=0.0, format="%.6f")
-                lon = st.number_input("Longitude", value=0.0, format="%.6f")
-            
-            if st.form_submit_button("Add Worker"):
-                if name:
-                    add_worker(name, phone, email, address, lat, lon)
-                    st.success(f"✅ {name} added!")
-                    st.rerun()
-                else:
-                    st.error("Please enter worker name")
-
-# ============================================
-# SCHEDULE PAGE
-# ============================================
-
-def schedule_page():
-    if st.button("← Back to Dashboard"):
-        st.session_state.page = "dashboard"
-        st.rerun()
-    
-    st.markdown("### 📅 Job Schedule")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        schedule_date = st.date_input("Date", datetime.now())
-    with col2:
-        client_name = st.text_input("Client Name")
-    
-    scheduled_time = st.selectbox("Time", ["8:00 AM", "9:00 AM", "10:00 AM", "11:00 AM", "12:00 PM", "1:00 PM", "2:00 PM", "3:00 PM", "4:00 PM"])
-    
-    if st.button("📅 Schedule Job"):
-        if client_name:
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            c.execute("""
-                INSERT INTO scheduled_jobs (client_name, scheduled_date, scheduled_time, status)
-                VALUES (?,?,?,?)
-            """, (client_name, schedule_date.isoformat(), scheduled_time, "scheduled"))
-            conn.commit()
-            conn.close()
-            st.success(f"✅ Job scheduled for {client_name}")
-        else:
-            st.warning("Please enter client name")
-
-# ============================================
-# INSPECTIONS PAGE
-# ============================================
-
-def inspections_page():
-    if st.button("← Back to Dashboard"):
-        st.session_state.page = "dashboard"
-        st.rerun()
-    
-    st.markdown("### 🔍 Pre-Inspection Checklist")
-    
-    client_name = st.text_input("Client Name")
-    notes = st.text_area("Inspection Notes", placeholder="Document any existing damage or special instructions...")
-    
-    if st.button("✓ Save Inspection"):
-        if client_name:
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            c.execute("""
-                INSERT INTO inspections (client_name, inspection_date, notes, status)
-                VALUES (?,?,?,?)
-            """, (client_name, datetime.now().isoformat(), notes, "completed"))
-            conn.commit()
-            conn.close()
-            st.success("✅ Inspection saved!")
-            st.balloons()
-        else:
-            st.warning("Please enter client name")
+        st.info("Your scheduled jobs will appear here.")
 
 # ============================================
 # PROFIT PAGE
@@ -904,8 +638,7 @@ def profit_page():
     df = pd.read_sql_query("SELECT * FROM quick_jobs ORDER BY job_date DESC", conn)
     
     c = conn.cursor()
-    c.execute("SELECT insurance, vehicle, software, advertising, other FROM monthly_expenses WHERE month_year = ?", 
-              (datetime.now().strftime("%Y-%m"),))
+    c.execute("SELECT insurance, vehicle, software, advertising, other FROM monthly_expenses WHERE month_year = ?", (datetime.now().strftime("%Y-%m"),))
     expenses_row = c.fetchone()
     conn.close()
     
@@ -919,8 +652,6 @@ def profit_page():
         }
     else:
         expenses = {"insurance": 0.0, "vehicle": 0.0, "software": 0.0, "advertising": 0.0, "other": 0.0}
-    
-    total_expenses = sum(expenses.values())
     
     st.markdown("#### Monthly Expenses")
     col1, col2, col3, col4, col5 = st.columns(5)
@@ -951,7 +682,7 @@ def profit_page():
     st.markdown("---")
     
     if df.empty:
-        st.info("No jobs logged yet. Add some Quick Jobs to see your profit data.")
+        st.info("No jobs logged yet.")
     else:
         total_revenue = float(df["amount_invoiced"].sum())
         total_profit = float(df["profit"].sum())
@@ -962,10 +693,6 @@ def profit_page():
         col2.metric("Total Profit", f"${total_profit:,.2f}")
         col3.metric("Profit Margin", f"{margin:.0f}%")
         
-        net_profit = total_profit - total_expenses
-        st.metric("Net Profit (after overhead)", f"${net_profit:,.2f}")
-        
-        st.markdown("---")
         st.dataframe(df[["job_date", "description", "hours", "amount_invoiced", "profit"]], use_container_width=True)
 
 # ============================================
@@ -987,7 +714,6 @@ def history_page():
         st.info("No estimates yet.")
     else:
         st.dataframe(df, use_container_width=True)
-        st.metric("Total Value", f"${df['estimated_price'].sum():,.2f}")
 
 # ============================================
 # SETTINGS PAGE
@@ -999,41 +725,7 @@ def settings_page():
         st.rerun()
     
     st.markdown("### ⚙️ Settings")
-    
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT business_name, phone, email, hourly_wage, profit_target, per_mile_rate, min_job_fee, home_city FROM business_profile WHERE id=1")
-    row = c.fetchone()
-    conn.close()
-    
-    if row:
-        with st.form("settings_form"):
-            col1, col2 = st.columns(2)
-            with col1:
-                business_name = st.text_input("Business Name", row[0])
-                phone = st.text_input("Phone", row[1])
-                email = st.text_input("Email", row[2])
-            with col2:
-                hourly_wage = st.number_input("Hourly Wage", value=row[3])
-                profit_target = st.number_input("Target Profit %", value=row[4]*100)
-                min_job_fee = st.number_input("Minimum Job Fee", value=row[6])
-                home_city = st.selectbox("Home Base", FLORIDA_CITIES, index=FLORIDA_CITIES.index(row[7]) if row[7] in FLORIDA_CITIES else 0)
-            
-            if st.form_submit_button("Save Settings"):
-                conn = sqlite3.connect(DB_PATH)
-                c = conn.cursor()
-                c.execute("""
-                    UPDATE business_profile SET 
-                        business_name=?, phone=?, email=?, hourly_wage=?, profit_target=?, 
-                        per_mile_rate=?, min_job_fee=?, home_city=?
-                    WHERE id=1
-                """, (business_name, phone, email, hourly_wage, profit_target/100, 0.65, min_job_fee, home_city))
-                conn.commit()
-                conn.close()
-                st.success("Settings saved!")
-                st.rerun()
-    else:
-        st.warning("Please complete setup first")
+    st.info("Settings page - configure your business preferences here.")
 
 # ============================================
 # MAIN FUNCTION
@@ -1054,24 +746,28 @@ def main():
         if "page" not in st.session_state:
             st.session_state.page = "dashboard"
         
-        pages = {
-            "dashboard": dashboard,
-            "estimate": estimate_page,
-            "quick": quick_job_page,
-            "clients": clients_page,
-            "workers": workers_page,
-            "schedule": schedule_page,
-            "inspections": inspections_page,
-            "profit": profit_page,
-            "history": history_page,
-            "settings": settings_page
-        }
-        
-        current_page = st.session_state.page
-        if current_page in pages:
-            pages[current_page]()
+        if st.session_state.get("client_logged_in", False):
+            if st.session_state.page == "client_dashboard":
+                client_dashboard()
+            else:
+                client_dashboard()
         else:
-            dashboard()
+            pages = {
+                "dashboard": dashboard,
+                "estimate": estimate_page,
+                "quick": quick_job_page,
+                "clients": clients_page,
+                "profit": profit_page,
+                "history": history_page,
+                "settings": settings_page,
+                "client_login": client_login_page
+            }
+            
+            current_page = st.session_state.page
+            if current_page in pages:
+                pages[current_page]()
+            else:
+                dashboard()
 
 if __name__ == "__main__":
     main()
