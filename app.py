@@ -19,6 +19,31 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# ============================================
+# PWA / Mobile App Configuration
+# ============================================
+
+# Add PWA meta tags with correct static paths
+st.markdown('''
+<link rel="manifest" href="static/manifest.json">
+<meta name="theme-color" content="#1E3A5F">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ProfitClean">
+<link rel="apple-touch-icon" href="https://via.placeholder.com/152?text=PC">
+''', unsafe_allow_html=True)
+
+# Register service worker with correct static path
+st.markdown('''
+<script>
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/static/sw.js')
+    .then(reg => console.log('Service Worker registered:', reg))
+    .catch(err => console.log('Service Worker failed:', err));
+}
+</script>
+''', unsafe_allow_html=True)
+
 # Custom CSS
 st.markdown("""
 <style>
@@ -73,23 +98,6 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "profitclean.db")
 
 # Sales tax rate (Florida)
 SALES_TAX_RATE = 0.06  # 6% Florida sales tax
-
-def round_up_price(price):
-    """Round price up to nearest dollar"""
-    return math.ceil(price)
-
-def calculate_with_tax(price):
-    """Calculate price plus tax and round up"""
-    subtotal = price
-    tax = subtotal * SALES_TAX_RATE
-    total = subtotal + tax
-    rounded_total = round_up_price(total)
-    return {
-        "subtotal": round(subtotal, 2),
-        "tax": round(tax, 2),
-        "total": rounded_total,
-        "total_display": rounded_total
-    }
 
 def init_db():
     """Initialize all database tables"""
@@ -206,6 +214,10 @@ def init_db():
         other REAL DEFAULT 0
     )''')
     
+    # Insert default monthly expense record for current month
+    current_month = datetime.now().strftime("%Y-%m")
+    c.execute("INSERT OR IGNORE INTO monthly_expenses (month_year) VALUES (?)", (current_month,))
+    
     conn.commit()
     conn.close()
 
@@ -234,21 +246,11 @@ FREQUENCIES = {
 }
 
 def calculate_internal_breakdown(price_total, hours_estimated, hourly_wage, materials_cost, travel_miles, tolls, travel_fee, per_mile_rate=0.65):
-    """
-    Calculate internal cost breakdown (NOT shown to customers)
-    Shows true profit margin after all expenses
-    """
+    """Calculate internal cost breakdown (NOT shown to customers)"""
     
-    # Labor cost
     labor_cost = hours_estimated * hourly_wage
-    
-    # Travel cost (gas + vehicle wear)
     travel_cost = (travel_miles * per_mile_rate) + travel_fee
-    
-    # Total costs
     total_costs = labor_cost + materials_cost + travel_cost + tolls
-    
-    # Profit
     profit = price_total - total_costs
     profit_margin = (profit / price_total * 100) if price_total > 0 else 0
     
@@ -266,7 +268,6 @@ def calculate_internal_breakdown(price_total, hours_estimated, hourly_wage, mate
 def calculate_commercial_price(city, property_type, sqft, frequency, complexity=3, travel_miles=0, tolls=0, hours_estimated=None, materials_cost=None):
     """Calculate commercial cleaning price with tax and rounding"""
     
-    # Zone multiplier
     coastal_cities = ["Cocoa Beach", "Daytona Beach", "Naples"]
     rural_cities = ["Ocala", "Gainesville"]
     
@@ -291,7 +292,6 @@ def calculate_commercial_price(city, property_type, sqft, frequency, complexity=
     travel_cost = (travel_miles * 0.65) + travel_fee
     total_before_tax = subtotal + travel_cost + tolls
     
-    # Apply minimum job fee
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT min_job_fee, hourly_wage FROM business_profile WHERE id=1")
@@ -303,12 +303,10 @@ def calculate_commercial_price(city, property_type, sqft, frequency, complexity=
     if total_before_tax < min_job_fee:
         total_before_tax = min_job_fee
     
-    # Calculate tax and round up
     tax = total_before_tax * SALES_TAX_RATE
     total_with_tax = total_before_tax + tax
     rounded_total = math.ceil(total_with_tax)
     
-    # Internal breakdown (if estimates provided)
     internal = None
     if hours_estimated is not None and materials_cost is not None:
         internal = calculate_internal_breakdown(
@@ -336,7 +334,6 @@ def calculate_airbnb_price(bedrooms, bathrooms, city, complexity=3, add_ons=None
     if add_ons is None:
         add_ons = []
     
-    # Zone travel fee
     coastal_cities = ["Cocoa Beach", "Daytona Beach", "Naples"]
     rural_cities = ["Ocala", "Gainesville"]
     
@@ -347,10 +344,8 @@ def calculate_airbnb_price(bedrooms, bathrooms, city, complexity=3, add_ons=None
     else:
         travel_fee = 45
     
-    # Base calculation
     base_price = (bedrooms * 45) + (bathrooms * 25)
     
-    # Add-on prices
     add_on_prices = {
         "linens": 15 * bedrooms,
         "towels": 10,
@@ -364,13 +359,9 @@ def calculate_airbnb_price(bedrooms, bathrooms, city, complexity=3, add_ons=None
     }
     
     add_on_total = sum([add_on_prices.get(item, 0) for item in add_ons])
-    
-    # Complexity factor
     complexity_factor = 0.7 + (complexity / 10)
-    
     total_before_tax = (base_price + add_on_total) * complexity_factor + travel_fee
     
-    # Apply minimum job fee
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT min_job_fee, hourly_wage FROM business_profile WHERE id=1")
@@ -382,12 +373,10 @@ def calculate_airbnb_price(bedrooms, bathrooms, city, complexity=3, add_ons=None
     if total_before_tax < min_job_fee:
         total_before_tax = min_job_fee
     
-    # Calculate tax and round up
     tax = total_before_tax * SALES_TAX_RATE
     total_with_tax = total_before_tax + tax
     rounded_total = math.ceil(total_with_tax)
     
-    # Internal breakdown (if estimates provided)
     internal = None
     if hours_estimated is not None and materials_cost is not None:
         internal = calculate_internal_breakdown(
@@ -559,7 +548,7 @@ def dashboard():
             """, unsafe_allow_html=True)
 
 def estimate_page():
-    """New estimate page - with internal cost breakdown (staff only)"""
+    """New estimate page - supports commercial and Airbnb"""
     if st.button("← Back to Dashboard"):
         st.session_state.page = "dashboard"
         st.rerun()
@@ -600,7 +589,6 @@ def estimate_page():
                                help="1 = Clean and tidy, 10 = Heavy party cleanup")
         client_name = st.text_input("👤 Guest/Host Name", placeholder="Enter name")
         
-        # Internal cost inputs (STAFF ONLY - not shown to customer)
         st.markdown("---")
         with st.expander("🔒 INTERNAL ONLY - Cost Estimates (not shown to customer)"):
             st.caption("These are for your internal profit calculation only.")
@@ -634,7 +622,6 @@ def estimate_page():
             </div>
             """, unsafe_allow_html=True)
         
-        # Internal breakdown (STAFF ONLY)
         if result.get('internal'):
             st.markdown("---")
             st.markdown("🔒 **INTERNAL COST BREAKDOWN (Staff Only - Not for Customers)**")
@@ -653,7 +640,6 @@ def estimate_page():
             </div>
             """, unsafe_allow_html=True)
             
-            # Profit warning
             if internal['profit_margin'] < 20:
                 st.warning("⚠️ Profit margin is below 20%. Consider adjusting your pricing or reducing costs.")
             elif internal['profit_margin'] > 40:
@@ -705,7 +691,6 @@ def estimate_page():
         
         client_name = st.text_input("👤 Client Name", placeholder="Enter client name")
         
-        # Internal cost inputs (STAFF ONLY - not shown to customer)
         st.markdown("---")
         with st.expander("🔒 INTERNAL ONLY - Cost Estimates (not shown to customer)"):
             st.caption("These are for your internal profit calculation only.")
@@ -728,7 +713,6 @@ def estimate_page():
             </div>
             """, unsafe_allow_html=True)
         
-        # Internal breakdown (STAFF ONLY)
         if result.get('internal'):
             st.markdown("---")
             st.markdown("🔒 **INTERNAL COST BREAKDOWN (Staff Only - Not for Customers)**")
@@ -747,7 +731,6 @@ def estimate_page():
             </div>
             """, unsafe_allow_html=True)
             
-            # Profit warning
             if internal['profit_margin'] < 20:
                 st.warning("⚠️ Profit margin is below 20%. Consider adjusting your pricing or reducing costs.")
             elif internal['profit_margin'] > 40:
@@ -1041,7 +1024,7 @@ def inspections_page():
                 st.warning("Please select a client first")
 
 def profit_page():
-    """Profit dashboard"""
+    """Profit dashboard - FIXED"""
     if st.button("← Back to Dashboard"):
         st.session_state.page = "dashboard"
         st.rerun()
@@ -1056,31 +1039,32 @@ def profit_page():
     expenses_row = c.fetchone()
     conn.close()
     
+    # FIX: Convert expenses to float with default 0.0
     if expenses_row:
         expenses = {
-            "insurance": expenses_row[0] or 0,
-            "vehicle": expenses_row[1] or 0,
-            "software": expenses_row[2] or 0,
-            "advertising": expenses_row[3] or 0,
-            "other": expenses_row[4] or 0
+            "insurance": float(expenses_row[0]) if expenses_row[0] is not None else 0.0,
+            "vehicle": float(expenses_row[1]) if expenses_row[1] is not None else 0.0,
+            "software": float(expenses_row[2]) if expenses_row[2] is not None else 0.0,
+            "advertising": float(expenses_row[3]) if expenses_row[3] is not None else 0.0,
+            "other": float(expenses_row[4]) if expenses_row[4] is not None else 0.0
         }
     else:
-        expenses = {"insurance": 0, "vehicle": 0, "software": 0, "advertising": 0, "other": 0}
+        expenses = {"insurance": 0.0, "vehicle": 0.0, "software": 0.0, "advertising": 0.0, "other": 0.0}
     
     total_expenses = sum(expenses.values())
     
     st.markdown("#### Monthly Expenses")
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
-        new_insurance = st.number_input("Insurance", value=expenses["insurance"], step=50)
+        new_insurance = st.number_input("Insurance", value=float(expenses["insurance"]), step=50.0, format="%.2f")
     with col2:
-        new_vehicle = st.number_input("Vehicle", value=expenses["vehicle"], step=50)
+        new_vehicle = st.number_input("Vehicle", value=float(expenses["vehicle"]), step=50.0, format="%.2f")
     with col3:
-        new_software = st.number_input("Software", value=expenses["software"], step=25)
+        new_software = st.number_input("Software", value=float(expenses["software"]), step=25.0, format="%.2f")
     with col4:
-        new_advertising = st.number_input("Advertising", value=expenses["advertising"], step=50)
+        new_advertising = st.number_input("Advertising", value=float(expenses["advertising"]), step=50.0, format="%.2f")
     with col5:
-        new_other = st.number_input("Other", value=expenses["other"], step=50)
+        new_other = st.number_input("Other", value=float(expenses["other"]), step=50.0, format="%.2f")
     
     if st.button("Save Expenses"):
         conn = sqlite3.connect(DB_PATH)
@@ -1099,9 +1083,9 @@ def profit_page():
     if df.empty:
         st.info("No jobs logged yet. Add some Quick Jobs to see your profit data.")
     else:
-        total_revenue = df["amount_invoiced"].sum()
-        total_job_expenses = df["job_expenses"].sum()
-        total_profit = df["profit"].sum()
+        total_revenue = float(df["amount_invoiced"].sum())
+        total_job_expenses = float(df["job_expenses"].sum())
+        total_profit = float(df["profit"].sum())
         margin = (total_profit / total_revenue * 100) if total_revenue > 0 else 0
         
         col1, col2, col3 = st.columns(3)
