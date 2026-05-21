@@ -3838,26 +3838,6 @@ def settings_page():
             smtp_email = st.text_input("SMTP Email (for notifications)", value=row[7] if row[7] else "")
             smtp_password = st.text_input("SMTP Password", type="password")
             
-            st.markdown("#### Data Management")
-            st.caption("Export your data for backup or accounting")
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                if st.button("📥 Export Clients", use_container_width=True):
-                    csv_data = export_clients_csv()
-                    if csv_data:
-                        st.download_button("Download CSV", csv_data, "clients_export.csv", "text/csv")
-            with col2:
-                if st.button("📥 Export Estimates", use_container_width=True):
-                    csv_data = export_estimates_csv()
-                    if csv_data:
-                        st.download_button("Download CSV", csv_data, "estimates_export.csv", "text/csv")
-            with col3:
-                if st.button("📥 Export Workers", use_container_width=True):
-                    csv_data = export_workers_csv()
-                    if csv_data:
-                        st.download_button("Download CSV", csv_data, "workers_export.csv", "text/csv")
-            
             if st.form_submit_button("💾 Save Settings", use_container_width=True):
                 conn = sqlite3.connect(DB_PATH)
                 c = conn.cursor()
@@ -3872,6 +3852,38 @@ def settings_page():
                 conn.close()
                 st.success("Settings saved!")
                 st.rerun()
+
+        st.markdown("#### Data Management")
+        st.caption("Export your data for backup or accounting")
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            clients_csv = export_clients_csv()
+            if clients_csv:
+                st.download_button(
+                    "📥 Export Clients", clients_csv, "clients_export.csv", "text/csv",
+                    use_container_width=True, key="settings_export_clients",
+                )
+            else:
+                st.caption("No clients to export")
+        with col2:
+            estimates_csv = export_estimates_csv()
+            if estimates_csv:
+                st.download_button(
+                    "📥 Export Estimates", estimates_csv, "estimates_export.csv", "text/csv",
+                    use_container_width=True, key="settings_export_estimates",
+                )
+            else:
+                st.caption("No estimates to export")
+        with col3:
+            workers_csv = export_workers_csv()
+            if workers_csv:
+                st.download_button(
+                    "📥 Export Workers", workers_csv, "workers_export.csv", "text/csv",
+                    use_container_width=True, key="settings_export_workers",
+                )
+            else:
+                st.caption("No workers to export")
     else:
         st.warning("Please complete setup first")
 
