@@ -877,6 +877,35 @@ def migrate_database():
             print(f"Could not create unique index for email_templates: {e}")
     conn.commit()
     conn.close()
+    
+    # Worker badges company_id and badge_icon migration
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='worker_badges'")
+    if c.fetchone():
+        # Ensure company_id and badge_icon columns exist (older DBs may lack them)
+        c.execute("PRAGMA table_info(worker_badges)")
+        existing_cols = [row[1] for row in c.fetchall()]
+        if 'company_id' not in existing_cols:
+            try:
+                c.execute("ALTER TABLE worker_badges ADD COLUMN company_id INTEGER")
+                print('Added company_id column to worker_badges')
+                # Set company_id for existing badges by joining with users table
+                c.execute("""
+                    UPDATE worker_badges
+                    SET company_id = (SELECT company_id FROM users WHERE users.id = worker_badges.worker_id)
+                """)
+                print('Populated company_id for existing worker_badges')
+            except sqlite3.OperationalError as e:
+                print(f"Could not add company_id column to worker_badges: {e}")
+        if 'badge_icon' not in existing_cols:
+            try:
+                c.execute("ALTER TABLE worker_badges ADD COLUMN badge_icon TEXT")
+                print('Added badge_icon column to worker_badges')
+            except sqlite3.OperationalError as e:
+                print(f"Could not add badge_icon column to worker_badges: {e}")
+    conn.commit()
+    conn.close()
 
 
 # ============================================================
