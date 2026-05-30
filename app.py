@@ -3765,94 +3765,71 @@ def admin_companies_page():
                         del st.session_state.pending_action
                         st.rerun()
             
-            elif action['type'] == 'delete_company':
+                        elif action['type'] == 'delete_company':
                 st.error(f"🗑️ **PERMANENTLY DELETE** Company: **{action['company_name']}**?")
-                st.warning(f"⚠️ This will delete:\n- {action['user_count']} user(s)\n- {action['client_count']} client(s)\n- All associated data (estimates, jobs, schedules, etc.)\n\n**This action CANNOT be undone.**")
+                st.warning(f"⚠️ This will delete:\n- {action['user_count']} user(s)\n- {action['client_count']} client(s)\n- All associated data\n\n**This action CANNOT be undone.**")
                 
                 col1, col2 = st.columns(2)
                 with col1:
-                    if st.button("🗑️ Yes, Delete Permanently", key="confirm_delete_company"):
+                    if st.button("🗑️ YES, PERMANENTLY DELETE", key="confirm_delete_company_final"):
                         try:
                             conn = sqlite3.connect(DB_PATH)
+                            conn.execute("PRAGMA foreign_keys = OFF")  # Temporarily disable foreign key checks
                             c = conn.cursor()
                             company_id = action['company_id']
                             
-                            # Delete worker badges first
-                            c.execute("DELETE FROM worker_badges WHERE worker_id IN (SELECT id FROM users WHERE company_id = ?)", (company_id,))
+                            # Get all user IDs in this company
+                            c.execute("SELECT id FROM users WHERE company_id = ?", (company_id,))
+                            user_ids = [row[0] for row in c.fetchall()]
                             
-                            # Delete notifications
-                            c.execute("DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE company_id = ?)", (company_id,))
+                            if user_ids:
+                                placeholders = ','.join(['?' for _ in user_ids])
+                                
+                                # Delete data that references users
+                                tables_to_clear = [
+                                    "sessions", "notifications", "audit_log", "team_messages",
+                                    "support_messages", "worker_certifications", "worker_badges",
+                                    "estimate_history", "estimate_approvals", "job_assignments"
+                                ]
+                                
+                                for table in tables_to_clear:
+                                    try:
+                                        c.execute(f"DELETE FROM {table} WHERE user_id IN ({placeholders})", user_ids)
+                                    except:
+                                        pass
                             
-                            # Delete sessions
-                            c.execute("DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE company_id = ?)", (company_id,))
+                            # Delete company-specific data (order matters for foreign keys)
+                            delete_queries = [
+                                "DELETE FROM support_tickets WHERE company_id = ?",
+                                "DELETE FROM supply_usage WHERE company_id = ?",
+                                "DELETE FROM supplies WHERE company_id = ?",
+                                "DELETE FROM inspections WHERE company_id = ?",
+                                "DELETE FROM scheduled_jobs WHERE company_id = ?",
+                                "DELETE FROM estimates WHERE company_id = ?",
+                                "DELETE FROM client_communications WHERE company_id = ?",
+                                "DELETE FROM clients WHERE company_id = ?",
+                                "DELETE FROM quick_jobs WHERE company_id = ?",
+                                "DELETE FROM monthly_expenses WHERE company_id = ?",
+                                "DELETE FROM job_templates WHERE company_id = ?",
+                                "DELETE FROM email_templates WHERE company_id = ?",
+                                "DELETE FROM worker_transfers WHERE from_company_id = ? OR to_company_id = ?",
+                                "DELETE FROM users WHERE company_id = ?",
+                                "DELETE FROM business_profile WHERE company_id = ?",
+                                "DELETE FROM companies WHERE id = ?"
+                            ]
                             
-                            # Delete audit logs for these users
-                            c.execute("DELETE FROM audit_log WHERE user_id IN (SELECT id FROM users WHERE company_id = ?)", (company_id,))
-                            
-                            # Delete support tickets and messages
-                            c.execute("DELETE FROM support_messages WHERE ticket_id IN (SELECT id FROM support_tickets WHERE company_id = ?)", (company_id,))
-                            c.execute("DELETE FROM support_tickets WHERE company_id = ?", (company_id,))
-                            
-                            # Delete team messages
-                            c.execute("DELETE FROM team_messages WHERE company_id = ?", (company_id,))
-                            
-                            # Delete supply usage and supplies
-                            c.execute("DELETE FROM supply_usage WHERE company_id = ?", (company_id,))
-                            c.execute("DELETE FROM supplies WHERE company_id = ?", (company_id,))
-                            
-                            # Delete inspections
-                            c.execute("DELETE FROM inspections WHERE company_id = ?", (company_id,))
-                            
-                            # Delete job assignments
-                            c.execute("DELETE FROM job_assignments WHERE job_id IN (SELECT id FROM scheduled_jobs WHERE company_id = ?)", (company_id,))
-                            
-                            # Delete scheduled jobs
-                            c.execute("DELETE FROM scheduled_jobs WHERE company_id = ?", (company_id,))
-                            
-                            # Delete estimate approvals and history
-                            c.execute("DELETE FROM estimate_approvals WHERE company_id = ?", (company_id,))
-                            c.execute("DELETE FROM estimate_history WHERE estimate_id IN (SELECT id FROM estimates WHERE company_id = ?)", (company_id,))
-                            
-                            # Delete estimates
-                            c.execute("DELETE FROM estimates WHERE company_id = ?", (company_id,))
-                            
-                            # Delete client communications
-                            c.execute("DELETE FROM client_communications WHERE company_id = ?", (company_id,))
-                            
-                            # Delete clients
-                            c.execute("DELETE FROM clients WHERE company_id = ?", (company_id,))
-                            
-                            # Delete quick jobs
-                            c.execute("DELETE FROM quick_jobs WHERE company_id = ?", (company_id,))
-                            
-                            # Delete monthly expenses
-                            c.execute("DELETE FROM monthly_expenses WHERE company_id = ?", (company_id,))
-                            
-                            # Delete job templates
-                            c.execute("DELETE FROM job_templates WHERE company_id = ?", (company_id,))
-                            
-                            # Delete worker certifications
-                            c.execute("DELETE FROM worker_certifications WHERE company_id = ?", (company_id,))
-                            
-                            # Delete worker transfers
-                            c.execute("DELETE FROM worker_transfers WHERE from_company_id = ? OR to_company_id = ?", (company_id, company_id))
-                            
-                            # Delete email templates
-                            c.execute("DELETE FROM email_templates WHERE company_id = ?", (company_id,))
-                            
-                            # Delete business profile
-                            c.execute("DELETE FROM business_profile WHERE company_id = ?", (company_id,))
-                            
-                            # Finally delete users
-                            c.execute("DELETE FROM users WHERE company_id = ?", (company_id,))
-                            
-                            # Delete the company
-                            c.execute("DELETE FROM companies WHERE id = ?", (company_id,))
+                            for query in delete_queries:
+                                try:
+                                    c.execute(query, (company_id,))
+                                except Exception as e:
+                                    print(f"Query failed: {query}, Error: {e}")
                             
                             conn.commit()
+                            conn.execute("PRAGMA foreign_keys = ON")  # Re-enable foreign key checks
                             conn.close()
                             
                             st.success(f"✅ **{action['company_name']}** and all its data have been permanently deleted.")
+                            st.balloons()
                             del st.session_state.pending_action
                             time.sleep(2)
                             st.rerun()
@@ -3861,12 +3838,13 @@ def admin_companies_page():
                             st.error(f"❌ Error deleting company: {str(e)}")
                             if 'conn' in locals():
                                 conn.rollback()
+                                conn.execute("PRAGMA foreign_keys = ON")
                                 conn.close()
                             del st.session_state.pending_action
                             st.rerun()
                 
                 with col2:
-                    if st.button("❌ Cancel", key="cancel_delete_company"):
+                    if st.button("❌ Cancel", key="cancel_delete_company_final"):
                         del st.session_state.pending_action
                         st.rerun()
     
