@@ -3742,9 +3742,10 @@ def admin_companies_page():
                     
                     st.markdown("---")
         
-                # Confirmation dialogs (same as original but keep them)
+                        # Confirmation dialogs
         if 'pending_action' in st.session_state:
             action = st.session_state.pending_action
+            
             if action['type'] in ['deactivate_company', 'activate_company']:
                 st.warning(f"⚠️ Are you sure you want to {action['type'].replace('_', ' ')} **{action['company_name']}**?")
                 col1, col2 = st.columns(2)
@@ -3765,7 +3766,7 @@ def admin_companies_page():
                         del st.session_state.pending_action
                         st.rerun()
             
-                        elif action['type'] == 'delete_company':
+            elif action['type'] == 'delete_company':
                 st.error(f"🗑️ **PERMANENTLY DELETE** Company: **{action['company_name']}**?")
                 st.warning(f"⚠️ This will delete:\n- {action['user_count']} user(s)\n- {action['client_count']} client(s)\n- All associated data\n\n**This action CANNOT be undone.**")
                 
@@ -3774,7 +3775,7 @@ def admin_companies_page():
                     if st.button("🗑️ YES, PERMANENTLY DELETE", key="confirm_delete_company_final"):
                         try:
                             conn = sqlite3.connect(DB_PATH)
-                            conn.execute("PRAGMA foreign_keys = OFF")  # Temporarily disable foreign key checks
+                            conn.execute("PRAGMA foreign_keys = OFF")
                             c = conn.cursor()
                             company_id = action['company_id']
                             
@@ -3798,7 +3799,7 @@ def admin_companies_page():
                                     except:
                                         pass
                             
-                            # Delete company-specific data (order matters for foreign keys)
+                            # Delete company-specific data
                             delete_queries = [
                                 "DELETE FROM support_tickets WHERE company_id = ?",
                                 "DELETE FROM supply_usage WHERE company_id = ?",
@@ -3825,7 +3826,7 @@ def admin_companies_page():
                                     print(f"Query failed: {query}, Error: {e}")
                             
                             conn.commit()
-                            conn.execute("PRAGMA foreign_keys = ON")  # Re-enable foreign key checks
+                            conn.execute("PRAGMA foreign_keys = ON")
                             conn.close()
                             
                             st.success(f"✅ **{action['company_name']}** and all its data have been permanently deleted.")
@@ -3847,50 +3848,6 @@ def admin_companies_page():
                     if st.button("❌ Cancel", key="cancel_delete_company_final"):
                         del st.session_state.pending_action
                         st.rerun()
-    
-            # TAB 2: USERS & WORKERS
-    with tab2:
-        st.markdown("### User Management")
-        
-        conn = sqlite3.connect(DB_PATH)
-        
-        # First check if invite_code column exists
-        c = conn.cursor()
-        c.execute("PRAGMA table_info(users)")
-        existing_columns = [col[1] for col in c.fetchall()]
-        
-        # Build query dynamically based on existing columns
-        if 'invite_code' in existing_columns:
-            query = """
-                SELECT u.id, u.username, u.email, u.role, u.company_id, u.is_active, u.created_at, u.invite_code,
-                       c.name as company_name, c.subdomain
-                FROM users u
-                LEFT JOIN companies c ON u.company_id = c.id
-                WHERE u.role != 'super_admin'
-                ORDER BY c.name, u.role, u.username
-            """
-        else:
-            query = """
-                SELECT u.id, u.username, u.email, u.role, u.company_id, u.is_active, u.created_at,
-                       '' as invite_code, c.name as company_name, c.subdomain
-                FROM users u
-                LEFT JOIN companies c ON u.company_id = c.id
-                WHERE u.role != 'super_admin'
-                ORDER BY c.name, u.role, u.username
-            """
-        
-        try:
-            users_df = pd.read_sql_query(query, conn)
-        except Exception as e:
-            st.error(f"Error loading users: {e}")
-            users_df = pd.DataFrame()
-        finally:
-            conn.close()
-        
-        if users_df.empty:
-            st.info("No users found.")
-        else:
-            st.dataframe(users_df, use_container_width=True)
     
     # TAB 3: WORKER TRANSFER (simplified - same as original)
     with tab3:
