@@ -749,6 +749,7 @@ def init_db():
         body TEXT,
         is_active BOOLEAN DEFAULT 1,
         created_at DATETIME,
+        UNIQUE(company_id, name),
         FOREIGN KEY (company_id) REFERENCES companies(id)
     )''')
 
@@ -835,6 +836,31 @@ def migrate_database():
     except Exception as e:
         print(f"Error generating invite codes: {e}")
     
+    conn.commit()
+    conn.close()
+
+    # Email template uniqueness migration
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='email_templates'")
+    if c.fetchone():
+        # Remove duplicate templates before creating unique constraint/index
+        c.execute('''
+            DELETE FROM email_templates
+            WHERE id NOT IN (
+                SELECT id FROM (
+                    SELECT id, company_id, name
+                    FROM email_templates
+                    ORDER BY company_id, name, created_at DESC, id DESC
+                ) GROUP BY company_id, name
+            )
+        ''')
+        try:
+            c.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_email_templates_company_name ON email_templates(company_id, name)"
+            )
+        except sqlite3.OperationalError as e:
+            print(f"Could not create unique index for email_templates: {e}")
     conn.commit()
     conn.close()
 
@@ -3665,30 +3691,82 @@ def admin_companies_page():
     # TAB 5: EMAIL TEMPLATES
     with tab5:
         st.markdown("### 📧 Email Templates")
-        
+
         conn = sqlite3.connect(DB_PATH)
-        templates_df = pd.read_sql_query("SELECT id, name, subject, is_active FROM email_templates WHERE company_id = 1 ORDER BY name", conn)
+        companies_df = pd.read_sql_query("SELECT id, name FROM companies WHERE is_active = 1 ORDER BY name", conn)
         conn.close()
-        
-        if not templates_df.empty:
-            st.dataframe(templates_df)
-        
-        with st.expander("➕ Add/Edit Template"):
-            with st.form("email_template"):
-                template_name = st.selectbox("Template Type", ["estimate_sent", "estimate_approved", "job_reminder", "review_request", "worker_approval"])
-                subject = st.text_input("Subject")
-                body = st.text_area("Body (use placeholders like {business_name}, {client_name}, {amount})")
-                is_active = st.checkbox("Active", value=True)
-                if st.form_submit_button("Save Template"):
-                    conn = sqlite3.connect(DB_PATH)
-                    c = conn.cursor()
-                    c.execute("INSERT OR REPLACE INTO email_templates (company_id, name, subject, body, is_active, created_at) VALUES (1, ?, ?, ?, ?, ?)",
-                              (template_name, subject, body, 1 if is_active else 0, datetime.now().isoformat()))
-                    conn.commit()
-                    conn.close()
-                    st.success("Template saved")
-                    st.rerun()
-    
+
+        if companies_df.empty:
+            st.warning("No active companies available for email templates.")
+        else:
+            company_names = {row['id']: row['name'] for _, row in companies_df.iterrows()}
+            company_options = companies_df['id'].tolist()
+            selected_company = st.selectbox(
+                "Company",
+                company_options,
+                format_func=lambda cid: company_names.get(cid, str(cid)),
+                index=company_options.index(1) if 1 in company_options else 0,
+            )
+
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='email_templates'")
+            table_exists = c.fetchone()
+
+            if table_exists:
+                templates_df = pd.read_sql_query(
+                    "SELECT id, name, subject, is_active FROM email_templates WHERE company_id = ? ORDER BY name",
+                    conn,
+                    params=(selected_company,),
+                )
+                if not templates_df.empty:
+                    st.dataframe(templates_df)
+                else:
+                    st.info("No email templates found for this company. Create one below.")
+            else:
+                st.info("Email templates will be available after you create your first template.")
+                templates_df = pd.DataFrame()
+
+            conn.close()
+
+            with st.expander("➕ Add/Edit Template"):
+                with st.form("email_template"):
+                    template_name = st.selectbox(
+                        "Template Type",
+                        ["estimate_sent", "estimate_approved", "job_reminder", "review_request", "worker_approval"],
+                    )
+                    subject = st.text_input("Subject", placeholder="Your estimate from {business_name}")
+                    body = st.text_area(
+                        "Body",
+                        height=200,
+                        placeholder="Dear {client_name},\n\nYour estimate is ${amount:,.2f}.\n\nClick here to approve: {approval_link}",
+                    )
+                    is_active = st.checkbox("Active", value=True)
+                    if st.form_submit_button("Save Template"):
+                        conn = sqlite3.connect(DB_PATH)
+                        c = conn.cursor()
+
+                        existing = c.execute(
+                            "SELECT id FROM email_templates WHERE company_id = ? AND name = ?",
+                            (selected_company, template_name),
+                        ).fetchone()
+
+                        if existing:
+                            c.execute(
+                                "UPDATE email_templates SET subject = ?, body = ?, is_active = ?, created_at = ? WHERE id = ?",
+                                (subject, body, 1 if is_active else 0, datetime.now().isoformat(), existing[0]),
+                            )
+                        else:
+                            c.execute(
+                                "INSERT INTO email_templates (company_id, name, subject, body, is_active, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                                (selected_company, template_name, subject, body, 1 if is_active else 0, datetime.now().isoformat()),
+                            )
+
+                        conn.commit()
+                        conn.close()
+                        st.success("Template saved successfully!")
+                        st.rerun()
+                  
     # TAB 6: SYSTEM ACTIONS
     with tab6:
         st.markdown("### 💾 System Actions")
