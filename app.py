@@ -1,7 +1,7 @@
 """
 PROFITCLEAN - Commercial Cleaning Estimator
 Created by Dust Bros & Co.
-ENHANCED VERSION - Part 1 of 4
+ENHANCED VERSION - Part 1 of 5
 Includes: multi-tenant, super admin, support staff, troubleshooting tools, enhanced features
 """
 
@@ -104,7 +104,6 @@ class EmailContext:
     def format_template(self, template: str) -> str:
         """Safely format email template with available context"""
         try:
-            # Replace all placeholders with actual values
             result = template
             for key, value in asdict(self).items():
                 placeholder = f"{{{key}}}"
@@ -297,7 +296,7 @@ def init_db():
         FOREIGN KEY (approved_by) REFERENCES users(id)
     )''')
 
-    # Notifications table (NEW)
+    # Notifications table
     c.execute('''CREATE TABLE IF NOT EXISTS notifications (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER,
@@ -312,7 +311,7 @@ def init_db():
         FOREIGN KEY (company_id) REFERENCES companies(id)
     )''')
 
-    # Estimate history/timeline (NEW)
+    # Estimate history/timeline
     c.execute('''CREATE TABLE IF NOT EXISTS estimate_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         estimate_id INTEGER,
@@ -325,7 +324,7 @@ def init_db():
         FOREIGN KEY (changed_by) REFERENCES users(id)
     )''')
 
-    # Client communication log (NEW)
+    # Client communication log
     c.execute('''CREATE TABLE IF NOT EXISTS client_communications (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         client_id INTEGER,
@@ -340,7 +339,7 @@ def init_db():
         FOREIGN KEY (sent_by) REFERENCES users(id)
     )''')
 
-    # Job templates (NEW)
+    # Job templates
     c.execute('''CREATE TABLE IF NOT EXISTS job_templates (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         company_id INTEGER,
@@ -353,7 +352,7 @@ def init_db():
         FOREIGN KEY (company_id) REFERENCES companies(id)
     )''')
 
-    # Worker availability (NEW)
+    # Worker availability
     c.execute('''CREATE TABLE IF NOT EXISTS worker_availability (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         worker_id INTEGER,
@@ -363,7 +362,7 @@ def init_db():
         FOREIGN KEY (worker_id) REFERENCES users(id)
     )''')
 
-    # Performance reviews (NEW)
+    # Performance reviews
     c.execute('''CREATE TABLE IF NOT EXISTS performance_reviews (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         company_id INTEGER,
@@ -403,7 +402,7 @@ def init_db():
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
 
-    # Audit log (enhanced)
+    # Audit log
     c.execute('''CREATE TABLE IF NOT EXISTS audit_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER,
@@ -414,7 +413,7 @@ def init_db():
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
 
-    # Business profile (enhanced)
+    # Business profile
     c.execute('''CREATE TABLE IF NOT EXISTS business_profile (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         company_id INTEGER UNIQUE,
@@ -462,7 +461,7 @@ def init_db():
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
 
-    # Estimates (enhanced)
+    # Estimates
     c.execute('''CREATE TABLE IF NOT EXISTS estimates (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         company_id INTEGER,
@@ -526,7 +525,7 @@ def init_db():
         FOREIGN KEY (manager_id) REFERENCES users(id)
     )''')
 
-    # Scheduled jobs (enhanced)
+    # Scheduled jobs
     c.execute('''CREATE TABLE IF NOT EXISTS scheduled_jobs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         company_id INTEGER,
@@ -570,7 +569,7 @@ def init_db():
         FOREIGN KEY (assigned_by) REFERENCES users(id)
     )''')
 
-    # Inspections (enhanced)
+    # Inspections
     c.execute('''CREATE TABLE IF NOT EXISTS inspections (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         company_id INTEGER,
@@ -623,7 +622,7 @@ def init_db():
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
 
-    # Team chat (enhanced)
+    # Team chat
     c.execute('''CREATE TABLE IF NOT EXISTS team_messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         company_id INTEGER,
@@ -703,7 +702,7 @@ def init_db():
         FOREIGN KEY (worker_id) REFERENCES users(id)
     )''')
 
-    # Support tickets (enhanced)
+    # Support tickets
     c.execute('''CREATE TABLE IF NOT EXISTS support_tickets (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         company_id INTEGER,
@@ -740,7 +739,7 @@ def init_db():
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
 
-    # Email templates (enhanced)
+    # Email templates
     c.execute('''CREATE TABLE IF NOT EXISTS email_templates (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         company_id INTEGER,
@@ -804,8 +803,10 @@ def init_db():
 
     conn.commit()
     conn.close()
+
+
 # ============================================================
-# DATABASE MIGRATION (ENHANCED)
+# DATABASE MIGRATION
 # ============================================================
 
 def migrate_database():
@@ -844,7 +845,6 @@ def migrate_database():
     c = conn.cursor()
     c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='email_templates'")
     if c.fetchone():
-        # Ensure required columns exist (older DBs may lack them)
         c.execute("PRAGMA table_info(email_templates)")
         existing_cols = [row[1] for row in c.fetchall()]
         if 'is_active' not in existing_cols:
@@ -860,7 +860,6 @@ def migrate_database():
             except sqlite3.OperationalError as e:
                 print(f"Could not add created_at column: {e}")
 
-        # Remove duplicate templates before creating unique constraint/index
         c.execute('''
             DELETE FROM email_templates
             WHERE id NOT IN (
@@ -870,27 +869,23 @@ def migrate_database():
             )
         ''')
         try:
-            c.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_email_templates_company_name ON email_templates(company_id, name)"
-            )
+            c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_email_templates_company_name ON email_templates(company_id, name)")
         except sqlite3.OperationalError as e:
             print(f"Could not create unique index for email_templates: {e}")
     conn.commit()
     conn.close()
     
-    # Worker badges company_id and badge_icon migration
+    # Worker badges migration
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='worker_badges'")
     if c.fetchone():
-        # Ensure company_id and badge_icon columns exist (older DBs may lack them)
         c.execute("PRAGMA table_info(worker_badges)")
         existing_cols = [row[1] for row in c.fetchall()]
         if 'company_id' not in existing_cols:
             try:
                 c.execute("ALTER TABLE worker_badges ADD COLUMN company_id INTEGER")
                 print('Added company_id column to worker_badges')
-                # Set company_id for existing badges by joining with users table
                 c.execute("""
                     UPDATE worker_badges
                     SET company_id = (SELECT company_id FROM users WHERE users.id = worker_badges.worker_id)
@@ -906,10 +901,8 @@ def migrate_database():
                 print(f"Could not add badge_icon column to worker_badges: {e}")
     conn.commit()
     conn.close()
-
-
 # ============================================================
-# NOTIFICATION SYSTEM (NEW)
+# NOTIFICATION SYSTEM
 # ============================================================
 
 def create_notification(user_id: int, company_id: int, title: str, message: str, 
@@ -927,7 +920,7 @@ def create_notification(user_id: int, company_id: int, title: str, message: str,
     return notification_id
 
 def get_user_notifications(user_id: int, limit: int = 20) -> pd.DataFrame:
-    """Get unread notifications for a user"""
+    """Get notifications for a user"""
     conn = sqlite3.connect(DB_PATH)
     df = pd.read_sql_query("""
         SELECT id, title, message, notification_type, related_id, read_status, created_at
@@ -958,7 +951,7 @@ def get_unread_notification_count(user_id: int) -> int:
 
 
 # ============================================================
-# EMAIL SYSTEM (ENHANCED)
+# EMAIL SYSTEM
 # ============================================================
 
 def send_email(company_id: int, to_email: str, subject: str, body: str, html_body: str = None) -> bool:
@@ -983,10 +976,8 @@ def send_email(company_id: int, to_email: str, subject: str, body: str, html_bod
         msg['To'] = to_email
         msg['Subject'] = subject
         
-        # Attach plain text version
         msg.attach(MIMEText(body, 'plain'))
         
-        # Attach HTML version if provided
         if html_body:
             msg.attach(MIMEText(html_body, 'html'))
         
@@ -1029,7 +1020,6 @@ def send_estimate_email(company_id: int, estimate_id: int, client_email: str, cl
         subject = f"Estimate from {business_name}"
         body = f"Dear {client_name},\n\nYour estimate is ${amount:,.2f}.\n\nApprove here: {approval_link}"
     
-    # Create HTML version
     html_body = f"""
     <html>
     <body>
@@ -1388,7 +1378,7 @@ def create_full_system_backup():
 
 
 # ============================================================
-# ESTIMATE HISTORY TRACKING (NEW)
+# ESTIMATE HISTORY TRACKING
 # ============================================================
 
 def add_estimate_history_entry(estimate_id: int, status_from: str, status_to: str, changed_by: int, notes: str = ""):
@@ -1417,7 +1407,7 @@ def get_estimate_history(estimate_id: int) -> pd.DataFrame:
 
 
 # ============================================================
-# JOB TEMPLATE FUNCTIONS (NEW)
+# JOB TEMPLATE FUNCTIONS
 # ============================================================
 
 def create_job_template(company_id: int, name: str, description: str, property_type: str, 
@@ -1477,6 +1467,11 @@ def estimate_toll(origin, dest):
     key = (origin.lower(), dest.lower())
     return KNOWN_TOLLS.get(key, 5.00)
 
+
+# ============================================================
+# ENHANCED PRICING CALCULATION WITH 4 TIERS
+# ============================================================
+
 def calculate_price_with_tiers(city, prop_type, sqft, bedrooms, bathrooms, freq, complexity, travel_miles, add_ons, holiday, num_locations, notice_hours, contract_months, company_id=None):
     """
     ENHANCED PRICING CALCULATOR with 4 Tiers & 40% House Margin Guarantee
@@ -1519,33 +1514,19 @@ def calculate_price_with_tiers(city, prop_type, sqft, bedrooms, bathrooms, freq,
     freq_mult = FREQUENCIES.get(freq, 1.0)
     
     # Complexity factor (1-10 scale)
-    comp_factor = 0.6 + (complexity / 10)  # Range: 0.7 to 1.6
-    complexity_description = {
-        1: "Very Simple",
-        2-3: "Simple",
-        4-6: "Moderate",
-        7-8: "Complex",
-        9-10: "Very Complex"
-    }
-    complexity_level = "Moderate"
-    for key, desc in complexity_description.items():
-        if isinstance(key, tuple):
-            if key[0] <= complexity <= key[1]:
-                complexity_level = desc
-        elif complexity == key:
-            complexity_level = desc
+    comp_factor = 0.6 + (complexity / 10)
+    complexity_levels = {1: "Very Simple", 2: "Simple", 3: "Simple", 4: "Moderate", 5: "Moderate", 6: "Moderate", 7: "Complex", 8: "Complex", 9: "Very Complex", 10: "Very Complex"}
+    complexity_level = complexity_levels.get(complexity, "Moderate")
     
     # ============================================================
     # 3. BASE SUBTOTAL CALCULATION
     # ============================================================
     if prop_type == "🏠 Airbnb / Short-Term Rental":
-        # Per-room pricing model
         room_price = 45 if city in major_metros else 35
         bathroom_price = 25 if city in major_metros else 20
         subtotal = ((bedrooms * room_price) + (bathrooms * bathroom_price)) * prop_mult * comp_factor
         pricing_model = "Per Room"
     else:
-        # Per square foot pricing model
         adjusted_base_rate = base_rate * zone_mult * prop_mult * freq_mult * comp_factor
         subtotal = sqft * adjusted_base_rate
         pricing_model = "Per Square Foot"
@@ -1587,13 +1568,11 @@ def calculate_price_with_tiers(city, prop_type, sqft, bedrooms, bathrooms, freq,
     # ============================================================
     modifier_details = []
     
-    # Holiday surcharge
     if holiday != "None":
         holiday_rate = HOLIDAY_RATES.get(holiday, 0.25)
         total *= (1 + holiday_rate)
         modifier_details.append(f"Holiday Surcharge (+{holiday_rate*100:.0f}%)")
     
-    # Emergency/Notice period
     if notice_hours <= 12:
         total *= 1.75
         modifier_details.append("Emergency (Same Day) +75%")
@@ -1604,7 +1583,6 @@ def calculate_price_with_tiers(city, prop_type, sqft, bedrooms, bathrooms, freq,
         total *= 1.25
         modifier_details.append("Short Notice (2 days) +25%")
     
-    # Volume discount (multiple locations)
     if num_locations >= 10:
         total *= 0.80
         modifier_details.append(f"Volume Discount ({num_locations} locations) -20%")
@@ -1615,7 +1593,6 @@ def calculate_price_with_tiers(city, prop_type, sqft, bedrooms, bathrooms, freq,
         total *= 0.90
         modifier_details.append(f"Multiple Locations Discount ({num_locations}) -10%")
     
-    # Contract length discount
     if contract_months >= 24:
         total *= 0.75
         modifier_details.append("2+ Year Contract -25%")
@@ -1630,7 +1607,7 @@ def calculate_price_with_tiers(city, prop_type, sqft, bedrooms, bathrooms, freq,
         modifier_details.append("Quarterly Contract -10%")
     
     # ============================================================
-    # 7. TRUE COST CALCULATION (Labor + Materials + Overhead)
+    # 7. TRUE COST CALCULATION
     # ============================================================
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -1642,14 +1619,12 @@ def calculate_price_with_tiers(city, prop_type, sqft, bedrooms, bathrooms, freq,
     min_job_fee = row[1] if row else 150
     profit_target = row[2] if row else 0.40
     
-    # Labor hours estimation
     if sqft > 0:
         base_hours = sqft / 500
         labor_hours = base_hours * comp_factor
     else:
         labor_hours = (bedrooms * 0.75) + (bathrooms * 0.5)
     
-    # Adjust for complexity
     if complexity >= 8:
         labor_hours *= 1.5
     elif complexity >= 6:
@@ -1657,23 +1632,19 @@ def calculate_price_with_tiers(city, prop_type, sqft, bedrooms, bathrooms, freq,
     
     labor_cost = labor_hours * hourly_wage
     
-    # Materials cost (with complexity adjustment)
     if sqft > 0:
-        materials_cost = sqft * 0.035  # $0.035 per sq ft
+        materials_cost = sqft * 0.035
     else:
         materials_cost = bedrooms * 15 + bathrooms * 10
     
     if complexity >= 7:
         materials_cost *= 1.3
     
-    # Overhead (15% for admin, insurance, vehicle maintenance)
     overhead_rate = 0.15
     overhead_cost = (labor_cost + materials_cost) * overhead_rate
     
-    # TRUE TOTAL COST
     true_cost = labor_cost + materials_cost + overhead_cost + travel_cost + tolls
     
-    # Apply minimum job fee
     if true_cost < min_job_fee:
         true_cost = min_job_fee
         cost_breakdown = f"Minimum job fee applied (${min_job_fee})"
@@ -1681,9 +1652,8 @@ def calculate_price_with_tiers(city, prop_type, sqft, bedrooms, bathrooms, freq,
         cost_breakdown = "Calculated from actual costs"
     
     # ============================================================
-    # 8. MARKET INTELLIGENCE - Competitor Rates
+    # 8. MARKET INTELLIGENCE
     # ============================================================
-    # Market rates based on city and property type
     market_rates = {
         "major_metro": {"min": 0.16, "avg": 0.22, "max": 0.30},
         "coastal": {"min": 0.14, "avg": 0.19, "max": 0.26},
@@ -1713,55 +1683,39 @@ def calculate_price_with_tiers(city, prop_type, sqft, bedrooms, bathrooms, freq,
         competitor_max_price = bedrooms * 70
     
     # ============================================================
-    # 9. FOUR PRICE TIERS WITH GUARANTEED HOUSE MARGIN
+    # 9. FOUR PRICE TIERS
     # ============================================================
-    # TIER 1: BREAK EVEN (0% margin - covers all costs)
     break_even = math.ceil(true_cost)
     break_even_margin = 0
     break_even_house = 0
     
-    # TIER 2: SWEET SPOT (40% margin - HOUSE KEEPS 40%)
     desired_margin = profit_target if profit_target > 0 else 0.40
     sweet_spot_raw = true_cost / (1 - desired_margin)
     sweet_spot = math.ceil(sweet_spot_raw)
     sweet_spot_margin = round(((sweet_spot - true_cost) / sweet_spot) * 100, 1)
     sweet_spot_house_keeps = sweet_spot_margin
     
-    # TIER 3: FAIR MARKET (30% margin - competitive)
     fair_market_raw = true_cost / (1 - 0.30)
     fair_market = math.ceil(max(fair_market_raw, sweet_spot * 0.85))
     fair_market_margin = round(((fair_market - true_cost) / fair_market) * 100, 1)
     fair_market_house_keeps = fair_market_margin
     
-    # TIER 4: PREMIUM (50% margin - premium service)
     premium_raw = true_cost / (1 - 0.50)
     premium = math.ceil(max(premium_raw, sweet_spot * 1.25))
     premium_margin = round(((premium - true_cost) / premium) * 100, 1)
     premium_house_keeps = premium_margin
     
-    # Adjust based on market competitiveness
-    # Ensure sweet spot is competitive but profitable
     if competitor_avg_price > sweet_spot:
-        # Our price is below market average - we can raise it
         sweet_spot = math.ceil(min(sweet_spot * 1.1, competitor_avg_price))
     elif competitor_avg_price < sweet_spot * 0.7:
-        # Our price is too high - lower to stay competitive
         sweet_spot = math.ceil(max(break_even, competitor_avg_price))
     
-    # Recalculate sweet spot margin after adjustment
     sweet_spot_margin = round(((sweet_spot - true_cost) / sweet_spot) * 100, 1)
     sweet_spot_house_keeps = sweet_spot_margin
     
-    # ============================================================
-    # 10. TAX CALCULATION
-    # ============================================================
     tax_rate = SALES_TAX_RATE
     
-    # ============================================================
-    # 11. RETURN RESULTS WITH FULL DETAILS
-    # ============================================================
     return {
-        # Price Tiers
         "break_even": {
             "total": math.ceil(break_even * (1 + tax_rate)),
             "subtotal": break_even,
@@ -1794,8 +1748,6 @@ def calculate_price_with_tiers(city, prop_type, sqft, bedrooms, bathrooms, freq,
             "house_keeps": premium_house_keeps,
             "description": "Premium/Rush/Emergency service"
         },
-        
-        # Cost Breakdown
         "true_cost": true_cost,
         "cost_breakdown": cost_breakdown,
         "labor_hours": round(labor_hours, 2),
@@ -1806,15 +1758,12 @@ def calculate_price_with_tiers(city, prop_type, sqft, bedrooms, bathrooms, freq,
         "toll_estimate": round(tolls, 2),
         "add_on_total": round(add_on_total, 2),
         "add_on_details": add_on_details,
-        
-        # Modifiers Applied
         "modifier_details": modifier_details,
         "zone_name": zone_name,
         "zone_multiplier": zone_mult,
         "complexity_level": complexity_level,
         "pricing_model": pricing_model,
-        
-        # Market Intelligence
+        "hourly_wage": hourly_wage,
         "market_insights": {
             "zone": zone_market,
             "competitor_min": round(competitor_min_price, 2),
@@ -1823,19 +1772,16 @@ def calculate_price_with_tiers(city, prop_type, sqft, bedrooms, bathrooms, freq,
             "market_position": "Below Average" if sweet_spot < competitor_avg_price else "Above Average" if sweet_spot > competitor_avg_price else "At Market",
             "recommendation": "Great value - competitive price" if sweet_spot <= competitor_avg_price else "Premium position - justify with quality"
         },
-        
-        # Summary
         "summary": {
             "total_cost": round(true_cost, 2),
             "recommended_price": sweet_spot,
             "recommended_total": math.ceil(sweet_spot * (1 + tax_rate)),
             "house_profit": round(sweet_spot - true_cost, 2),
             "house_margin": sweet_spot_margin,
-            "savings_vs_premium": round(((premium - sweet_spot) / premium) * 100, 1),
-            "premium_vs_break_even": round(((premium - break_even) / break_even) * 100, 1)
+            "savings_vs_premium": round(((premium - sweet_spot) / premium) * 100, 1) if premium > 0 else 0,
+            "premium_vs_break_even": round(((premium - break_even) / break_even) * 100, 1) if break_even > 0 else 0
         }
     }
-
 # ============================================================
 # USER MANAGEMENT FUNCTIONS
 # ============================================================
@@ -1904,12 +1850,7 @@ def approve_worker_request(request_id, manager_id, company_id):
         c.execute("DELETE FROM pending_workers WHERE id = ?", (request_id,))
         conn.commit()
         log_audit(manager_id, "worker_approved", f"Approved worker {name} (ID {user_id}) for company {company_id}")
-        
-        # Create welcome notification
-        create_notification(user_id, company_id, "Welcome aboard!", 
-                           f"Your account has been approved. You can now log in and access the system.", 
-                           "account_approved")
-        
+        create_notification(user_id, company_id, "Welcome aboard!", "Your account has been approved. You can now log in and access the system.", "account_approved")
         return True, user_id
     conn.close()
     return False, None
@@ -2111,11 +2052,8 @@ def schedule_job(client_id, client_name, client_email, estimate_id, worker_id, d
     conn.commit()
     conn.close()
     
-    # Create notification for assigned worker
     if worker_id:
-        create_notification(worker_id, company_id, "New Job Assigned", 
-                           f"You have been assigned a job for {client_name} on {date.isoformat()} at {time_slot}", 
-                           "job_assigned", job_id)
+        create_notification(worker_id, company_id, "New Job Assigned", f"You have been assigned a job for {client_name} on {date.isoformat()} at {time_slot}", "job_assigned", job_id)
     
     return job_id
 
@@ -2189,11 +2127,7 @@ def award_badge(worker_id, badge_name, badge_icon="🏅"):
         c.execute("INSERT INTO worker_badges (company_id, worker_id, badge_name, badge_icon, earned_at) VALUES (?,?,?,?,?)", 
                   (company_id, worker_id, badge_name, badge_icon, datetime.now().isoformat()))
         conn.commit()
-        
-        # Create notification
-        create_notification(worker_id, company_id, "New Badge Earned!", 
-                           f"Congratulations! You've earned the '{badge_name}' badge.", 
-                           "badge_earned")
+        create_notification(worker_id, company_id, "New Badge Earned!", f"Congratulations! You've earned the '{badge_name}' badge.", "badge_earned")
     conn.close()
 
 def update_worker_badges(worker_id):
@@ -2242,11 +2176,7 @@ def request_sweet_spot_approval(estimate_id, worker_id, requested_price, manager
     conn.commit()
     conn.close()
     log_audit(worker_id, "sweet_spot_request", f"Requested approval for estimate {estimate_id} in company {company_id}")
-    
-    # Create notification for manager
-    create_notification(manager_id, company_id, "Sweet Spot Approval Request", 
-                       f"Worker requested approval for estimate #{estimate_id} at ${requested_price:,.2f}", 
-                       "approval_request", estimate_id)
+    create_notification(manager_id, company_id, "Sweet Spot Approval Request", f"Worker requested approval for estimate #{estimate_id} at ${requested_price:,.2f}", "approval_request", estimate_id)
 
 def get_pending_sweet_spot_requests(manager_id):
     company_id = get_current_user_company()
@@ -2272,10 +2202,7 @@ def approve_sweet_spot(request_id, manager_id):
         est_id, price = row
         c.execute("UPDATE estimates SET estimated_price = ?, status = 'sent' WHERE id = ? AND company_id = ?", (price, est_id, company_id))
         c.execute("UPDATE estimate_approvals SET status = 'approved', approved_at = ? WHERE id = ?", (datetime.now().isoformat(), request_id))
-        
-        # Add to history
         add_estimate_history_entry(est_id, "draft", "sent", manager_id, f"Sweet spot approved at ${price:,.2f}")
-        
         conn.commit()
         log_audit(manager_id, "sweet_spot_approved", f"Approved sweet spot for estimate {est_id} in company {company_id}")
         conn.close()
@@ -2375,7 +2302,6 @@ def setup_wizard():
                                   (business_name, phone, hourly_wage, min_job_fee, home_city, 0.65, SALES_TAX_RATE, smtp_email, smtp_password, smtp_server, smtp_port, result))
                         conn.commit()
                         
-                        # Create default job templates
                         create_job_template(result, "Standard Office Clean", "Standard office cleaning including vacuum, dust, and restrooms", 
                                            "Office Standard", 2.0, ["Vacuum floors", "Dust surfaces", "Clean restrooms", "Empty trash", "Sanitize touchpoints"])
                         create_job_template(result, "Deep Clean", "Deep cleaning for move-in/move-out or seasonal", 
@@ -2572,7 +2498,6 @@ def edit_profile_page():
         st.error("User not found")
         return
     
-    # Display notification count badge
     unread_count = get_unread_notification_count(st.session_state.user['user_id'])
     if unread_count > 0:
         st.info(f"📬 You have {unread_count} unread notifications")
@@ -2688,7 +2613,6 @@ def dashboard():
     st.title(f"🧹 {business_name}")
     st.caption(f"Welcome, {user['username']} ({user['role']}) | Company ID: {company_id} | Created by Dust Bros & Co.")
     
-    # Show unread notifications badge
     unread_count = get_unread_notification_count(user['user_id'])
     if unread_count > 0:
         st.info(f"📬 You have {unread_count} new notifications. Check your profile to view them.")
@@ -2759,7 +2683,6 @@ def dashboard():
     col3.metric("Workers Under You", worker_cnt)
     col4.metric("Upcoming Jobs", upcoming)
     
-    # Show upcoming jobs
     st.markdown("### 📅 Upcoming Jobs")
     upcoming_jobs = get_upcoming_jobs(14)
     if not upcoming_jobs.empty:
@@ -2789,7 +2712,6 @@ def estimate_page():
         bedrooms = bathrooms = 0
     travel_miles = st.number_input("Travel Miles", 0, 200, 25)
     
-    # Validation for required fields
     client_name = st.text_input("Client Name *")
     client_email = st.text_input("Client Email *")
     
@@ -2822,12 +2744,8 @@ def estimate_page():
     
     result = calculate_price_with_tiers(city, prop, sqft, bedrooms, bathrooms, freq, complexity, travel_miles, add_ons, holiday, num_locations, notice, contract_months, company_id)
     
-    # ============================================================
-    # NEW: 4-TIER PRICING DISPLAY WITH MARKET INTELLIGENCE
-    # ============================================================
     st.markdown("### 💰 Four Pricing Tiers")
     
-    # Market intelligence summary
     with st.expander("📊 Market Intelligence & Competitor Analysis", expanded=False):
         st.markdown(f"""
         **Location Analysis:** {result.get('zone_name', 'Standard')} area (Multiplier: {result.get('zone_multiplier', 1.0)}x)
@@ -2843,7 +2761,6 @@ def estimate_page():
         **Recommendation:** {result.get('market_insights', {}).get('recommendation', 'Competitive price')}
         """)
     
-    # Display 4 price tiers
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
@@ -2890,7 +2807,6 @@ def estimate_page():
         </div>
         """, unsafe_allow_html=True)
     
-    # Detailed cost breakdown
     with st.expander("🔍 Detailed Cost Breakdown", expanded=False):
         st.markdown(f"""
         **True Cost Calculation:**
@@ -2908,7 +2824,6 @@ def estimate_page():
         {chr(10).join([f'- {mod}' for mod in result.get('modifier_details', [])]) if result.get('modifier_details') else '- None'}
         """)
     
-    # Summary
     st.info(f"""
     💡 **Pricing Summary:**
     - Total Cost: ${result['summary']['total_cost']:,.2f}
@@ -2917,35 +2832,29 @@ def estimate_page():
     - 📈 Premium is {result['summary']['premium_vs_break_even']:.0f}% higher than Break Even
     """)
     
-    # Single save button (updated to use sweet_spot as primary)
     if st.button("💾 Save as Draft", key="save_draft_estimate"):
         if client_name and client_email:
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
             
-            # Check what columns exist in estimates table
             c.execute("PRAGMA table_info(estimates)")
             existing_columns = [col[1] for col in c.fetchall()]
             
-            # Base columns that should always exist
             base_columns = ['company_id', 'user_id', 'client_name', 'client_email', 'city', 'property_type', 
                            'square_feet', 'bedrooms', 'bathrooms', 'frequency', 'complexity', 'travel_miles', 
                            'toll_cost', 'add_on_window', 'add_on_carpet', 'add_on_floor', 'add_on_disinfection', 
                            'add_on_pressure', 'subtotal', 'tax', 'estimated_price', 'lowest_price', 'fair_price', 
                            'highest_price', 'sweet_spot_price', 'created_at', 'status']
             
-            # Check if expires_at column exists
             if 'expires_at' in existing_columns:
                 base_columns.append('expires_at')
                 use_expires = True
             else:
                 use_expires = False
             
-            # Build the INSERT statement
             columns_str = ', '.join(base_columns)
             placeholders = ', '.join(['?' for _ in base_columns])
             
-            # Prepare values (UPDATED to use new tier names)
             base_values = [
                 company_id, st.session_state.user['user_id'], client_name, client_email, city, prop, 
                 sqft, bedrooms, bathrooms, freq, complexity, travel_miles, result['toll_estimate'], 
@@ -2959,7 +2868,6 @@ def estimate_page():
             if use_expires:
                 base_values.append((datetime.now() + timedelta(days=30)).isoformat())
             
-            # Execute the INSERT
             query = f"INSERT INTO estimates ({columns_str}) VALUES ({placeholders})"
             c.execute(query, base_values)
             
@@ -2967,12 +2875,10 @@ def estimate_page():
             conn.commit()
             conn.close()
             
-            # Add to history
             add_estimate_history_entry(estimate_id, None, "draft", st.session_state.user['user_id'], "Initial draft created")
             
             st.success(f"✅ Estimate #{estimate_id} saved as draft!")
             
-            # Separate button for sending email (appears after save)
             if st.button("📧 Send Estimate to Client Now"):
                 approval_link = f"https://app.profitclean.com/approve/{estimate_id}/{secrets.token_hex(16)}"
                 if send_estimate_email(company_id, estimate_id, client_email, client_name, result['sweet_spot']['total'], approval_link):
@@ -3124,13 +3030,11 @@ def workers_page():
                             st.error(msg)
                     else:
                         st.error("All fields required")
-        # Management actions for company admins: transfer or deactivate workers
         st.markdown("#### Manage Worker")
         if not workers.empty:
             sel_worker = st.selectbox("Select worker to manage", workers['id'].tolist(), format_func=lambda x: f"{workers[workers['id']==x]['username'].iloc[0]} ({x})")
             col1, col2, col3 = st.columns([2,2,1])
             with col1:
-                # Transfer within Admin UI
                 companies_conn = sqlite3.connect(DB_PATH)
                 comps_df = pd.read_sql_query("SELECT id, name FROM companies WHERE is_active = 1 ORDER BY name", companies_conn)
                 companies_conn.close()
@@ -3138,7 +3042,6 @@ def workers_page():
                 if st.button("Transfer Worker"):
                     conn = sqlite3.connect(DB_PATH)
                     c = conn.cursor()
-                    # retrieve current company
                     c.execute("SELECT company_id FROM users WHERE id = ?", (sel_worker,))
                     row = c.fetchone()
                     from_company = row[0] if row else None
@@ -3681,14 +3584,11 @@ def settings_page():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
-    # First, check what columns exist in business_profile
     c.execute("PRAGMA table_info(business_profile)")
     existing_columns = [col[1] for col in c.fetchall()]
     
-    # Build query dynamically based on existing columns
     select_columns = ["business_name", "phone", "email", "hourly_wage", "min_job_fee", "home_city", "smtp_email", "smtp_password"]
     
-    # Add optional columns if they exist
     if 'smtp_server' in existing_columns:
         select_columns.append("smtp_server")
     else:
@@ -3711,10 +3611,8 @@ def settings_page():
         conn.close()
     
     if row:
-        # Create a dictionary of values for easier access
         row_dict = {}
         for i, col in enumerate(select_columns):
-            # Clean up column names (remove 'as alias' if present)
             col_name = col.split(' as ')[0] if ' as ' in col else col
             row_dict[col_name] = row[i]
         
@@ -3725,7 +3623,6 @@ def settings_page():
             wage = st.number_input("Hourly Wage", value=float(row_dict.get('hourly_wage', 15.0)))
             min_fee = st.number_input("Min Job Fee", value=float(row_dict.get('min_job_fee', 150)))
             
-            # Handle home city selection
             current_city = row_dict.get('home_city', 'Orlando')
             home_index = FLORIDA_CITIES.index(current_city) if current_city in FLORIDA_CITIES else 0
             home = st.selectbox("Home City", FLORIDA_CITIES, index=home_index)
@@ -3739,7 +3636,6 @@ def settings_page():
                 conn = sqlite3.connect(DB_PATH)
                 c = conn.cursor()
                 
-                # First, add missing columns if they don't exist (for future-proofing)
                 c.execute("PRAGMA table_info(business_profile)")
                 current_columns = [col[1] for col in c.fetchall()]
                 
@@ -3757,7 +3653,6 @@ def settings_page():
                     except:
                         pass
                 
-                # Now update the settings
                 c.execute("""
                     UPDATE business_profile 
                     SET business_name=?, phone=?, email=?, hourly_wage=?, min_job_fee=?, home_city=?, 
@@ -3897,13 +3792,11 @@ def client_dashboard():
                     c.execute("UPDATE estimates SET status = 'approved', approved_at = ? WHERE id = ? AND client_id = ?", 
                               (datetime.now().isoformat(), row['id'], st.session_state.client_id))
                     
-                    # Add to history
                     add_estimate_history_entry(row['id'], "sent", "approved", None, "Client approved via portal")
                     
-                    # Send confirmation email
                     company_id = st.session_state.client_company_id
                     send_estimate_approved_email(company_id, row['id'], 
-                                                 st.session_state.client_email if hasattr(st.session_state, 'client_email') else "",
+                                                 st.session_state.get('client_email', ''),
                                                  st.session_state.client_name, 
                                                  row['estimated_price'])
                     
@@ -3912,7 +3805,6 @@ def client_dashboard():
                     st.success("Estimate approved! We'll contact you to schedule the service.")
                     st.rerun()
     
-    # Show upcoming scheduled jobs
     st.markdown("### 📅 Upcoming Services")
     conn = sqlite3.connect(DB_PATH)
     jobs_df = pd.read_sql_query("SELECT scheduled_date, scheduled_time, status FROM scheduled_jobs WHERE client_id = ? AND scheduled_date >= date('now') ORDER BY scheduled_date", 
@@ -4142,119 +4034,154 @@ def admin_companies_page():
                                     st.rerun()
                     
                     st.markdown("---")
+    
+    # Confirmation dialogs (outside the for loop)
+    if 'pending_action' in st.session_state:
+        action = st.session_state.pending_action
         
-                        # Confirmation dialogs
-        if 'pending_action' in st.session_state:
-            action = st.session_state.pending_action
+        if action['type'] in ['deactivate_company', 'activate_company']:
+            st.warning(f"⚠️ Are you sure you want to {action['type'].replace('_', ' ')} **{action['company_name']}**?")
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("✅ Yes", key="confirm_action"):
+                    conn = sqlite3.connect(DB_PATH)
+                    c = conn.cursor()
+                    is_active = 1 if action['type'] == 'activate_company' else 0
+                    c.execute("UPDATE companies SET is_active = ? WHERE id = ?", (is_active, action['company_id']))
+                    conn.commit()
+                    conn.close()
+                    st.success(f"✅ {action['company_name']} has been updated.")
+                    del st.session_state.pending_action
+                    time.sleep(1)
+                    st.rerun()
+            with col2:
+                if st.button("❌ Cancel", key="cancel_action"):
+                    del st.session_state.pending_action
+                    st.rerun()
+        
+        elif action['type'] == 'delete_company':
+            st.error(f"🗑️ **PERMANENTLY DELETE** Company: **{action['company_name']}**?")
+            st.warning(f"⚠️ This will delete:\n- {action['user_count']} user(s)\n- {action['client_count']} client(s)\n- All associated data\n\n**This action CANNOT be undone.**")
             
-            if action['type'] in ['deactivate_company', 'activate_company']:
-                st.warning(f"⚠️ Are you sure you want to {action['type'].replace('_', ' ')} **{action['company_name']}**?")
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("✅ Yes", key="confirm_action"):
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🗑️ YES, PERMANENTLY DELETE", key="confirm_delete_company_final"):
+                    try:
                         conn = sqlite3.connect(DB_PATH)
+                        conn.execute("PRAGMA foreign_keys = OFF")
                         c = conn.cursor()
-                        is_active = 1 if action['type'] == 'activate_company' else 0
-                        c.execute("UPDATE companies SET is_active = ? WHERE id = ?", (is_active, action['company_id']))
-                        conn.commit()
-                        conn.close()
-                        st.success(f"✅ {action['company_name']} has been updated.")
-                        del st.session_state.pending_action
-                        time.sleep(1)
-                        st.rerun()
-                with col2:
-                    if st.button("❌ Cancel", key="cancel_action"):
-                        del st.session_state.pending_action
-                        st.rerun()
-            
-            elif action['type'] == 'delete_company':
-                st.error(f"🗑️ **PERMANENTLY DELETE** Company: **{action['company_name']}**?")
-                st.warning(f"⚠️ This will delete:\n- {action['user_count']} user(s)\n- {action['client_count']} client(s)\n- All associated data\n\n**This action CANNOT be undone.**")
-                
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("🗑️ YES, PERMANENTLY DELETE", key="confirm_delete_company_final"):
-                        try:
-                            conn = sqlite3.connect(DB_PATH)
-                            conn.execute("PRAGMA foreign_keys = OFF")
-                            c = conn.cursor()
-                            company_id = action['company_id']
-                            
-                            # Get all user IDs in this company
-                            c.execute("SELECT id FROM users WHERE company_id = ?", (company_id,))
-                            user_ids = [row[0] for row in c.fetchall()]
-                            
-                            if user_ids:
-                                placeholders = ','.join(['?' for _ in user_ids])
-                                
-                                # Delete data that references users
-                                tables_to_clear = [
-                                    "sessions", "notifications", "audit_log", "team_messages",
-                                    "support_messages", "worker_certifications", "worker_badges",
-                                    "estimate_history", "estimate_approvals", "job_assignments"
-                                ]
-                                
-                                for table in tables_to_clear:
-                                    try:
-                                        c.execute(f"DELETE FROM {table} WHERE user_id IN ({placeholders})", user_ids)
-                                    except:
-                                        pass
-                            
-                            # Delete company-specific data
-                            delete_queries = [
-                                "DELETE FROM support_tickets WHERE company_id = ?",
-                                "DELETE FROM supply_usage WHERE company_id = ?",
-                                "DELETE FROM supplies WHERE company_id = ?",
-                                "DELETE FROM inspections WHERE company_id = ?",
-                                "DELETE FROM scheduled_jobs WHERE company_id = ?",
-                                "DELETE FROM estimates WHERE company_id = ?",
-                                "DELETE FROM client_communications WHERE company_id = ?",
-                                "DELETE FROM clients WHERE company_id = ?",
-                                "DELETE FROM quick_jobs WHERE company_id = ?",
-                                "DELETE FROM monthly_expenses WHERE company_id = ?",
-                                "DELETE FROM job_templates WHERE company_id = ?",
-                                "DELETE FROM email_templates WHERE company_id = ?",
-                                "DELETE FROM worker_transfers WHERE from_company_id = ? OR to_company_id = ?",
-                                "DELETE FROM users WHERE company_id = ?",
-                                "DELETE FROM business_profile WHERE company_id = ?",
-                                "DELETE FROM companies WHERE id = ?"
+                        company_id = action['company_id']
+                        
+                        c.execute("SELECT id FROM users WHERE company_id = ?", (company_id,))
+                        user_ids = [row[0] for row in c.fetchall()]
+                        
+                        if user_ids:
+                            placeholders = ','.join(['?' for _ in user_ids])
+                            tables_to_clear = [
+                                "sessions", "notifications", "audit_log", "team_messages",
+                                "support_messages", "worker_certifications", "worker_badges",
+                                "estimate_history", "estimate_approvals", "job_assignments"
                             ]
-                            
-                            for query in delete_queries:
+                            for table in tables_to_clear:
                                 try:
-                                    c.execute(query, (company_id,))
-                                except Exception as e:
-                                    print(f"Query failed: {query}, Error: {e}")
-                            
-                            conn.commit()
+                                    c.execute(f"DELETE FROM {table} WHERE user_id IN ({placeholders})", user_ids)
+                                except:
+                                    pass
+                        
+                        delete_queries = [
+                            "DELETE FROM support_tickets WHERE company_id = ?",
+                            "DELETE FROM supply_usage WHERE company_id = ?",
+                            "DELETE FROM supplies WHERE company_id = ?",
+                            "DELETE FROM inspections WHERE company_id = ?",
+                            "DELETE FROM scheduled_jobs WHERE company_id = ?",
+                            "DELETE FROM estimates WHERE company_id = ?",
+                            "DELETE FROM client_communications WHERE company_id = ?",
+                            "DELETE FROM clients WHERE company_id = ?",
+                            "DELETE FROM quick_jobs WHERE company_id = ?",
+                            "DELETE FROM monthly_expenses WHERE company_id = ?",
+                            "DELETE FROM job_templates WHERE company_id = ?",
+                            "DELETE FROM email_templates WHERE company_id = ?",
+                            "DELETE FROM worker_transfers WHERE from_company_id = ? OR to_company_id = ?",
+                            "DELETE FROM users WHERE company_id = ?",
+                            "DELETE FROM business_profile WHERE company_id = ?",
+                            "DELETE FROM companies WHERE id = ?"
+                        ]
+                        
+                        for query in delete_queries:
+                            try:
+                                c.execute(query, (company_id,))
+                            except Exception as e:
+                                print(f"Query failed: {query}, Error: {e}")
+                        
+                        conn.commit()
+                        conn.execute("PRAGMA foreign_keys = ON")
+                        conn.close()
+                        
+                        st.success(f"✅ **{action['company_name']}** and all its data have been permanently deleted.")
+                        st.balloons()
+                        del st.session_state.pending_action
+                        time.sleep(2)
+                        st.rerun()
+                        
+                    except Exception as e:
+                        st.error(f"❌ Error deleting company: {str(e)}")
+                        if 'conn' in locals():
+                            conn.rollback()
                             conn.execute("PRAGMA foreign_keys = ON")
                             conn.close()
-                            
-                            st.success(f"✅ **{action['company_name']}** and all its data have been permanently deleted.")
-                            st.balloons()
-                            del st.session_state.pending_action
-                            time.sleep(2)
-                            st.rerun()
-                            
-                        except Exception as e:
-                            st.error(f"❌ Error deleting company: {str(e)}")
-                            if 'conn' in locals():
-                                conn.rollback()
-                                conn.execute("PRAGMA foreign_keys = ON")
-                                conn.close()
-                            del st.session_state.pending_action
-                            st.rerun()
-                
-                with col2:
-                    if st.button("❌ Cancel", key="cancel_delete_company_final"):
                         del st.session_state.pending_action
                         st.rerun()
+            
+            with col2:
+                if st.button("❌ Cancel", key="cancel_delete_company_final"):
+                    del st.session_state.pending_action
+                    st.rerun()
     
-        # TAB 3: WORKER TRANSFER
+    # TAB 2: USERS & WORKERS
+    with tab2:
+        st.markdown("### User Management")
+        
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("PRAGMA table_info(users)")
+        existing_columns = [col[1] for col in c.fetchall()]
+        
+        if 'invite_code' in existing_columns:
+            query = """
+                SELECT u.id, u.username, u.email, u.role, u.company_id, u.is_active, u.created_at, u.invite_code,
+                       c.name as company_name, c.subdomain
+                FROM users u
+                LEFT JOIN companies c ON u.company_id = c.id
+                WHERE u.role != 'super_admin'
+                ORDER BY c.name, u.role, u.username
+            """
+        else:
+            query = """
+                SELECT u.id, u.username, u.email, u.role, u.company_id, u.is_active, u.created_at,
+                       '' as invite_code, c.name as company_name, c.subdomain
+                FROM users u
+                LEFT JOIN companies c ON u.company_id = c.id
+                WHERE u.role != 'super_admin'
+                ORDER BY c.name, u.role, u.username
+            """
+        
+        try:
+            users_df = pd.read_sql_query(query, conn)
+        except Exception as e:
+            st.error(f"Error loading users: {e}")
+            users_df = pd.DataFrame()
+        finally:
+            conn.close()
+        
+        if users_df.empty:
+            st.info("No users found.")
+        else:
+            st.dataframe(users_df, use_container_width=True)
+    
+    # TAB 3: WORKER TRANSFER
     with tab3:
         st.markdown("### 🔄 Transfer Workers Between Companies")
         
-        # Check if user is super_admin
         if st.session_state.user['role'] == 'super_admin':
             conn = sqlite3.connect(DB_PATH)
             workers_df = pd.read_sql_query("""
@@ -4279,11 +4206,9 @@ def admin_companies_page():
                                                format_func=lambda x: companies_df[companies_df['id']==x]['name'].iloc[0])
                 
                 if st.button("Transfer Worker"):
-                    # Perform transfer
                     conn = sqlite3.connect(DB_PATH)
                     c = conn.cursor()
                     try:
-                        # get current company of worker
                         c.execute("SELECT company_id FROM users WHERE id = ?", (selected_worker,))
                         row = c.fetchone()
                         from_company = row[0] if row else None
@@ -4401,7 +4326,7 @@ def admin_companies_page():
                         conn.close()
                         st.success("Template saved successfully!")
                         st.rerun()
-                  
+    
     # TAB 6: SYSTEM ACTIONS
     with tab6:
         st.markdown("### 💾 System Actions")
@@ -4444,6 +4369,22 @@ def admin_companies_page():
             
             if st.button("Save Global Settings", use_container_width=True):
                 st.success("Global settings saved!")
+        
+        with col2:
+            st.markdown("#### System Information")
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("SELECT COUNT(*) FROM users")
+            total_users = c.fetchone()[0]
+            c.execute("SELECT COUNT(*) FROM companies")
+            total_companies = c.fetchone()[0]
+            c.execute("SELECT COUNT(*) FROM estimates")
+            total_estimates = c.fetchone()[0]
+            conn.close()
+            
+            st.metric("Total Users", total_users)
+            st.metric("Total Companies", total_companies)
+            st.metric("Total Estimates", total_estimates)
 
 
 # ============================================================
@@ -4453,7 +4394,7 @@ def admin_companies_page():
 def main():
     # First, initialize database and run migrations
     init_db()
-    migrate_database()  # This MUST run before any queries that need invite_code
+    migrate_database()
     
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -4510,4 +4451,4 @@ def main():
                 login_page()
 
 if __name__ == "__main__":
-    main()        
+    main()
