@@ -848,11 +848,9 @@ def migrate_database():
         c.execute('''
             DELETE FROM email_templates
             WHERE id NOT IN (
-                SELECT id FROM (
-                    SELECT id, company_id, name
-                    FROM email_templates
-                    ORDER BY company_id, name, created_at DESC, id DESC
-                ) GROUP BY company_id, name
+                SELECT MAX(id)
+                FROM email_templates
+                GROUP BY company_id, name
             )
         ''')
         try:
