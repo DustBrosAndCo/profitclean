@@ -3849,54 +3849,64 @@ def admin_companies_page():
                         del st.session_state.pending_action
                         st.rerun()
     
-    # TAB 3: WORKER TRANSFER (simplified - same as original)
+        # TAB 3: WORKER TRANSFER
     with tab3:
         st.markdown("### 🔄 Transfer Workers Between Companies")
         
-        conn = sqlite3.connect(DB_PATH)
-        workers_df = pd.read_sql_query("""
-            SELECT u.id, u.username, u.email, u.role, u.company_id,
-                   c.name as current_company
-            FROM users u
-            LEFT JOIN companies c ON u.company_id = c.id
-            WHERE u.role IN ('worker', 'supervisor', 'manager')
-            ORDER BY u.username
-        """, conn)
-        
-        companies_df = pd.read_sql_query("SELECT id, name FROM companies WHERE is_active = 1 ORDER BY name", conn)
-        conn.close()
-        
-        if not workers_df.empty:
-            col1, col2 = st.columns(2)
-            with col1:
-                selected_worker = st.selectbox("Select worker", workers_df['id'].tolist(),
-                                               format_func=lambda x: f"{workers_df[workers_df['id']==x]['username'].iloc[0]} ({workers_df[workers_df['id']==x]['current_company'].iloc[0]})")
-            with col2:
-                dest_company = st.selectbox("Destination company", companies_df['id'].tolist(),
-                                           format_func=lambda x: companies_df[companies_df['id']==x]['name'].iloc[0])
+        # Check if user is super_admin
+        if st.session_state.user['role'] == 'super_admin':
+            conn = sqlite3.connect(DB_PATH)
+            workers_df = pd.read_sql_query("""
+                SELECT u.id, u.username, u.email, u.role, u.company_id,
+                       c.name as current_company
+                FROM users u
+                LEFT JOIN companies c ON u.company_id = c.id
+                WHERE u.role IN ('worker', 'supervisor', 'manager')
+                ORDER BY u.username
+            """, conn)
             
-            if st.button("Transfer Worker"):
-                # Perform transfer
-                conn = sqlite3.connect(DB_PATH)
-                c = conn.cursor()
-                try:
-                    # get current company of worker
-                    c.execute("SELECT company_id FROM users WHERE id = ?", (selected_worker,))
-                    row = c.fetchone()
-                    from_company = row[0] if row else None
-                    c.execute("UPDATE users SET company_id = ? WHERE id = ?", (dest_company, selected_worker))
-                    c.execute("INSERT INTO worker_transfers (worker_id, from_company_id, to_company_id, transferred_by, transferred_at) VALUES (?,?,?,?,?)",
-                              (selected_worker, from_company, dest_company, st.session_state.user['user_id'], datetime.now().isoformat()))
-                    c.execute("INSERT INTO audit_log (user_id, action, details, created_at) VALUES (?,?,?,?)",
-                              (st.session_state.user['user_id'], 'transfer_worker', f'Worker {selected_worker} transferred from {from_company} to {dest_company}', datetime.now().isoformat()))
-                    conn.commit()
-                    st.success("Worker transferred successfully")
-                    conn.close()
-                    st.rerun()
-                except Exception as e:
-                    conn.rollback()
-                    conn.close()
-                    st.error(f"Transfer failed: {e}")
+            companies_df = pd.read_sql_query("SELECT id, name FROM companies WHERE is_active = 1 ORDER BY name", conn)
+            conn.close()
+            
+            if not workers_df.empty and not companies_df.empty:
+                col1, col2 = st.columns(2)
+                with col1:
+                    selected_worker = st.selectbox("Select worker", workers_df['id'].tolist(),
+                                                   format_func=lambda x: f"{workers_df[workers_df['id']==x]['username'].iloc[0]} ({workers_df[workers_df['id']==x]['current_company'].iloc[0]})")
+                with col2:
+                    dest_company = st.selectbox("Destination company", companies_df['id'].tolist(),
+                                               format_func=lambda x: companies_df[companies_df['id']==x]['name'].iloc[0])
+                
+                if st.button("Transfer Worker"):
+                    # Perform transfer
+                    conn = sqlite3.connect(DB_PATH)
+                    c = conn.cursor()
+                    try:
+                        # get current company of worker
+                        c.execute("SELECT company_id FROM users WHERE id = ?", (selected_worker,))
+                        row = c.fetchone()
+                        from_company = row[0] if row else None
+                        c.execute("UPDATE users SET company_id = ? WHERE id = ?", (dest_company, selected_worker))
+                        c.execute("INSERT INTO worker_transfers (worker_id, from_company_id, to_company_id, transferred_by, transferred_at) VALUES (?,?,?,?,?)",
+                                  (selected_worker, from_company, dest_company, st.session_state.user['user_id'], datetime.now().isoformat()))
+                        c.execute("INSERT INTO audit_log (user_id, action, details, created_at) VALUES (?,?,?,?)",
+                                  (st.session_state.user['user_id'], 'transfer_worker', f'Worker {selected_worker} transferred from {from_company} to {dest_company}', datetime.now().isoformat()))
+                        conn.commit()
+                        st.success("Worker transferred successfully")
+                        conn.close()
+                        st.rerun()
+                    except Exception as e:
+                        conn.rollback()
+                        conn.close()
+                        st.error(f"Transfer failed: {e}")
+            else:
+                if workers_df.empty:
+                    st.info("No workers found to transfer.")
+                if companies_df.empty:
+                    st.info("No active companies found.")
+        else:
+            st.error("❌ Access Denied: Only Super Admin can transfer workers between companies.")
+            st.info("If you need to transfer a worker, please contact your system administrator.")
     
     # TAB 4: AUDIT LOG
     with tab4:
