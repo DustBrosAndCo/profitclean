@@ -2730,6 +2730,74 @@ def admin_companies_page():
                 st.success(f"Company {company_id} status updated")
                 st.rerun()
 
+# ----------------------------- DASHBOARD (CORRECTED) -----------------------------
+def dashboard():
+    user = st.session_state.user
+    business_name = get_business_name()
+    company_id = get_current_user_company()
+    st.title(f"🧹 {business_name}")
+    st.caption(f"Welcome, {user['username']} ({user['role']}) | Company ID: {company_id} | Created by Dust Bros & Co.")
+    if st.session_state.user.get('role_override'):
+        st.warning(f"You are currently viewing data for company ID: {st.session_state.user['company_id']} (override active).")
+    with st.sidebar:
+        st.markdown("### 📋 Menu")
+        menu_items = [
+            ("🏠 Dashboard", "dashboard"),
+            ("📝 New Estimate", "estimate"),
+            ("⚡ Quick Job", "quick"),
+            ("👥 Clients", "clients"),
+            ("👷 Workers", "workers"),
+            ("📅 Schedule", "schedule"),
+            ("🔍 Inspections", "inspections"),
+            ("💰 Profit", "profit"),
+            ("📋 History", "history"),
+            ("💬 Team Chat", "chat"),
+            ("📦 Supplies", "supplies"),
+            ("🤖 AI Tasks", "ai_tasks"),
+            ("📱 QR Tracking", "qr_tracking"),
+            ("📍 GPS Tracking", "gps_tracking"),
+            ("🏅 My Performance", "my_performance"),
+            ("📜 Certifications", "certifications"),
+            ("💾 Backup", "backup"),
+            ("🎫 Support", "support"),
+            ("⚙️ Settings", "settings"),
+            ("✏️ Edit Profile", "edit_profile"),
+            ("📜 Terms of Service", "terms"),
+        ]
+        if user['role'] in ['super_admin', 'support_staff']:
+            menu_items.append(("🔧 Admin Tools", "admin_companies"))
+        for label, page in menu_items:
+            if st.button(label, use_container_width=True, key=f"nav_{page}"):
+                st.session_state.page = page
+                st.rerun()
+        st.markdown("---")
+        with st.expander("💬 Need Help?"):
+            if st.button("📝 Report Issue"):
+                st.session_state.page = "support"
+                st.rerun()
+        st.markdown("---")
+        if st.button("🚪 Logout"):
+            logout_user()
+            st.rerun()
+    st.markdown("---")
+    # FIXED: Added user['role'] as second argument
+    accessible = get_accessible_user_ids(user['user_id'], user['role'])
+    placeholders = ','.join(['?' for _ in accessible])
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(f"SELECT COUNT(*) FROM clients WHERE company_id = ? AND user_id IN ({placeholders})", [company_id] + accessible)
+    client_cnt = c.fetchone()[0]
+    c.execute(f"SELECT COUNT(*) FROM estimates WHERE company_id = ? AND user_id IN ({placeholders}) AND status='sent'", [company_id] + accessible)
+    pending = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM users WHERE manager_id = ? AND role='worker' AND company_id = ?", (user['user_id'], company_id))
+    worker_cnt = c.fetchone()[0]
+    conn.close()
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Clients", client_cnt)
+    col2.metric("Pending Estimates", pending)
+    col3.metric("Workers Under You", worker_cnt)
+    st.info("Use sidebar to navigate.")
+
 # ============================================================
 # MAIN ROUTING
 # ============================================================
@@ -2795,4 +2863,4 @@ def main():
                 login_page()
 
 if __name__ == "__main__":
-    main()       
+    main()
