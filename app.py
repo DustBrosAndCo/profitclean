@@ -2554,13 +2554,52 @@ def estimate_page():
         st.write(f"Travel cost: ${result['travel_cost']:.2f}")
         st.write(f"Toll estimate: ${result['toll_estimate']:.2f}")
     
-        # Single save button (no nested buttons)
+    # Single save button (fixed version)
     if st.button("💾 Save as Draft", key="save_draft_estimate"):
         if client_name and client_email:
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
-            c.execute("""INSERT INTO estimates (company_id, user_id, client_name, client_email, city, property_type, square_feet, bedrooms, bathrooms, frequency, complexity, travel_miles, toll_cost, add_on_window, add_on_carpet, add_on_floor, add_on_disinfection, add_on_pressure, subtotal, tax, estimated_price, lowest_price, fair_price, highest_price, sweet_spot_price, created_at, status, expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                      (company_id, st.session_state.user['user_id'], client_name, client_email, city, prop, sqft, bedrooms, bathrooms, freq, complexity, travel_miles, result['toll_estimate'], 1 if add_window else 0, 1 if add_carpet else 0, 1 if add_floor else 0, 1 if add_disinfection else 0, 1 if add_pressure else 0, result['fair']['subtotal'], result['fair']['tax'], result['fair']['total'], result['lowest']['total'], result['fair']['total'], result['highest']['total'], result['sweet_spot']['total'], datetime.now().isoformat(), "draft", (datetime.now() + timedelta(days=30)).isoformat()))
+            
+            # Check what columns exist in estimates table
+            c.execute("PRAGMA table_info(estimates)")
+            existing_columns = [col[1] for col in c.fetchall()]
+            
+            # Base columns that should always exist
+            base_columns = ['company_id', 'user_id', 'client_name', 'client_email', 'city', 'property_type', 
+                           'square_feet', 'bedrooms', 'bathrooms', 'frequency', 'complexity', 'travel_miles', 
+                           'toll_cost', 'add_on_window', 'add_on_carpet', 'add_on_floor', 'add_on_disinfection', 
+                           'add_on_pressure', 'subtotal', 'tax', 'estimated_price', 'lowest_price', 'fair_price', 
+                           'highest_price', 'sweet_spot_price', 'created_at', 'status']
+            
+            # Check if expires_at column exists
+            if 'expires_at' in existing_columns:
+                base_columns.append('expires_at')
+                use_expires = True
+            else:
+                use_expires = False
+            
+            # Build the INSERT statement
+            columns_str = ', '.join(base_columns)
+            placeholders = ', '.join(['?' for _ in base_columns])
+            
+            # Prepare values
+            base_values = [
+                company_id, st.session_state.user['user_id'], client_name, client_email, city, prop, 
+                sqft, bedrooms, bathrooms, freq, complexity, travel_miles, result['toll_estimate'], 
+                1 if add_window else 0, 1 if add_carpet else 0, 1 if add_floor else 0, 
+                1 if add_disinfection else 0, 1 if add_pressure else 0, 
+                result['fair']['subtotal'], result['fair']['tax'], result['fair']['total'], 
+                result['lowest']['total'], result['fair']['total'], result['highest']['total'], 
+                result['sweet_spot']['total'], datetime.now().isoformat(), "draft"
+            ]
+            
+            if use_expires:
+                base_values.append((datetime.now() + timedelta(days=30)).isoformat())
+            
+            # Execute the INSERT
+            query = f"INSERT INTO estimates ({columns_str}) VALUES ({placeholders})"
+            c.execute(query, base_values)
+            
             estimate_id = c.lastrowid
             conn.commit()
             conn.close()
@@ -2575,7 +2614,6 @@ def estimate_page():
                 approval_link = f"https://app.profitclean.com/approve/{estimate_id}/{secrets.token_hex(16)}"
                 if send_estimate_email(company_id, estimate_id, client_email, client_name, result['fair']['total'], approval_link):
                     st.success(f"📧 Estimate sent to {client_email}")
-                    # Update status to sent
                     conn = sqlite3.connect(DB_PATH)
                     c = conn.cursor()
                     c.execute("UPDATE estimates SET status = 'sent' WHERE id = ?", (estimate_id,))
