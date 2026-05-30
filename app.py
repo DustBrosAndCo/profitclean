@@ -2554,12 +2554,8 @@ def estimate_page():
         st.write(f"Travel cost: ${result['travel_cost']:.2f}")
         st.write(f"Toll estimate: ${result['toll_estimate']:.2f}")
     
-    col_save, col_send = st.columns(2)
-    
-    with col_save:
-        save_draft_btn = st.button("Save as Draft (Fair Market)", key="save_draft_estimate")
-    
-    if save_draft_btn:
+        # Single save button (no nested buttons)
+    if st.button("💾 Save as Draft", key="save_draft_estimate"):
         if client_name and client_email:
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
@@ -2572,24 +2568,23 @@ def estimate_page():
             # Add to history
             add_estimate_history_entry(estimate_id, None, "draft", st.session_state.user['user_id'], "Initial draft created")
             
-            st.success("Estimate saved as draft.")
+            st.success(f"✅ Estimate #{estimate_id} saved as draft!")
             
-            # Option to send estimate
-            with col_send:
-                if st.button("📧 Send Estimate to Client", key="send_estimate_email"):
-                    # Generate approval link (in production, this would be a proper URL)
-                    approval_link = f"https://app.profitclean.com/approve/{estimate_id}/{secrets.token_hex(16)}"
-                    if send_estimate_email(company_id, estimate_id, client_email, client_name, result['fair']['total'], approval_link):
-                        st.success(f"Estimate sent to {client_email}")
-                        conn = sqlite3.connect(DB_PATH)
-                        c = conn.cursor()
-                        c.execute("UPDATE estimates SET status = 'sent' WHERE id = ?", (estimate_id,))
-                        conn.commit()
-                        conn.close()
-                    else:
-                        st.error("Failed to send email. Check SMTP settings.")
+            # Separate button for sending email (appears after save)
+            if st.button("📧 Send Estimate to Client Now"):
+                approval_link = f"https://app.profitclean.com/approve/{estimate_id}/{secrets.token_hex(16)}"
+                if send_estimate_email(company_id, estimate_id, client_email, client_name, result['fair']['total'], approval_link):
+                    st.success(f"📧 Estimate sent to {client_email}")
+                    # Update status to sent
+                    conn = sqlite3.connect(DB_PATH)
+                    c = conn.cursor()
+                    c.execute("UPDATE estimates SET status = 'sent' WHERE id = ?", (estimate_id,))
+                    conn.commit()
+                    conn.close()
+                else:
+                    st.warning("⚠️ Email not sent. Please configure SMTP settings in Business Settings.")
         else:
-            st.error("Please enter both client name and email before saving")
+            st.error("❌ Please enter both client name and email before saving")
 
 def quick_job_page():
     if st.button("← Back"):
@@ -3281,34 +3276,100 @@ def settings_page():
         st.rerun()
     st.markdown("### ⚙️ Business Settings")
     company_id = get_current_user_company()
+    
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT business_name, phone, email, hourly_wage, min_job_fee, home_city, smtp_email, smtp_password, smtp_server, smtp_port FROM business_profile WHERE company_id = ?", (company_id,))
-    row = c.fetchone()
-    conn.close()
+    
+    # First, check what columns exist in business_profile
+    c.execute("PRAGMA table_info(business_profile)")
+    existing_columns = [col[1] for col in c.fetchall()]
+    
+    # Build query dynamically based on existing columns
+    select_columns = ["business_name", "phone", "email", "hourly_wage", "min_job_fee", "home_city", "smtp_email", "smtp_password"]
+    
+    # Add optional columns if they exist
+    if 'smtp_server' in existing_columns:
+        select_columns.append("smtp_server")
+    else:
+        select_columns.append("'' as smtp_server")
+    
+    if 'smtp_port' in existing_columns:
+        select_columns.append("smtp_port")
+    else:
+        select_columns.append("587 as smtp_port")
+    
+    query = f"SELECT {', '.join(select_columns)} FROM business_profile WHERE company_id = ?"
+    
+    try:
+        c.execute(query, (company_id,))
+        row = c.fetchone()
+    except Exception as e:
+        st.error(f"Error loading settings: {e}")
+        row = None
+    finally:
+        conn.close()
+    
     if row:
+        # Create a dictionary of values for easier access
+        row_dict = {}
+        for i, col in enumerate(select_columns):
+            # Clean up column names (remove 'as alias' if present)
+            col_name = col.split(' as ')[0] if ' as ' in col else col
+            row_dict[col_name] = row[i]
+        
         with st.form("settings"):
-            bname = st.text_input("Business Name", row[0])
-            phone = st.text_input("Phone", row[1])
-            email = st.text_input("Email", row[2])
-            wage = st.number_input("Hourly Wage", value=row[3])
-            min_fee = st.number_input("Min Job Fee", value=row[4])
-            home = st.selectbox("Home City", FLORIDA_CITIES, index=FLORIDA_CITIES.index(row[5]) if row[5] in FLORIDA_CITIES else 0)
-            smtp_email = st.text_input("SMTP Email", value=row[6] if row[6] else "")
-            smtp_password = st.text_input("SMTP Password", type="password", value=row[7] if row[7] else "")
-            smtp_server = st.text_input("SMTP Server", value=row[8] if row[8] else "smtp.gmail.com")
-            smtp_port = st.number_input("SMTP Port", value=row[9] if row[9] else 587)
+            bname = st.text_input("Business Name", row_dict.get('business_name', ''))
+            phone = st.text_input("Phone", row_dict.get('phone', ''))
+            email = st.text_input("Email", row_dict.get('email', ''))
+            wage = st.number_input("Hourly Wage", value=float(row_dict.get('hourly_wage', 15.0)))
+            min_fee = st.number_input("Min Job Fee", value=float(row_dict.get('min_job_fee', 150)))
+            
+            # Handle home city selection
+            current_city = row_dict.get('home_city', 'Orlando')
+            home_index = FLORIDA_CITIES.index(current_city) if current_city in FLORIDA_CITIES else 0
+            home = st.selectbox("Home City", FLORIDA_CITIES, index=home_index)
+            
+            smtp_email = st.text_input("SMTP Email", value=row_dict.get('smtp_email', '') if row_dict.get('smtp_email') else "")
+            smtp_password = st.text_input("SMTP Password", type="password", value=row_dict.get('smtp_password', '') if row_dict.get('smtp_password') else "")
+            smtp_server = st.text_input("SMTP Server", value=row_dict.get('smtp_server', 'smtp.gmail.com'))
+            smtp_port = st.number_input("SMTP Port", value=int(row_dict.get('smtp_port', 587)))
+            
             if st.form_submit_button("Save"):
                 conn = sqlite3.connect(DB_PATH)
                 c = conn.cursor()
-                c.execute("UPDATE business_profile SET business_name=?, phone=?, email=?, hourly_wage=?, min_job_fee=?, home_city=?, smtp_email=?, smtp_password=?, smtp_server=?, smtp_port=? WHERE company_id=?",
-                          (bname, phone, email, wage, min_fee, home, smtp_email, smtp_password, smtp_server, smtp_port, company_id))
+                
+                # First, add missing columns if they don't exist (for future-proofing)
+                c.execute("PRAGMA table_info(business_profile)")
+                current_columns = [col[1] for col in c.fetchall()]
+                
+                if 'smtp_server' not in current_columns:
+                    try:
+                        c.execute("ALTER TABLE business_profile ADD COLUMN smtp_server TEXT")
+                        print("Added smtp_server column")
+                    except:
+                        pass
+                
+                if 'smtp_port' not in current_columns:
+                    try:
+                        c.execute("ALTER TABLE business_profile ADD COLUMN smtp_port INTEGER DEFAULT 587")
+                        print("Added smtp_port column")
+                    except:
+                        pass
+                
+                # Now update the settings
+                c.execute("""
+                    UPDATE business_profile 
+                    SET business_name=?, phone=?, email=?, hourly_wage=?, min_job_fee=?, home_city=?, 
+                        smtp_email=?, smtp_password=?, smtp_server=?, smtp_port=? 
+                    WHERE company_id=?
+                """, (bname, phone, email, wage, min_fee, home, smtp_email, smtp_password, smtp_server, smtp_port, company_id))
+                
                 conn.commit()
                 conn.close()
-                st.success("Saved")
+                st.success("Settings saved successfully!")
                 st.rerun()
     else:
-        st.warning("Business profile not found")
+        st.warning("Business profile not found. Please contact support.")
 
 def my_performance_page():
     if st.button("← Back"):
@@ -3751,49 +3812,49 @@ def admin_companies_page():
                         del st.session_state.pending_action
                         st.rerun()
     
-    # TAB 2: USERS & WORKERS
+            # TAB 2: USERS & WORKERS
     with tab2:
         st.markdown("### User Management")
         
         conn = sqlite3.connect(DB_PATH)
-    
-    # First check if invite_code column exists
-    c = conn.cursor()
-    c.execute("PRAGMA table_info(users)")
-    existing_columns = [col[1] for col in c.fetchall()]
-    
-    # Build query dynamically
-    if 'invite_code' in existing_columns:
-        query = """
-            SELECT u.id, u.username, u.email, u.role, u.company_id, u.is_active, u.created_at, u.invite_code,
-                   c.name as company_name, c.subdomain
-            FROM users u
-            LEFT JOIN companies c ON u.company_id = c.id
-            WHERE u.role != 'super_admin'
-            ORDER BY c.name, u.role, u.username
-        """
-    else:
-        query = """
-            SELECT u.id, u.username, u.email, u.role, u.company_id, u.is_active, u.created_at,
-                   '' as invite_code, c.name as company_name, c.subdomain
-            FROM users u
-            LEFT JOIN companies c ON u.company_id = c.id
-            WHERE u.role != 'super_admin'
-            ORDER BY c.name, u.role, u.username
-        """
-    
-    try:
-        users_df = pd.read_sql_query(query, conn)
-    except Exception as e:
-        st.error(f"Error loading users: {e}")
-        users_df = pd.DataFrame()
-    finally:
-        conn.close()
-    
-    if users_df.empty:
-        st.info("No users found.")
-    else:
-        st.dataframe(users_df, use_container_width=True)
+        
+        # First check if invite_code column exists
+        c = conn.cursor()
+        c.execute("PRAGMA table_info(users)")
+        existing_columns = [col[1] for col in c.fetchall()]
+        
+        # Build query dynamically based on existing columns
+        if 'invite_code' in existing_columns:
+            query = """
+                SELECT u.id, u.username, u.email, u.role, u.company_id, u.is_active, u.created_at, u.invite_code,
+                       c.name as company_name, c.subdomain
+                FROM users u
+                LEFT JOIN companies c ON u.company_id = c.id
+                WHERE u.role != 'super_admin'
+                ORDER BY c.name, u.role, u.username
+            """
+        else:
+            query = """
+                SELECT u.id, u.username, u.email, u.role, u.company_id, u.is_active, u.created_at,
+                       '' as invite_code, c.name as company_name, c.subdomain
+                FROM users u
+                LEFT JOIN companies c ON u.company_id = c.id
+                WHERE u.role != 'super_admin'
+                ORDER BY c.name, u.role, u.username
+            """
+        
+        try:
+            users_df = pd.read_sql_query(query, conn)
+        except Exception as e:
+            st.error(f"Error loading users: {e}")
+            users_df = pd.DataFrame()
+        finally:
+            conn.close()
+        
+        if users_df.empty:
+            st.info("No users found.")
+        else:
+            st.dataframe(users_df, use_container_width=True)
     
     # TAB 3: WORKER TRANSFER (simplified - same as original)
     with tab3:
