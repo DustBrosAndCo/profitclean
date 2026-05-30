@@ -2769,7 +2769,7 @@ def dashboard():
     
     st.info("Use sidebar to navigate.")
 
-def def estimate_page():
+def estimate_page():
     if st.button("← Back"):
         st.session_state.page = "dashboard"
         st.rerun()
