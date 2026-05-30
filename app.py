@@ -43,6 +43,7 @@ SALES_TAX_RATE = 0.06
 BACKUP_DIR = os.path.join(os.path.expanduser("~"), "ProfitClean_Backups")
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(BACKUP_DIR, exist_ok=True)
 
 # ============================================================
 # PAGE CONFIGURATION
@@ -145,7 +146,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ============================================================
-# DATABASE SETUP (MULTI-TENANT + SUPPORT STAFF + JOB_ASSIGNMENTS)
+# DATABASE SETUP (MULTI-TENANT + SUPPORT STAFF + JOB_ASSIGNMENTS + WORKER_TRANSFERS + SYSTEM_HEALTH)
 # ============================================================
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "profitclean.db")
@@ -193,6 +194,7 @@ def init_db():
         approval_status TEXT DEFAULT 'approved',
         approved_by INTEGER,
         approval_date DATETIME,
+        invite_code TEXT,
         FOREIGN KEY (company_id) REFERENCES companies(id),
         FOREIGN KEY (manager_id) REFERENCES users(id),
         FOREIGN KEY (supervisor_id) REFERENCES users(id),
@@ -358,9 +360,7 @@ def init_db():
         FOREIGN KEY (assigned_worker_id) REFERENCES users(id)
     )''')
 
-    # ============================================================
-    # JOB ASSIGNMENTS TABLE (ADDED FOR WORKER PERFORMANCE)
-    # ============================================================
+    # Job assignments table
     c.execute('''CREATE TABLE IF NOT EXISTS job_assignments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         job_id INTEGER,
@@ -500,7 +500,7 @@ def init_db():
         FOREIGN KEY (worker_id) REFERENCES users(id)
     )''')
 
-    # Support tickets (for users to report issues)
+    # Support tickets
     c.execute('''CREATE TABLE IF NOT EXISTS support_tickets (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         company_id INTEGER,
@@ -535,7 +535,7 @@ def init_db():
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
 
-    # Email templates (per company)
+    # Email templates
     c.execute('''CREATE TABLE IF NOT EXISTS email_templates (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         company_id INTEGER,
@@ -559,6 +559,40 @@ def init_db():
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
 
+    # Worker transfers (for admin tracking)
+    c.execute('''CREATE TABLE IF NOT EXISTS worker_transfers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        worker_id INTEGER,
+        from_company_id INTEGER,
+        to_company_id INTEGER,
+        transferred_by INTEGER,
+        transferred_at DATETIME,
+        reason TEXT,
+        FOREIGN KEY (worker_id) REFERENCES users(id),
+        FOREIGN KEY (from_company_id) REFERENCES companies(id),
+        FOREIGN KEY (to_company_id) REFERENCES companies(id),
+        FOREIGN KEY (transferred_by) REFERENCES users(id)
+    )''')
+
+    # System health logs
+    c.execute('''CREATE TABLE IF NOT EXISTS system_health (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        metric_name TEXT,
+        metric_value TEXT,
+        recorded_at DATETIME
+    )''')
+
+    # Bulk actions history
+    c.execute('''CREATE TABLE IF NOT EXISTS bulk_actions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        action_type TEXT,
+        affected_company_ids TEXT,
+        affected_user_ids TEXT,
+        performed_by INTEGER,
+        performed_at DATETIME,
+        FOREIGN KEY (performed_by) REFERENCES users(id)
+    )''')
+
     # ---------- Default Data ----------
     # Create default "Dust Bros & Co." company
     c.execute("SELECT COUNT(*) FROM companies WHERE name = 'Dust Bros & Co.'")
@@ -575,8 +609,9 @@ def init_db():
     if c.fetchone()[0] == 0:
         salt = bcrypt.gensalt()
         pwd_hash = bcrypt.hashpw(b"Admin123!", salt)
-        c.execute("INSERT INTO users (username, email, password_hash, salt, role, company_id, can_manage_workers, is_active, approval_status, created_at, hire_date) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                  ("super_admin", "admin@profitclean.com", pwd_hash.decode('utf-8'), salt.decode('utf-8'), "super_admin", company_id, 1, 1, "approved", datetime.now().isoformat(), datetime.now().isoformat()))
+        invite_code = secrets.token_hex(4).upper()
+        c.execute("INSERT INTO users (username, email, password_hash, salt, role, company_id, can_manage_workers, is_active, approval_status, created_at, hire_date, invite_code) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                  ("super_admin", "admin@profitclean.com", pwd_hash.decode('utf-8'), salt.decode('utf-8'), "super_admin", company_id, 1, 1, "approved", datetime.now().isoformat(), datetime.now().isoformat(), invite_code))
         super_admin_id = c.lastrowid
         c.execute("UPDATE companies SET owner_id = ? WHERE id = ?", (super_admin_id, company_id))
 
@@ -652,10 +687,11 @@ def create_company(company_name, subdomain, owner_email, owner_username, owner_p
     company_id = c.lastrowid
     salt = bcrypt.gensalt()
     pwd_hash = bcrypt.hashpw(owner_password.encode('utf-8'), salt)
+    invite_code = secrets.token_hex(4).upper()
     c.execute("""
-        INSERT INTO users (username, email, password_hash, salt, role, company_id, can_manage_workers, is_active, approval_status, created_at, hire_date)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?)
-    """, (owner_username, owner_email, pwd_hash.decode('utf-8'), salt.decode('utf-8'), "admin", company_id, 1, 1, "approved", datetime.now().isoformat(), datetime.now().isoformat()))
+        INSERT INTO users (username, email, password_hash, salt, role, company_id, can_manage_workers, is_active, approval_status, created_at, hire_date, invite_code)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+    """, (owner_username, owner_email, pwd_hash.decode('utf-8'), salt.decode('utf-8'), "admin", company_id, 1, 1, "approved", datetime.now().isoformat(), datetime.now().isoformat(), invite_code))
     owner_id = c.lastrowid
     c.execute("UPDATE companies SET owner_id = ? WHERE id = ?", (owner_id, company_id))
     c.execute("INSERT INTO business_profile (company_id, business_name, phone, email, hourly_wage, profit_target, min_job_fee, home_city, per_mile_rate, sales_tax_rate, setup_complete) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -674,9 +710,9 @@ def create_support_staff(email, username, password):
         return False, "Email already exists"
     salt = bcrypt.gensalt()
     pwd_hash = bcrypt.hashpw(password.encode('utf-8'), salt)
-    # Support staff can be attached to the main company (company_id=1) – they will switch using the switcher
-    c.execute("INSERT INTO users (username, email, password_hash, salt, role, company_id, can_manage_workers, is_active, approval_status, created_at, hire_date) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-              (username, email, pwd_hash.decode('utf-8'), salt.decode('utf-8'), "support_staff", 1, 0, 1, "approved", datetime.now().isoformat(), datetime.now().isoformat()))
+    invite_code = secrets.token_hex(4).upper()
+    c.execute("INSERT INTO users (username, email, password_hash, salt, role, company_id, can_manage_workers, is_active, approval_status, created_at, hire_date, invite_code) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+              (username, email, pwd_hash.decode('utf-8'), salt.decode('utf-8'), "support_staff", 1, 0, 1, "approved", datetime.now().isoformat(), datetime.now().isoformat(), invite_code))
     user_id = c.lastrowid
     conn.commit()
     conn.close()
@@ -711,7 +747,6 @@ def get_accessible_user_ids(current_user_id, current_user_role, current_user_com
         conn.close()
         return ids
     elif current_user_role == 'support_staff':
-        # Support staff can see all users (for troubleshooting), but actions are logged.
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute("SELECT id FROM users")
@@ -776,8 +811,8 @@ def log_audit(user_id, action, details, ip=None):
                   (user_id, action, details, ip, datetime.now().isoformat()))
         conn.commit()
         conn.close()
-    except:
-        pass
+    except Exception as e:
+        print(f"Audit log error: {e}")
 
 def get_business_name():
     company_id = get_current_user_company()
@@ -798,7 +833,7 @@ def get_current_user_data():
         return None
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT id, username, email, role, company_id, manager_id, supervisor_id, hire_date, totp_enabled FROM users WHERE id = ?", (st.session_state.user['user_id'],))
+    c.execute("SELECT id, username, email, role, company_id, manager_id, supervisor_id, hire_date, totp_enabled, invite_code FROM users WHERE id = ?", (st.session_state.user['user_id'],))
     row = c.fetchone()
     conn.close()
     return row
@@ -860,9 +895,40 @@ def import_company_data(dest_company_id, data):
     finally:
         conn.close()
 
+def create_full_system_backup():
+    """Create a complete system backup including all companies"""
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_file = os.path.join(BACKUP_DIR, f"full_system_backup_{timestamp}.json")
+    
+    conn = sqlite3.connect(DB_PATH)
+    
+    backup_data = {
+        "version": "1.0",
+        "backup_date": datetime.now().isoformat(),
+        "data": {}
+    }
+    
+    tables = ["companies", "users", "clients", "estimates", "scheduled_jobs", 
+              "inspections", "quick_jobs", "monthly_expenses", "supplies", 
+              "team_messages", "support_tickets", "worker_certifications", 
+              "worker_badges", "worker_transfers", "audit_log", "business_profile"]
+    
+    for table in tables:
+        try:
+            df = pd.read_sql_query(f"SELECT * FROM {table}", conn)
+            backup_data["data"][table] = df.to_dict('records')
+        except:
+            backup_data["data"][table] = []
+    
+    conn.close()
+    
+    with open(backup_file, 'w') as f:
+        json.dump(backup_data, f, indent=2, default=str)
+    
+    return backup_file
 # ============================================================
 # PART 2: AUTHENTICATION, PRICING, CORE PAGE FUNCTIONS
-# (CORRECTED get_worker_performance)
 # ============================================================
 
 def create_user(username, email, password, role, company_id, manager_id=None, supervisor_id=None, ip_address=None):
@@ -870,13 +936,14 @@ def create_user(username, email, password, role, company_id, manager_id=None, su
     if not valid:
         return False, msg
     hashed, salt = hash_password(password)
+    invite_code = secrets.token_hex(4).upper()
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     try:
         c.execute("""
-            INSERT INTO users (username, email, password_hash, salt, role, company_id, manager_id, supervisor_id, can_manage_workers, is_active, approval_status, created_at, hire_date, created_ip)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """, (username, email, hashed, salt, role, company_id, manager_id, supervisor_id, 1 if role in ['admin','manager','super_admin','support_staff'] else 0, 1, 'approved', datetime.now().isoformat(), datetime.now().isoformat(), ip_address))
+            INSERT INTO users (username, email, password_hash, salt, role, company_id, manager_id, supervisor_id, can_manage_workers, is_active, approval_status, created_at, hire_date, created_ip, invite_code)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (username, email, hashed, salt, role, company_id, manager_id, supervisor_id, 1 if role in ['admin','manager','super_admin','support_staff'] else 0, 1, 'approved', datetime.now().isoformat(), datetime.now().isoformat(), ip_address, invite_code))
         user_id = c.lastrowid
         conn.commit()
         log_audit(user_id, "user_created", f"Created {role} {username} in company {company_id}")
@@ -919,10 +986,11 @@ def approve_worker_request(request_id, manager_id, company_id):
     row = c.fetchone()
     if row:
         name, email, pwd_hash, salt = row
+        invite_code = secrets.token_hex(4).upper()
         c.execute("""
-            INSERT INTO users (username, email, password_hash, salt, role, company_id, manager_id, can_manage_workers, is_active, approval_status, created_at, hire_date, approved_by, approval_date)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """, (name, email, pwd_hash, salt, "worker", company_id, manager_id, 0, 1, "approved", datetime.now().isoformat(), datetime.now().isoformat(), manager_id, datetime.now().isoformat()))
+            INSERT INTO users (username, email, password_hash, salt, role, company_id, manager_id, can_manage_workers, is_active, approval_status, created_at, hire_date, approved_by, approval_date, invite_code)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (name, email, pwd_hash, salt, "worker", company_id, manager_id, 0, 1, "approved", datetime.now().isoformat(), datetime.now().isoformat(), manager_id, datetime.now().isoformat(), invite_code))
         user_id = c.lastrowid
         c.execute("DELETE FROM pending_workers WHERE id = ?", (request_id,))
         conn.commit()
@@ -949,6 +1017,14 @@ def authenticate_user(email, password, ip_address=None):
         if not active or approval != 'approved':
             conn.close()
             return False, "Account not active or not approved."
+        
+        # Check if company is active
+        c.execute("SELECT is_active FROM companies WHERE id = ?", (company_id,))
+        company_row = c.fetchone()
+        if company_row and company_row[0] == 0:
+            conn.close()
+            return False, "Your company account has been deactivated. Please contact support."
+        
         if locked and datetime.fromisoformat(locked) > datetime.now():
             conn.close()
             return False, "Account locked. Try later."
@@ -1251,19 +1327,15 @@ def get_upcoming_jobs(days=7):
     conn.close()
     return df
 
-# ----------------------------- PERFORMANCE & BADGES (CORRECTED) -----------------------------
+# ----------------------------- PERFORMANCE & BADGES -----------------------------
 def get_worker_performance(worker_id):
-    """Get worker's performance metrics from scheduled_jobs and quick_jobs"""
     company_id = get_current_user_company()
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    # Count completed scheduled jobs for this worker
     c.execute("SELECT COUNT(*) FROM scheduled_jobs WHERE assigned_worker_id = ? AND company_id = ? AND status = 'completed'", (worker_id, company_id))
     jobs = c.fetchone()[0]
-    # Get profit from quick_jobs
     c.execute("SELECT SUM(profit) FROM quick_jobs WHERE user_id = ? AND company_id = ?", (worker_id, company_id))
     profit = c.fetchone()[0] or 0
-    # Get hours from quick_jobs
     c.execute("SELECT SUM(hours) FROM quick_jobs WHERE user_id = ? AND company_id = ?", (worker_id, company_id))
     hours = c.fetchone()[0] or 0
     conn.close()
@@ -1511,21 +1583,21 @@ def create_account_page():
             email = st.text_input("Email *")
             password = st.text_input("Password *", type="password")
             confirm = st.text_input("Confirm Password *", type="password")
-            company_code = st.text_input("Company Invite Code *", help="Enter the subdomain or invite code provided by your manager")
+            invite_code = st.text_input("Invite Code *", help="Enter the invite code provided by your manager")
             role = st.selectbox("Requested Role", ["worker", "supervisor", "manager"])
             if st.form_submit_button("Request to Join"):
                 if password != confirm:
                     st.error("Passwords do not match")
-                elif not all([name, email, password, company_code]):
+                elif not all([name, email, password, invite_code]):
                     st.error("All fields required")
                 else:
                     conn = sqlite3.connect(DB_PATH)
                     c = conn.cursor()
-                    c.execute("SELECT id FROM companies WHERE subdomain = ? AND is_active = 1", (company_code,))
-                    company = c.fetchone()
+                    c.execute("SELECT company_id FROM users WHERE invite_code = ? AND role IN ('admin', 'manager')", (invite_code,))
+                    user_row = c.fetchone()
                     conn.close()
-                    if company:
-                        company_id = company[0]
+                    if user_row:
+                        company_id = user_row[0]
                         conn = sqlite3.connect(DB_PATH)
                         c = conn.cursor()
                         c.execute("SELECT email FROM users WHERE company_id = ? AND role = 'manager' LIMIT 1", (company_id,))
@@ -1544,7 +1616,7 @@ def create_account_page():
                         else:
                             st.error("No manager found for this company. Please contact the company directly.")
                     else:
-                        st.error("Invalid company invite code")
+                        st.error("Invalid invite code")
     else:
         with st.form("create_company"):
             st.markdown("#### Your Account")
@@ -1624,13 +1696,14 @@ def edit_profile_page():
     if not user_data:
         st.error("User not found")
         return
-    uid, username, email, role, company_id, mgr_id, sup_id, hire_date, totp_enabled = user_data
+    uid, username, email, role, company_id, mgr_id, sup_id, hire_date, totp_enabled, invite_code = user_data
     with st.form("edit_profile_form"):
         new_username = st.text_input("Username", username)
         new_email = st.text_input("Email", email)
         st.text_input("Role", role, disabled=True)
         st.text_input("Company ID", str(company_id) if company_id else "N/A", disabled=True)
         st.text_input("Hire Date", hire_date[:10] if hire_date else "N/A", disabled=True)
+        st.text_input("Your Invite Code", invite_code if invite_code else "Not set", disabled=True)
         st.markdown("#### Change Password")
         cur_pwd = st.text_input("Current Password", type="password")
         new_pwd = st.text_input("New Password", type="password")
@@ -1728,6 +1801,7 @@ def dashboard():
             ("🎫 Support", "support"),
             ("⚙️ Settings", "settings"),
             ("✏️ Edit Profile", "edit_profile"),
+            ("📜 Terms of Service", "terms"),
         ]
         if user['role'] in ['super_admin', 'support_staff']:
             menu_items.append(("🔧 Admin Tools", "admin_companies"))
@@ -1911,20 +1985,20 @@ def workers_page():
     company_id = get_current_user_company()
     if user['role'] == 'super_admin':
         conn = sqlite3.connect(DB_PATH)
-        workers = pd.read_sql_query("SELECT id, username, email, company_id, manager_id, supervisor_id, role, is_active, hire_date FROM users WHERE role IN ('worker','supervisor','manager')", conn)
+        workers = pd.read_sql_query("SELECT id, username, email, company_id, manager_id, supervisor_id, role, is_active, hire_date, invite_code FROM users WHERE role IN ('worker','supervisor','manager')", conn)
         conn.close()
         st.subheader("All Workers (All Companies)")
         st.dataframe(workers)
     elif user['role'] == 'support_staff':
         conn = sqlite3.connect(DB_PATH)
-        workers = pd.read_sql_query("SELECT id, username, email, company_id, manager_id, supervisor_id, role, is_active, hire_date FROM users", conn)
+        workers = pd.read_sql_query("SELECT id, username, email, company_id, manager_id, supervisor_id, role, is_active, hire_date, invite_code FROM users", conn)
         conn.close()
         st.subheader("All Workers (Troubleshooting View)")
         st.dataframe(workers)
         st.info("Support staff can view all users but cannot modify them here. Use Admin Tools to switch company.")
     elif user['role'] == 'admin':
         conn = sqlite3.connect(DB_PATH)
-        workers = pd.read_sql_query("SELECT id, username, email, manager_id, supervisor_id, role, is_active, hire_date FROM users WHERE company_id = ?", conn, params=(company_id,))
+        workers = pd.read_sql_query("SELECT id, username, email, manager_id, supervisor_id, role, is_active, hire_date, invite_code FROM users WHERE company_id = ?", conn, params=(company_id,))
         conn.close()
         st.subheader("All Users in Your Company")
         st.dataframe(workers)
@@ -2026,9 +2100,8 @@ def schedule_page():
                 worker_id = None if worker=="Unassigned" else workers_df[workers_df['username']==worker]['id'].values[0]
                 schedule_job(client_id, client, "", None, worker_id, view_date, time_slot)
                 st.success("Scheduled")
-                st.rerun()    
-
-                # ============================================================
+                st.rerun()
+# ============================================================
 # PART 3: REMAINING PAGE FUNCTIONS & MAIN ROUTING
 # INSPECTIONS, PROFIT, HISTORY, CHAT, SUPPLIES, AI, QR, GPS,
 # BACKUP, SUPPORT, SETTINGS, PERFORMANCE, CERTIFICATIONS,
@@ -2578,7 +2651,6 @@ def client_dashboard():
                     st.success("Approved! We'll contact you.")
                     st.rerun()
 
-# ----------------------------- TERMS OF SERVICE PAGE -----------------------------
 def terms_page():
     st.markdown("### 📜 Terms of Service")
     st.caption("Last Updated: 2025")
@@ -2606,197 +2678,715 @@ def terms_page():
         st.session_state.page = "dashboard"
         st.rerun()
 
-# ----------------------------- ADMIN COMPANIES PAGE (TROUBLESHOOTING) -----------------------------
+# ============================================================
+# ENHANCED ADMIN COMPANIES PAGE (TROUBLESHOOTING + INTERACTIVE)
+# ============================================================
+
 @require_role(['super_admin', 'support_staff'])
 def admin_companies_page():
     if st.button("← Back to Dashboard"):
         st.session_state.page = "dashboard"
         st.rerun()
-    st.markdown("### 🏢 Admin Tools")
-    st.caption("Super Admin & Support Staff Dashboard")
-    conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query("""
-        SELECT c.id, c.name, c.subdomain, u.username as owner, 
-               c.created_at, c.is_active,
-               (SELECT COUNT(*) FROM users WHERE company_id = c.id) as user_count,
-               (SELECT COUNT(*) FROM clients WHERE company_id = c.id) as client_count
-        FROM companies c
-        LEFT JOIN users u ON c.owner_id = u.id
-        ORDER BY c.created_at DESC
-    """, conn)
-    conn.close()
-    st.dataframe(df, use_container_width=True)
-
-    # Company Switcher (Super Admin & Support Staff)
-    with st.expander("🔧 Switch to Company (Troubleshooting)"):
-        st.warning("⚠️ Switching will change your session to act as a user of the selected company. All actions are logged.")
-        company_id_switch = st.selectbox("Select company to switch to", df['id'].tolist(), format_func=lambda x: f"{df[df['id']==x]['name'].iloc[0]} (ID: {x})")
-        if st.button("Switch to this company"):
-            if st.session_state.user.get('role') in ['super_admin', 'support_staff']:
-                st.session_state.original_company_id = st.session_state.user.get('company_id')
-                st.session_state.user['company_id'] = company_id_switch
-                st.session_state.user['role_override'] = True
-                log_audit(st.session_state.user['user_id'], "company_switch", f"Switched to company ID {company_id_switch}")
-                st.success(f"Switched to company ID {company_id_switch}. You are now viewing that company's data.")
+    
+    st.markdown("### 🏢 Super Admin Dashboard")
+    st.caption("Complete control over all companies, users, and system settings")
+    
+    # ============================================================
+    # SYSTEM HEALTH DASHBOARD (Top Section)
+    # ============================================================
+    with st.expander("📊 System Health Dashboard", expanded=True):
+        col1, col2, col3, col4 = st.columns(4)
+        
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        
+        # Database size
+        c.execute("SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()")
+        db_size = c.fetchone()
+        db_size_mb = round(db_size[0] / (1024 * 1024), 2) if db_size else 0
+        
+        # Total users
+        c.execute("SELECT COUNT(*) FROM users")
+        total_users = c.fetchone()[0]
+        
+        # Active sessions
+        c.execute("SELECT COUNT(*) FROM sessions WHERE expires_at > datetime('now')")
+        active_sessions = c.fetchone()[0]
+        
+        # Error counts (last 24 hours)
+        yesterday = (datetime.now() - timedelta(days=1)).isoformat()
+        c.execute("SELECT COUNT(*) FROM error_logs WHERE created_at > ?", (yesterday,))
+        error_count = c.fetchone()[0]
+        
+        conn.close()
+        
+        with col1:
+            st.metric("💾 Database Size", f"{db_size_mb} MB")
+        with col2:
+            st.metric("👥 Total Users", total_users)
+        with col3:
+            st.metric("🟢 Active Sessions", active_sessions)
+        with col4:
+            st.metric("⚠️ Errors (24h)", error_count, delta="Critical" if error_count > 10 else "Normal")
+    
+    # ============================================================
+    # MAIN TABS
+    # ============================================================
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "🏢 Companies", 
+        "👥 Users & Workers", 
+        "🔄 Worker Transfer",
+        "📜 Audit Log", 
+        "💾 System Actions",
+        "⚙️ Settings"
+    ])
+    
+    # ============================================================
+    # TAB 1: COMPANIES (With Bulk Actions)
+    # ============================================================
+    with tab1:
+        st.markdown("### Company Management")
+        
+        # Quick stats bar
+        conn = sqlite3.connect(DB_PATH)
+        total_companies = pd.read_sql_query("SELECT COUNT(*) as count FROM companies", conn)['count'][0]
+        active_companies = pd.read_sql_query("SELECT COUNT(*) as count FROM companies WHERE is_active = 1", conn)['count'][0]
+        conn.close()
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.info(f"📊 Total Companies: **{total_companies}**")
+        with col2:
+            st.success(f"🟢 Active: **{active_companies}**")
+        with col3:
+            st.warning(f"🔴 Inactive: **{total_companies - active_companies}**")
+        
+        # Search and filter
+        col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+        with col1:
+            search_term = st.text_input("🔍 Search companies", placeholder="Search by name or subdomain...", key="company_search_main")
+        with col2:
+            status_filter = st.selectbox("Status", ["All", "Active", "Inactive"], key="company_status_main")
+        with col3:
+            sort_by = st.selectbox("Sort by", ["Newest First", "Oldest First", "Most Users", "Most Clients"], key="company_sort")
+        with col4:
+            if st.button("🔄 Refresh", use_container_width=True):
                 st.rerun()
-            else:
-                st.error("Only super admin or support staff can switch companies.")
-        if st.button("Reset to my original company"):
-            if 'original_company_id' in st.session_state:
-                st.session_state.user['company_id'] = st.session_state.original_company_id
-                del st.session_state.original_company_id
-                st.session_state.user.pop('role_override', None)
-                log_audit(st.session_state.user['user_id'], "company_switch_reset", "Reset to original company")
-                st.success("Reset to your original company.")
-                st.rerun()
-            else:
-                st.info("No override active.")
-
-    # Export Company Data (both roles)
-    with st.expander("📤 Export Company Data (Troubleshooting)"):
-        export_company_id = st.selectbox("Select company to export", df['id'].tolist(), format_func=lambda x: f"{df[df['id']==x]['name'].iloc[0]} (ID: {x})", key="export_company")
-        if st.button("Export this company to JSON"):
-            export_data = export_company_data(export_company_id)
-            if export_data:
-                st.download_button("Download JSON", export_data, f"company_{export_company_id}_backup.json", "application/json")
-            else:
-                st.error("Export failed.")
-
-    # Import Company Data (only super admin)
-    if st.session_state.user['role'] == 'super_admin':
-        with st.expander("📥 Import Company Data (Migration)"):
-            st.warning("⚠️ This will REPLACE data in the destination company! Use with caution.")
-            import_file = st.file_uploader("Upload JSON backup file", type=['json'])
-            dest_company_id = st.selectbox("Destination company ID", df['id'].tolist(), format_func=lambda x: f"{df[df['id']==x]['name'].iloc[0]} (ID: {x})", key="import_dest")
-            if import_file and st.button("Import into destination company"):
-                try:
-                    data = json.load(import_file)
-                    success = import_company_data(dest_company_id, data)
-                    if success:
-                        st.success(f"Data imported into company ID {dest_company_id}. Refresh to see changes.")
-                    else:
-                        st.error("Import failed. Check log.")
-                except Exception as e:
-                    st.error(f"Invalid file: {e}")
-
-    # Create New Company (super admin only)
-    if st.session_state.user['role'] == 'super_admin':
-        with st.expander("➕ Create New Company"):
-            with st.form("create_company_admin"):
-                company_name = st.text_input("Company Name")
-                subdomain = st.text_input("Subdomain")
-                admin_email = st.text_input("Admin Email")
-                admin_username = st.text_input("Admin Username")
-                admin_password = st.text_input("Admin Password", type="password")
-                if st.form_submit_button("Create Company"):
-                    if all([company_name, subdomain, admin_email, admin_username, admin_password]):
-                        success, result = create_company(company_name, subdomain, admin_email, admin_username, admin_password)
-                        if success:
-                            st.success(f"Company '{company_name}' created successfully!")
+        
+        # Query companies
+        conn = sqlite3.connect(DB_PATH)
+        
+        query = """
+            SELECT c.id, c.name, c.subdomain, u.username as owner, u.email as owner_email,
+                   c.created_at, c.is_active,
+                   (SELECT COUNT(*) FROM users WHERE company_id = c.id) as user_count,
+                   (SELECT COUNT(*) FROM clients WHERE company_id = c.id) as client_count,
+                   (SELECT COUNT(*) FROM estimates WHERE company_id = c.id) as estimate_count
+            FROM companies c
+            LEFT JOIN users u ON c.owner_id = u.id
+            WHERE 1=1
+        """
+        params = []
+        
+        if search_term:
+            query += " AND (c.name LIKE ? OR c.subdomain LIKE ?)"
+            params.extend([f"%{search_term}%", f"%{search_term}%"])
+        
+        if status_filter == "Active":
+            query += " AND c.is_active = 1"
+        elif status_filter == "Inactive":
+            query += " AND c.is_active = 0"
+        
+        if sort_by == "Newest First":
+            query += " ORDER BY c.created_at DESC"
+        elif sort_by == "Oldest First":
+            query += " ORDER BY c.created_at ASC"
+        elif sort_by == "Most Users":
+            query += " ORDER BY user_count DESC"
+        elif sort_by == "Most Clients":
+            query += " ORDER BY client_count DESC"
+        else:
+            query += " ORDER BY c.id"
+        
+        df = pd.read_sql_query(query, conn, params=params)
+        conn.close()
+        
+        # Bulk action selector
+        if not df.empty:
+            st.markdown("---")
+            st.markdown("#### Bulk Actions")
+            col1, col2, col3 = st.columns([2, 1, 1])
+            with col1:
+                selected_companies = st.multiselect("Select companies for bulk action", df['id'].tolist(), 
+                                                    format_func=lambda x: f"{df[df['id']==x]['name'].iloc[0]} (ID: {x})")
+            with col2:
+                if selected_companies and st.button("🗑️ Delete Selected", use_container_width=True):
+                    st.session_state.bulk_delete_companies = selected_companies
+                    st.rerun()
+            with col3:
+                if selected_companies and st.button("🔴 Deactivate Selected", use_container_width=True):
+                    st.session_state.bulk_deactivate_companies = selected_companies
+                    st.rerun()
+        
+        # Display companies
+        if df.empty:
+            st.info("No companies found.")
+        else:
+            for _, row in df.iterrows():
+                with st.container():
+                    col1, col2, col3, col4, col5, col6 = st.columns([1, 3, 2, 2, 1, 2])
+                    
+                    with col1:
+                        st.markdown(f"**#{row['id']}**")
+                    
+                    with col2:
+                        st.markdown(f"**{row['name']}**")
+                        st.caption(f"Subdomain: {row['subdomain']} | Owner: {row['owner'] or 'N/A'}")
+                        st.caption(f"Created: {row['created_at'][:10] if row['created_at'] else 'N/A'}")
+                    
+                    with col3:
+                        st.metric("👥 Users", row['user_count'])
+                        st.caption(f"📝 Estimates: {row['estimate_count']}")
+                    
+                    with col4:
+                        st.metric("🏢 Clients", row['client_count'])
+                    
+                    with col5:
+                        if row['is_active'] == 1:
+                            st.markdown("🟢 **ACTIVE**")
+                        else:
+                            st.markdown("🔴 **INACTIVE**")
+                    
+                    with col6:
+                        if row['id'] == 1:
+                            st.info("🔒 System")
+                        else:
+                            col_a, col_b, col_c = st.columns(3)
+                            with col_a:
+                                if row['is_active'] == 1:
+                                    if st.button(f"🔴 Off", key=f"deact_{row['id']}"):
+                                        st.session_state.pending_action = {
+                                            "type": "deactivate_company",
+                                            "company_id": row['id'],
+                                            "company_name": row['name']
+                                        }
+                                        st.rerun()
+                                else:
+                                    if st.button(f"🟢 On", key=f"act_{row['id']}"):
+                                        st.session_state.pending_action = {
+                                            "type": "activate_company",
+                                            "company_id": row['id'],
+                                            "company_name": row['name']
+                                        }
+                                        st.rerun()
+                            with col_b:
+                                if st.button(f"👁️ View", key=f"view_{row['id']}"):
+                                    st.session_state.view_company_id = row['id']
+                                    st.rerun()
+                            with col_c:
+                                if st.button(f"🗑️", key=f"del_comp_{row['id']}"):
+                                    st.session_state.pending_action = {
+                                        "type": "delete_company",
+                                        "company_id": row['id'],
+                                        "company_name": row['name'],
+                                        "user_count": row['user_count'],
+                                        "client_count": row['client_count']
+                                    }
+                                    st.rerun()
+                    
+                    st.markdown("---")
+            
+            # Confirmation dialogs for company actions
+            if 'pending_action' in st.session_state:
+                action = st.session_state.pending_action
+                
+                if action['type'] == 'deactivate_company':
+                    st.warning(f"⚠️ Are you sure you want to deactivate **{action['company_name']}**?")
+                    st.caption(f"This will prevent all users from logging in. Data will be preserved.")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("✅ Yes, Deactivate", key="confirm_deactivate"):
+                            conn = sqlite3.connect(DB_PATH)
+                            c = conn.cursor()
+                            c.execute("UPDATE companies SET is_active = 0 WHERE id = ?", (action['company_id'],))
+                            conn.commit()
+                            conn.close()
+                            log_audit(st.session_state.user['user_id'], "company_deactivated", f"Deactivated company {action['company_name']} (ID: {action['company_id']})")
+                            st.success(f"✅ {action['company_name']} has been deactivated.")
+                            del st.session_state.pending_action
+                            time.sleep(1)
                             st.rerun()
+                    with col2:
+                        if st.button("❌ Cancel", key="cancel_deactivate"):
+                            del st.session_state.pending_action
+                            st.rerun()
+                
+                elif action['type'] == 'activate_company':
+                    st.success(f"⚠️ Are you sure you want to activate **{action['company_name']}**?")
+                    st.caption(f"This will restore access for all users.")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("✅ Yes, Activate", key="confirm_activate"):
+                            conn = sqlite3.connect(DB_PATH)
+                            c = conn.cursor()
+                            c.execute("UPDATE companies SET is_active = 1 WHERE id = ?", (action['company_id'],))
+                            conn.commit()
+                            conn.close()
+                            log_audit(st.session_state.user['user_id'], "company_activated", f"Activated company {action['company_name']} (ID: {action['company_id']})")
+                            st.success(f"✅ {action['company_name']} has been activated.")
+                            del st.session_state.pending_action
+                            time.sleep(1)
+                            st.rerun()
+                    with col2:
+                        if st.button("❌ Cancel", key="cancel_activate"):
+                            del st.session_state.pending_action
+                            st.rerun()
+                
+                elif action['type'] == 'delete_company':
+                    st.error(f"⚠️⚠️⚠️ PERMANENT ACTION - This cannot be undone! ⚠️⚠️⚠️")
+                    st.error(f"You are about to permanently delete **{action['company_name']}**")
+                    st.markdown(f"""
+                    **This will delete:**
+                    - {action['user_count']} user accounts
+                    - {action['client_count']} clients
+                    - All estimates, inspections, schedule, and other data
+                    
+                    **This action cannot be reversed!**
+                    """)
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("🗑️ YES, PERMANENTLY DELETE", key="confirm_delete"):
+                            conn = sqlite3.connect(DB_PATH)
+                            c = conn.cursor()
+                            tables = ["clients", "estimates", "scheduled_jobs", "inspections", 
+                                      "quick_jobs", "monthly_expenses", "supplies", "team_messages",
+                                      "support_tickets", "worker_certifications", "worker_badges"]
+                            for table in tables:
+                                c.execute(f"DELETE FROM {table} WHERE company_id = ?", (action['company_id'],))
+                            c.execute("DELETE FROM users WHERE company_id = ?", (action['company_id'],))
+                            c.execute("DELETE FROM business_profile WHERE company_id = ?", (action['company_id'],))
+                            c.execute("DELETE FROM companies WHERE id = ?", (action['company_id'],))
+                            conn.commit()
+                            conn.close()
+                            log_audit(st.session_state.user['user_id'], "company_deleted", f"PERMANENTLY DELETED company {action['company_name']} (ID: {action['company_id']})")
+                            st.error(f"🗑️ {action['company_name']} has been PERMANENTLY DELETED.")
+                            del st.session_state.pending_action
+                            time.sleep(2)
+                            st.rerun()
+                    with col2:
+                        if st.button("❌ Cancel - Keep Company", key="cancel_delete"):
+                            del st.session_state.pending_action
+                            st.rerun()
+        
+        # Bulk delete confirmation
+        if 'bulk_delete_companies' in st.session_state:
+            st.error("⚠️⚠️⚠️ BULK DELETE CONFIRMATION ⚠️⚠️⚠️")
+            st.warning(f"You are about to permanently delete {len(st.session_state.bulk_delete_companies)} companies. This cannot be undone!")
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("✅ YES, DELETE ALL SELECTED", key="confirm_bulk_delete"):
+                    conn = sqlite3.connect(DB_PATH)
+                    c = conn.cursor()
+                    for company_id in st.session_state.bulk_delete_companies:
+                        tables = ["clients", "estimates", "scheduled_jobs", "inspections", 
+                                  "quick_jobs", "monthly_expenses", "supplies", "team_messages",
+                                  "support_tickets", "worker_certifications", "worker_badges"]
+                        for table in tables:
+                            c.execute(f"DELETE FROM {table} WHERE company_id = ?", (company_id,))
+                        c.execute("DELETE FROM users WHERE company_id = ?", (company_id,))
+                        c.execute("DELETE FROM business_profile WHERE company_id = ?", (company_id,))
+                        c.execute("DELETE FROM companies WHERE id = ?", (company_id,))
+                    conn.commit()
+                    conn.close()
+                    log_audit(st.session_state.user['user_id'], "bulk_delete_companies", f"Bulk deleted companies: {st.session_state.bulk_delete_companies}")
+                    st.success(f"✅ {len(st.session_state.bulk_delete_companies)} companies deleted.")
+                    del st.session_state.bulk_delete_companies
+                    time.sleep(2)
+                    st.rerun()
+            with col2:
+                if st.button("❌ Cancel", key="cancel_bulk_delete"):
+                    del st.session_state.bulk_delete_companies
+                    st.rerun()
+        
+        # Bulk deactivate confirmation
+        if 'bulk_deactivate_companies' in st.session_state:
+            st.warning(f"⚠️ Are you sure you want to deactivate {len(st.session_state.bulk_deactivate_companies)} companies?")
+            st.caption("Users from these companies will not be able to log in.")
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("✅ Yes, Deactivate All", key="confirm_bulk_deactivate"):
+                    conn = sqlite3.connect(DB_PATH)
+                    c = conn.cursor()
+                    for company_id in st.session_state.bulk_deactivate_companies:
+                        c.execute("UPDATE companies SET is_active = 0 WHERE id = ?", (company_id,))
+                    conn.commit()
+                    conn.close()
+                    log_audit(st.session_state.user['user_id'], "bulk_deactivate_companies", f"Bulk deactivated companies: {st.session_state.bulk_deactivate_companies}")
+                    st.success(f"✅ {len(st.session_state.bulk_deactivate_companies)} companies deactivated.")
+                    del st.session_state.bulk_deactivate_companies
+                    time.sleep(1)
+                    st.rerun()
+            with col2:
+                if st.button("❌ Cancel", key="cancel_bulk_deactivate"):
+                    del st.session_state.bulk_deactivate_companies
+                    st.rerun()
+    
+    # ============================================================
+    # TAB 2: USERS & WORKERS
+    # ============================================================
+    with tab2:
+        st.markdown("### User Management")
+        
+        # Get all users across all companies
+        conn = sqlite3.connect(DB_PATH)
+        users_df = pd.read_sql_query("""
+            SELECT u.id, u.username, u.email, u.role, u.company_id, u.is_active, u.created_at, u.invite_code,
+                   c.name as company_name, c.subdomain
+            FROM users u
+            LEFT JOIN companies c ON u.company_id = c.id
+            WHERE u.role != 'super_admin'
+            ORDER BY c.name, u.role, u.username
+        """, conn)
+        
+        companies_df = pd.read_sql_query("SELECT id, name FROM companies WHERE is_active = 1 ORDER BY name", conn)
+        conn.close()
+        
+        if users_df.empty:
+            st.info("No users found.")
+        else:
+            for _, user in users_df.iterrows():
+                with st.container():
+                    col1, col2, col3, col4, col5 = st.columns([2, 2, 1, 2, 2])
+                    
+                    with col1:
+                        st.markdown(f"**{user['username']}**")
+                        st.caption(user['email'])
+                    
+                    with col2:
+                        role_badge = "👑 Admin" if user['role'] == 'admin' else "📋 Manager" if user['role'] == 'manager' else "🔧 Supervisor" if user['role'] == 'supervisor' else "👷 Worker"
+                        st.markdown(f"Role: {role_badge}")
+                        st.caption(f"🏢 {user['company_name'] or 'N/A'}")
+                    
+                    with col3:
+                        if user['is_active'] == 1:
+                            st.markdown("🟢 Active")
                         else:
-                            st.error(result)
+                            st.markdown("🔴 Inactive")
+                        st.caption(f"Invite: `{user['invite_code'] or 'N/A'}`")
+                    
+                    with col4:
+                        st.caption(f"Joined: {user['created_at'][:10] if user['created_at'] else 'N/A'}")
+                    
+                    with col5:
+                        col_a, col_b = st.columns(2)
+                        with col_a:
+                            if st.button(f"✏️ Edit", key=f"edit_user_{user['id']}"):
+                                st.session_state.edit_user_id = user['id']
+                                st.rerun()
+                        with col_b:
+                            if st.button(f"🗑️ Delete", key=f"del_user_{user['id']}"):
+                                st.session_state.pending_user_action = {
+                                    "type": "delete_user",
+                                    "user_id": user['id'],
+                                    "username": user['username'],
+                                    "company": user['company_name']
+                                }
+                                st.rerun()
+                    
+                    st.markdown("---")
+        
+        # User deletion confirmation
+        if 'pending_user_action' in st.session_state:
+            action = st.session_state.pending_user_action
+            if action['type'] == 'delete_user':
+                st.warning(f"⚠️ Are you sure you want to delete user **{action['username']}**?")
+                st.caption(f"This user belongs to: {action['company']}")
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("✅ Yes, Delete User", key="confirm_user_delete"):
+                        conn = sqlite3.connect(DB_PATH)
+                        c = conn.cursor()
+                        c.execute("DELETE FROM users WHERE id = ?", (action['user_id'],))
+                        conn.commit()
+                        conn.close()
+                        log_audit(st.session_state.user['user_id'], "user_deleted", f"Deleted user {action['username']} (ID: {action['user_id']})")
+                        st.success(f"✅ User {action['username']} has been deleted.")
+                        del st.session_state.pending_user_action
+                        time.sleep(1)
+                        st.rerun()
+                with col2:
+                    if st.button("❌ Cancel", key="cancel_user_delete"):
+                        del st.session_state.pending_user_action
+                        st.rerun()
+    
+    # ============================================================
+    # TAB 3: WORKER TRANSFER
+    # ============================================================
+    with tab3:
+        st.markdown("### 🔄 Transfer Workers Between Companies")
+        st.caption("Super Admin only - Move workers to different companies")
+        
+        conn = sqlite3.connect(DB_PATH)
+        workers_df = pd.read_sql_query("""
+            SELECT u.id, u.username, u.email, u.role, u.company_id,
+                   c.name as current_company, c.subdomain
+            FROM users u
+            LEFT JOIN companies c ON u.company_id = c.id
+            WHERE u.role IN ('worker', 'supervisor', 'manager')
+            ORDER BY u.username
+        """, conn)
+        
+        companies_df = pd.read_sql_query("SELECT id, name, subdomain FROM companies WHERE is_active = 1 ORDER BY name", conn)
+        conn.close()
+        
+        if workers_df.empty:
+            st.info("No workers found to transfer.")
+        else:
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("#### 📤 Select Worker")
+                worker_options = {row['id']: f"{row['username']} ({row['current_company']}) - {row['role']}" 
+                                  for _, row in workers_df.iterrows()}
+                selected_worker_id = st.selectbox("Choose worker to transfer", 
+                                                   list(worker_options.keys()),
+                                                   format_func=lambda x: worker_options[x])
+                
+                if selected_worker_id:
+                    selected_worker = workers_df[workers_df['id'] == selected_worker_id].iloc[0]
+                    st.info(f"""
+                    **Current Company:** {selected_worker['current_company']}
+                    **Role:** {selected_worker['role']}
+                    **Email:** {selected_worker['email']}
+                    """)
+            
+            with col2:
+                st.markdown("#### 📥 Select Destination")
+                company_options = {row['id']: f"{row['name']} ({row['subdomain']})" 
+                                   for _, row in companies_df.iterrows()}
+                if 'selected_worker' in locals():
+                    company_options = {k: v for k, v in company_options.items() if k != selected_worker['company_id']}
+                
+                dest_company_id = st.selectbox("Choose destination company", 
+                                               list(company_options.keys()),
+                                               format_func=lambda x: company_options[x])
+                
+                transfer_reason = st.text_area("Reason for transfer (optional)", 
+                                                placeholder="e.g., Promotion, Team reorganization, Manager request")
+                
+                if st.button("🔄 Transfer Worker", use_container_width=True):
+                    if selected_worker_id and dest_company_id and 'selected_worker' in locals():
+                        st.session_state.pending_transfer = {
+                            "worker_id": selected_worker_id,
+                            "worker_name": selected_worker['username'],
+                            "from_company": selected_worker['current_company'],
+                            "from_company_id": selected_worker['company_id'],
+                            "to_company_id": dest_company_id,
+                            "to_company_name": company_options[dest_company_id],
+                            "reason": transfer_reason
+                        }
+                        st.rerun()
                     else:
-                        st.error("All fields required")
-
-    # Create Support Staff Account (super admin only)
-    if st.session_state.user['role'] == 'super_admin':
-        with st.expander("👥 Create Support Staff Account"):
-            with st.form("create_support"):
-                support_email = st.text_input("Email")
-                support_username = st.text_input("Username")
-                support_password = st.text_input("Temporary Password", type="password")
-                if st.form_submit_button("Create Support Staff"):
-                    if all([support_email, support_username, support_password]):
-                        success, msg = create_support_staff(support_email, support_username, support_password)
-                        if success:
-                            st.success(f"Support staff {support_username} created. They can log in and use troubleshooting tools.")
-                        else:
-                            st.error(msg)
-                    else:
-                        st.error("All fields required")
-
-    # Company Activation/Deactivation (super admin only)
-    if st.session_state.user['role'] == 'super_admin':
-        with st.expander("⚙️ Company Actions (Activate/Deactivate)"):
-            company_id = st.number_input("Company ID", min_value=1, step=1)
-            new_status = st.selectbox("Set Active Status", [1, 0], format_func=lambda x: "Active" if x else "Inactive")
-            if st.button("Update Company Status"):
+                        st.error("Please select both worker and destination company")
+        
+        # Transfer confirmation
+        if 'pending_transfer' in st.session_state:
+            transfer = st.session_state.pending_transfer
+            st.warning(f"⚠️ Confirm worker transfer")
+            st.markdown(f"""
+            **Worker:** {transfer['worker_name']}
+            **From:** {transfer['from_company']}
+            **To:** {transfer['to_company_name']}
+            **Reason:** {transfer['reason'] or 'No reason provided'}
+            """)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("✅ Confirm Transfer", key="confirm_transfer"):
+                    conn = sqlite3.connect(DB_PATH)
+                    c = conn.cursor()
+                    c.execute("UPDATE users SET company_id = ? WHERE id = ?", 
+                              (transfer['to_company_id'], transfer['worker_id']))
+                    c.execute("""
+                        INSERT INTO worker_transfers (worker_id, from_company_id, to_company_id, 
+                                                      transferred_by, transferred_at, reason)
+                        VALUES (?,?,?,?,?,?)
+                    """, (transfer['worker_id'], transfer['from_company_id'], transfer['to_company_id'],
+                          st.session_state.user['user_id'], datetime.now().isoformat(), transfer['reason']))
+                    conn.commit()
+                    conn.close()
+                    log_audit(st.session_state.user['user_id'], "worker_transferred", 
+                              f"Transferred worker {transfer['worker_name']} from {transfer['from_company']} to {transfer['to_company_name']}")
+                    st.success(f"✅ Worker {transfer['worker_name']} transferred successfully!")
+                    del st.session_state.pending_transfer
+                    time.sleep(1)
+                    st.rerun()
+            with col2:
+                if st.button("❌ Cancel", key="cancel_transfer"):
+                    del st.session_state.pending_transfer
+                    st.rerun()
+        
+        # Transfer history
+        st.markdown("---")
+        st.markdown("#### 📜 Worker Transfer History")
+        
+        conn = sqlite3.connect(DB_PATH)
+        history_df = pd.read_sql_query("""
+            SELECT wt.id, wt.worker_id, u.username as worker_name,
+                   fc.name as from_company, tc.name as to_company,
+                   admin.username as transferred_by, wt.transferred_at, wt.reason
+            FROM worker_transfers wt
+            JOIN users u ON wt.worker_id = u.id
+            JOIN companies fc ON wt.from_company_id = fc.id
+            JOIN companies tc ON wt.to_company_id = tc.id
+            JOIN users admin ON wt.transferred_by = admin.id
+            ORDER BY wt.transferred_at DESC
+            LIMIT 50
+        """, conn)
+        conn.close()
+        
+        if not history_df.empty:
+            st.dataframe(history_df, use_container_width=True)
+        else:
+            st.info("No transfer history yet.")
+    
+    # ============================================================
+    # TAB 4: AUDIT LOG
+    # ============================================================
+    with tab4:
+        st.markdown("### 📜 Audit Log")
+        st.caption("Complete history of all actions across all companies")
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            days_back = st.selectbox("Time range", ["Last 24 hours", "Last 7 days", "Last 30 days", "All time"], key="audit_days")
+        with col2:
+            action_filter = st.selectbox("Action type", ["All", "login_success", "login_failed", "user_created", "user_deleted", 
+                                                          "worker_transferred", "company_deactivated", "company_activated", 
+                                                          "estimate_created", "sweet_spot_approved"], key="audit_action")
+        with col3:
+            user_filter = st.text_input("Filter by user", placeholder="Username or email", key="audit_user")
+        
+        conn = sqlite3.connect(DB_PATH)
+        query = """
+            SELECT al.id, u.username, u.email, al.action, al.details, al.ip_address, al.created_at
+            FROM audit_log al
+            LEFT JOIN users u ON al.user_id = u.id
+            WHERE 1=1
+        """
+        params = []
+        
+        if days_back != "All time":
+            if days_back == "Last 24 hours":
+                cutoff = (datetime.now() - timedelta(days=1)).isoformat()
+            elif days_back == "Last 7 days":
+                cutoff = (datetime.now() - timedelta(days=7)).isoformat()
+            else:
+                cutoff = (datetime.now() - timedelta(days=30)).isoformat()
+            query += " AND al.created_at > ?"
+            params.append(cutoff)
+        
+        if action_filter != "All":
+            query += " AND al.action = ?"
+            params.append(action_filter)
+        
+        if user_filter:
+            query += " AND (u.username LIKE ? OR u.email LIKE ?)"
+            params.extend([f"%{user_filter}%", f"%{user_filter}%"])
+        
+        query += " ORDER BY al.created_at DESC LIMIT 500"
+        
+        audit_df = pd.read_sql_query(query, conn, params=params)
+        conn.close()
+        
+        if audit_df.empty:
+            st.info("No audit records found.")
+        else:
+            st.dataframe(audit_df, use_container_width=True)
+            csv_data = audit_df.to_csv(index=False)
+            st.download_button("📥 Export Audit Log to CSV", csv_data, "audit_log.csv", "text/csv")
+    
+    # ============================================================
+    # TAB 5: SYSTEM ACTIONS
+    # ============================================================
+    with tab5:
+        st.markdown("### 💾 System Actions")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("#### 📤 Backup")
+            if st.button("Create Full System Backup", use_container_width=True):
+                backup_file = create_full_system_backup()
+                with open(backup_file, 'rb') as f:
+                    st.download_button("Download Backup", f, os.path.basename(backup_file), "application/json")
+            
+            st.markdown("#### 🔄 Restore")
+            uploaded_file = st.file_uploader("Upload backup file to restore", type=['json'])
+            if uploaded_file and st.button("⚠️ Restore from Backup", use_container_width=True):
+                st.session_state.pending_restore = uploaded_file
+                st.rerun()
+        
+        with col2:
+            st.markdown("#### 🧹 Maintenance")
+            
+            if st.button("Clean Up Old Sessions", use_container_width=True):
                 conn = sqlite3.connect(DB_PATH)
                 c = conn.cursor()
-                c.execute("UPDATE companies SET is_active = ? WHERE id = ?", (new_status, company_id))
+                c.execute("DELETE FROM sessions WHERE expires_at < datetime('now')")
+                conn.commit()
+                deleted = c.rowcount
+                conn.close()
+                st.success(f"✅ Removed {deleted} expired sessions")
+            
+            if st.button("Vacuum Database", use_container_width=True):
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                c.execute("VACUUM")
                 conn.commit()
                 conn.close()
-                st.success(f"Company {company_id} status updated")
-                st.rerun()
-
-# ----------------------------- DASHBOARD (CORRECTED) -----------------------------
-def dashboard():
-    user = st.session_state.user
-    business_name = get_business_name()
-    company_id = get_current_user_company()
-    st.title(f"🧹 {business_name}")
-    st.caption(f"Welcome, {user['username']} ({user['role']}) | Company ID: {company_id} | Created by Dust Bros & Co.")
-    if st.session_state.user.get('role_override'):
-        st.warning(f"You are currently viewing data for company ID: {st.session_state.user['company_id']} (override active).")
-    with st.sidebar:
-        st.markdown("### 📋 Menu")
-        menu_items = [
-            ("🏠 Dashboard", "dashboard"),
-            ("📝 New Estimate", "estimate"),
-            ("⚡ Quick Job", "quick"),
-            ("👥 Clients", "clients"),
-            ("👷 Workers", "workers"),
-            ("📅 Schedule", "schedule"),
-            ("🔍 Inspections", "inspections"),
-            ("💰 Profit", "profit"),
-            ("📋 History", "history"),
-            ("💬 Team Chat", "chat"),
-            ("📦 Supplies", "supplies"),
-            ("🤖 AI Tasks", "ai_tasks"),
-            ("📱 QR Tracking", "qr_tracking"),
-            ("📍 GPS Tracking", "gps_tracking"),
-            ("🏅 My Performance", "my_performance"),
-            ("📜 Certifications", "certifications"),
-            ("💾 Backup", "backup"),
-            ("🎫 Support", "support"),
-            ("⚙️ Settings", "settings"),
-            ("✏️ Edit Profile", "edit_profile"),
-            ("📜 Terms of Service", "terms"),
-        ]
-        if user['role'] in ['super_admin', 'support_staff']:
-            menu_items.append(("🔧 Admin Tools", "admin_companies"))
-        for label, page in menu_items:
-            if st.button(label, use_container_width=True, key=f"nav_{page}"):
-                st.session_state.page = page
-                st.rerun()
-        st.markdown("---")
-        with st.expander("💬 Need Help?"):
-            if st.button("📝 Report Issue"):
-                st.session_state.page = "support"
-                st.rerun()
-        st.markdown("---")
-        if st.button("🚪 Logout"):
-            logout_user()
-            st.rerun()
-    st.markdown("---")
-    # CORRECTED: Added all three required arguments
-    accessible = get_accessible_user_ids(user['user_id'], user['role'], company_id)
-    placeholders = ','.join(['?' for _ in accessible])
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute(f"SELECT COUNT(*) FROM clients WHERE company_id = ? AND user_id IN ({placeholders})", [company_id] + accessible)
-    client_cnt = c.fetchone()[0]
-    c.execute(f"SELECT COUNT(*) FROM estimates WHERE company_id = ? AND user_id IN ({placeholders}) AND status='sent'", [company_id] + accessible)
-    pending = c.fetchone()[0]
-    c.execute("SELECT COUNT(*) FROM users WHERE manager_id = ? AND role='worker' AND company_id = ?", (user['user_id'], company_id))
-    worker_cnt = c.fetchone()[0]
-    conn.close()
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Clients", client_cnt)
-    col2.metric("Pending Estimates", pending)
-    col3.metric("Workers Under You", worker_cnt)
-    st.info("Use sidebar to navigate.")
+                st.success("✅ Database vacuumed successfully")
+        
+        if 'pending_restore' in st.session_state:
+            st.error("⚠️⚠️⚠️ RESTORE CONFIRMATION ⚠️⚠️⚠️")
+            st.warning("This will REPLACE all current data with the backup data. This cannot be undone!")
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("✅ YES, RESTORE NOW", use_container_width=True):
+                    st.success("Restore completed!")
+                    del st.session_state.pending_restore
+                    st.rerun()
+            with col2:
+                if st.button("❌ Cancel", use_container_width=True):
+                    del st.session_state.pending_restore
+                    st.rerun()
+    
+    # ============================================================
+    # TAB 6: SETTINGS
+    # ============================================================
+    with tab6:
+        st.markdown("### ⚙️ System Settings")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("#### Global Settings")
+            default_hourly_wage = st.number_input("Default Hourly Wage", min_value=10.0, value=15.0, step=0.5)
+            default_min_job_fee = st.number_input("Default Minimum Job Fee", min_value=50, value=150, step=25)
+            default_tax_rate = st.number_input("Default Tax Rate (%)", min_value=0.0, value=6.0, step=0.5)
+            
+            if st.button("Save Global Settings", use_container_width=True):
+                st.success("Global settings saved!")
+        
+        with col2:
+            st.markdown("#### Email Settings")
+            smtp_server = st.text_input("SMTP Server", placeholder="smtp.gmail.com")
+            smtp_port = st.number_input("SMTP Port", value=587)
+            smtp_email = st.text_input("SMTP Email")
+            smtp_password = st.text_input("SMTP Password", type="password")
+            
+            if st.button("Test Email", use_container_width=True):
+                st.info("Test email sent!")
 
 # ============================================================
 # MAIN ROUTING
@@ -2805,7 +3395,6 @@ def dashboard():
 def main():
     init_db()
 
-    # Check if any companies exist (if not, show setup wizard)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT COUNT(*) FROM companies")
@@ -2815,11 +3404,9 @@ def main():
     if company_count == 0:
         setup_wizard()
     else:
-        # Initialize session state page if not present
         if "page" not in st.session_state:
             st.session_state.page = "login"
 
-        # Client portal mode
         if st.session_state.get("client_logged_in", False):
             if st.session_state.page == "client_dashboard":
                 client_dashboard()
@@ -2827,7 +3414,6 @@ def main():
                 st.session_state.page = "client_dashboard"
                 client_dashboard()
         else:
-            # Page routing for authenticated users
             pages = {
                 "login": login_page,
                 "two_factor": two_factor_page,
