@@ -652,6 +652,37 @@ def init_db():
     conn.commit()
     conn.close()
 
+
+# ============================================================
+# DATABASE MIGRATION - ADD INVITE_CODE COLUMN (FIX)
+# ============================================================
+
+def migrate_database():
+    """Add missing columns to existing database"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    # Add invite_code column to users table if it doesn't exist
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN invite_code TEXT")
+        print("Added invite_code column to users table")
+    except sqlite3.OperationalError:
+        print("invite_code column already exists")
+    
+    # Generate invite codes for existing users
+    try:
+        c.execute("SELECT id FROM users WHERE invite_code IS NULL OR invite_code = ''")
+        users_without_code = c.fetchall()
+        for user in users_without_code:
+            invite_code = secrets.token_hex(4).upper()
+            c.execute("UPDATE users SET invite_code = ? WHERE id = ?", (invite_code, user[0]))
+    except:
+        pass
+    
+    conn.commit()
+    conn.close()
+
+
 # ============================================================
 # MULTI-TENANT & SUPPORT HELPERS
 # ============================================================
@@ -828,12 +859,19 @@ def get_business_name():
     except:
         return "ProfitClean"
 
+# FIXED: get_current_user_data with invite_code column check
 def get_current_user_data():
     if 'user' not in st.session_state:
         return None
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT id, username, email, role, company_id, manager_id, supervisor_id, hire_date, totp_enabled, invite_code FROM users WHERE id = ?", (st.session_state.user['user_id'],))
+    # Check if invite_code column exists
+    c.execute("PRAGMA table_info(users)")
+    columns = [col[1] for col in c.fetchall()]
+    if 'invite_code' in columns:
+        c.execute("SELECT id, username, email, role, company_id, manager_id, supervisor_id, hire_date, totp_enabled, invite_code FROM users WHERE id = ?", (st.session_state.user['user_id'],))
+    else:
+        c.execute("SELECT id, username, email, role, company_id, manager_id, supervisor_id, hire_date, totp_enabled, NULL as invite_code FROM users WHERE id = ?", (st.session_state.user['user_id'],))
     row = c.fetchone()
     conn.close()
     return row
@@ -1687,6 +1725,7 @@ def setup_2fa_page():
         else:
             st.error("Invalid code")
 
+# FIXED: edit_profile_page with invite_code handling
 def edit_profile_page():
     if 'user' not in st.session_state:
         st.session_state.page = "login"
@@ -1696,7 +1735,13 @@ def edit_profile_page():
     if not user_data:
         st.error("User not found")
         return
-    uid, username, email, role, company_id, mgr_id, sup_id, hire_date, totp_enabled, invite_code = user_data
+    # Handle both 9 and 10 column results
+    if len(user_data) == 10:
+        uid, username, email, role, company_id, mgr_id, sup_id, hire_date, totp_enabled, invite_code = user_data
+    else:
+        uid, username, email, role, company_id, mgr_id, sup_id, hire_date, totp_enabled = user_data
+        invite_code = "Not set"
+    
     with st.form("edit_profile_form"):
         new_username = st.text_input("Username", username)
         new_email = st.text_input("Email", email)
@@ -1976,6 +2021,7 @@ def clients_page():
                     delete_client(row['id'])
                     st.rerun()
 
+# FIXED: workers_page with invite_code column check
 def workers_page():
     if st.button("← Back"):
         st.session_state.page = "dashboard"
@@ -1983,22 +2029,40 @@ def workers_page():
     st.markdown("### 👷 Worker Management")
     user = st.session_state.user
     company_id = get_current_user_company()
+    
+    # Safely check if invite_code column exists
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("PRAGMA table_info(users)")
+    columns = [col[1] for col in c.fetchall()]
+    has_invite_code = 'invite_code' in columns
+    conn.close()
+    
     if user['role'] == 'super_admin':
         conn = sqlite3.connect(DB_PATH)
-        workers = pd.read_sql_query("SELECT id, username, email, company_id, manager_id, supervisor_id, role, is_active, hire_date, invite_code FROM users WHERE role IN ('worker','supervisor','manager')", conn)
+        if has_invite_code:
+            workers = pd.read_sql_query("SELECT id, username, email, company_id, manager_id, supervisor_id, role, is_active, hire_date, invite_code FROM users WHERE role IN ('worker','supervisor','manager')", conn)
+        else:
+            workers = pd.read_sql_query("SELECT id, username, email, company_id, manager_id, supervisor_id, role, is_active, hire_date FROM users WHERE role IN ('worker','supervisor','manager')", conn)
         conn.close()
         st.subheader("All Workers (All Companies)")
         st.dataframe(workers)
     elif user['role'] == 'support_staff':
         conn = sqlite3.connect(DB_PATH)
-        workers = pd.read_sql_query("SELECT id, username, email, company_id, manager_id, supervisor_id, role, is_active, hire_date, invite_code FROM users", conn)
+        if has_invite_code:
+            workers = pd.read_sql_query("SELECT id, username, email, company_id, manager_id, supervisor_id, role, is_active, hire_date, invite_code FROM users", conn)
+        else:
+            workers = pd.read_sql_query("SELECT id, username, email, company_id, manager_id, supervisor_id, role, is_active, hire_date FROM users", conn)
         conn.close()
         st.subheader("All Workers (Troubleshooting View)")
         st.dataframe(workers)
         st.info("Support staff can view all users but cannot modify them here. Use Admin Tools to switch company.")
     elif user['role'] == 'admin':
         conn = sqlite3.connect(DB_PATH)
-        workers = pd.read_sql_query("SELECT id, username, email, manager_id, supervisor_id, role, is_active, hire_date, invite_code FROM users WHERE company_id = ?", conn, params=(company_id,))
+        if has_invite_code:
+            workers = pd.read_sql_query("SELECT id, username, email, manager_id, supervisor_id, role, is_active, hire_date, invite_code FROM users WHERE company_id = ?", conn, params=(company_id,))
+        else:
+            workers = pd.read_sql_query("SELECT id, username, email, manager_id, supervisor_id, role, is_active, hire_date FROM users WHERE company_id = ?", conn, params=(company_id,))
         conn.close()
         st.subheader("All Users in Your Company")
         st.dataframe(workers)
@@ -2103,9 +2167,6 @@ def schedule_page():
                 st.rerun()
 # ============================================================
 # PART 3: REMAINING PAGE FUNCTIONS & MAIN ROUTING
-# INSPECTIONS, PROFIT, HISTORY, CHAT, SUPPLIES, AI, QR, GPS,
-# BACKUP, SUPPORT, SETTINGS, PERFORMANCE, CERTIFICATIONS,
-# CLIENT PORTAL, ADMIN COMPANIES, TERMS, MAIN
 # ============================================================
 
 def inspections_page():
@@ -2677,6 +2738,7 @@ def terms_page():
     if st.button("← Back to Dashboard"):
         st.session_state.page = "dashboard"
         st.rerun()
+
 
 # ============================================================
 # ENHANCED ADMIN COMPANIES PAGE (TROUBLESHOOTING + INTERACTIVE)
@@ -3388,13 +3450,15 @@ def admin_companies_page():
             if st.button("Test Email", use_container_width=True):
                 st.info("Test email sent!")
 
+
 # ============================================================
 # MAIN ROUTING
 # ============================================================
 
 def main():
     init_db()
-
+    migrate_database()  # ADDED: This fixes the invite_code column issue
+    
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT COUNT(*) FROM companies")
@@ -3449,4 +3513,4 @@ def main():
                 login_page()
 
 if __name__ == "__main__":
-    main()
+    main()                
