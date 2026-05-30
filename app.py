@@ -844,6 +844,22 @@ def migrate_database():
     c = conn.cursor()
     c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='email_templates'")
     if c.fetchone():
+        # Ensure required columns exist (older DBs may lack them)
+        c.execute("PRAGMA table_info(email_templates)")
+        existing_cols = [row[1] for row in c.fetchall()]
+        if 'is_active' not in existing_cols:
+            try:
+                c.execute("ALTER TABLE email_templates ADD COLUMN is_active BOOLEAN DEFAULT 1")
+                print('Added is_active column to email_templates')
+            except sqlite3.OperationalError as e:
+                print(f"Could not add is_active column: {e}")
+        if 'created_at' not in existing_cols:
+            try:
+                c.execute("ALTER TABLE email_templates ADD COLUMN created_at DATETIME")
+                print('Added created_at column to email_templates')
+            except sqlite3.OperationalError as e:
+                print(f"Could not add created_at column: {e}")
+
         # Remove duplicate templates before creating unique constraint/index
         c.execute('''
             DELETE FROM email_templates
