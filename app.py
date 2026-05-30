@@ -2781,7 +2781,7 @@ def dashboard():
             st.rerun()
     st.markdown("---")
     # FIXED: Added user['role'] as second argument
-    accessible = get_accessible_user_ids(user['user_id'], user['role'])
+    accessible = get_accessible_user_ids(user['user_id'], user['role'], company_id)
     placeholders = ','.join(['?' for _ in accessible])
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
