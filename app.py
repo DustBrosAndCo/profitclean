@@ -1,8 +1,9 @@
-# ============================================================
-# PROFITCLEAN - COMPLETE FINAL CODE
-# Created by Dust Bros & Co.
-# Part 1 of 5: Imports, Config, Database, Security, Helpers
-# ============================================================
+"""
+PROFITCLEAN - Commercial Cleaning Estimator
+Created by Dust Bros & Co.
+FINAL VERSION - Part 1 of 3
+Includes: multi-tenant, super admin, support staff, troubleshooting tools
+"""
 
 import streamlit as st
 import sqlite3
@@ -55,7 +56,7 @@ st.set_page_config(
 )
 
 # ============================================================
-# PWA META TAGS & SERVICE WORKER (minimal)
+# PWA META TAGS
 # ============================================================
 
 st.markdown("""
@@ -144,7 +145,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ============================================================
-# DATABASE SETUP (FULL SCHEMA)
+# DATABASE SETUP (MULTI-TENANT + SUPPORT STAFF + JOB_ASSIGNMENTS)
 # ============================================================
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "profitclean.db")
@@ -153,7 +154,18 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
-    # Users table (hierarchical roles)
+    # Companies table
+    c.execute('''CREATE TABLE IF NOT EXISTS companies (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        subdomain TEXT UNIQUE,
+        owner_id INTEGER,
+        created_at DATETIME,
+        is_active BOOLEAN DEFAULT 1,
+        settings_json TEXT
+    )''')
+
+    # Users table (with company_id and support_staff flag)
     c.execute('''CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
@@ -161,6 +173,7 @@ def init_db():
         password_hash TEXT NOT NULL,
         salt TEXT NOT NULL,
         role TEXT DEFAULT 'worker',
+        company_id INTEGER,
         manager_id INTEGER,
         supervisor_id INTEGER,
         can_manage_workers BOOLEAN DEFAULT 0,
@@ -180,12 +193,13 @@ def init_db():
         approval_status TEXT DEFAULT 'approved',
         approved_by INTEGER,
         approval_date DATETIME,
+        FOREIGN KEY (company_id) REFERENCES companies(id),
         FOREIGN KEY (manager_id) REFERENCES users(id),
         FOREIGN KEY (supervisor_id) REFERENCES users(id),
         FOREIGN KEY (approved_by) REFERENCES users(id)
     )''')
 
-    # Pending worker requests (self-signup)
+    # Pending worker requests
     c.execute('''CREATE TABLE IF NOT EXISTS pending_workers (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT,
@@ -193,8 +207,10 @@ def init_db():
         password_hash TEXT,
         salt TEXT,
         requested_manager_email TEXT,
+        company_id INTEGER,
         requested_at DATETIME,
-        status TEXT DEFAULT 'pending'
+        status TEXT DEFAULT 'pending',
+        FOREIGN KEY (company_id) REFERENCES companies(id)
     )''')
 
     # Sessions
@@ -207,7 +223,7 @@ def init_db():
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
 
-    # Audit log
+    # Audit log (enhanced for troubleshooting)
     c.execute('''CREATE TABLE IF NOT EXISTS audit_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER,
@@ -218,9 +234,10 @@ def init_db():
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
 
-    # Business profile
+    # Business profile (per company)
     c.execute('''CREATE TABLE IF NOT EXISTS business_profile (
-        id INTEGER PRIMARY KEY,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company_id INTEGER UNIQUE,
         business_name TEXT,
         phone TEXT,
         email TEXT,
@@ -232,12 +249,14 @@ def init_db():
         sales_tax_rate REAL DEFAULT 0.06,
         smtp_email TEXT,
         smtp_password TEXT,
-        setup_complete INTEGER DEFAULT 0
+        setup_complete INTEGER DEFAULT 0,
+        FOREIGN KEY (company_id) REFERENCES companies(id)
     )''')
 
     # Clients
     c.execute('''CREATE TABLE IF NOT EXISTS clients (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company_id INTEGER,
         user_id INTEGER,
         business_name TEXT,
         contact_name TEXT,
@@ -252,12 +271,14 @@ def init_db():
         notes TEXT,
         created_at DATETIME,
         updated_at DATETIME,
+        FOREIGN KEY (company_id) REFERENCES companies(id),
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
 
     # Estimates
     c.execute('''CREATE TABLE IF NOT EXISTS estimates (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company_id INTEGER,
         user_id INTEGER,
         client_id INTEGER,
         client_name TEXT,
@@ -292,13 +313,15 @@ def init_db():
         created_at DATETIME,
         status TEXT DEFAULT 'draft',
         approved_at DATETIME,
+        FOREIGN KEY (company_id) REFERENCES companies(id),
         FOREIGN KEY (user_id) REFERENCES users(id),
         FOREIGN KEY (client_id) REFERENCES clients(id)
     )''')
 
-    # Estimate approvals (for sweet-spot)
+    # Estimate approvals (sweet-spot)
     c.execute('''CREATE TABLE IF NOT EXISTS estimate_approvals (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company_id INTEGER,
         estimate_id INTEGER,
         worker_id INTEGER,
         requested_price REAL,
@@ -307,6 +330,7 @@ def init_db():
         manager_id INTEGER,
         approved_at DATETIME,
         notes TEXT,
+        FOREIGN KEY (company_id) REFERENCES companies(id),
         FOREIGN KEY (estimate_id) REFERENCES estimates(id),
         FOREIGN KEY (worker_id) REFERENCES users(id),
         FOREIGN KEY (manager_id) REFERENCES users(id)
@@ -315,6 +339,7 @@ def init_db():
     # Scheduled jobs
     c.execute('''CREATE TABLE IF NOT EXISTS scheduled_jobs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company_id INTEGER,
         user_id INTEGER,
         client_id INTEGER,
         client_name TEXT,
@@ -327,14 +352,32 @@ def init_db():
         reminder_sent INTEGER DEFAULT 0,
         completed_at DATETIME,
         notes TEXT,
+        FOREIGN KEY (company_id) REFERENCES companies(id),
         FOREIGN KEY (user_id) REFERENCES users(id),
         FOREIGN KEY (client_id) REFERENCES clients(id),
         FOREIGN KEY (assigned_worker_id) REFERENCES users(id)
     )''')
 
-    # Inspections (dynamic)
+    # ============================================================
+    # JOB ASSIGNMENTS TABLE (ADDED FOR WORKER PERFORMANCE)
+    # ============================================================
+    c.execute('''CREATE TABLE IF NOT EXISTS job_assignments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        job_id INTEGER,
+        worker_id INTEGER,
+        assigned_by INTEGER,
+        assigned_at DATETIME,
+        status TEXT DEFAULT 'assigned',
+        travel_distance REAL,
+        completed_at DATETIME,
+        FOREIGN KEY (worker_id) REFERENCES users(id),
+        FOREIGN KEY (assigned_by) REFERENCES users(id)
+    )''')
+
+    # Inspections
     c.execute('''CREATE TABLE IF NOT EXISTS inspections (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company_id INTEGER,
         user_id INTEGER,
         client_id INTEGER,
         client_name TEXT,
@@ -345,13 +388,15 @@ def init_db():
         status TEXT DEFAULT 'in_progress',
         started_at DATETIME,
         completed_at DATETIME,
+        FOREIGN KEY (company_id) REFERENCES companies(id),
         FOREIGN KEY (user_id) REFERENCES users(id),
         FOREIGN KEY (client_id) REFERENCES clients(id)
     )''')
 
-    # Quick jobs (profit tracking)
+    # Quick jobs
     c.execute('''CREATE TABLE IF NOT EXISTS quick_jobs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company_id INTEGER,
         user_id INTEGER,
         job_date DATE,
         description TEXT,
@@ -360,12 +405,14 @@ def init_db():
         job_expenses REAL,
         profit REAL,
         created_at DATETIME,
+        FOREIGN KEY (company_id) REFERENCES companies(id),
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
 
     # Monthly expenses
     c.execute('''CREATE TABLE IF NOT EXISTS monthly_expenses (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company_id INTEGER,
         user_id INTEGER,
         month_year TEXT,
         insurance REAL DEFAULT 0,
@@ -373,12 +420,14 @@ def init_db():
         software REAL DEFAULT 0,
         advertising REAL DEFAULT 0,
         other REAL DEFAULT 0,
+        FOREIGN KEY (company_id) REFERENCES companies(id),
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
 
     # Team chat
     c.execute('''CREATE TABLE IF NOT EXISTS team_messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company_id INTEGER,
         user_id INTEGER,
         username TEXT,
         user_role TEXT,
@@ -388,12 +437,14 @@ def init_db():
         recipient_id INTEGER,
         read_status INTEGER DEFAULT 0,
         created_at DATETIME,
+        FOREIGN KEY (company_id) REFERENCES companies(id),
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
 
-    # Supplies inventory
+    # Supplies
     c.execute('''CREATE TABLE IF NOT EXISTS supplies (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company_id INTEGER,
         user_id INTEGER,
         name TEXT,
         category TEXT,
@@ -402,16 +453,19 @@ def init_db():
         reorder_level REAL,
         unit_cost REAL,
         last_updated DATETIME,
+        FOREIGN KEY (company_id) REFERENCES companies(id),
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
 
     c.execute('''CREATE TABLE IF NOT EXISTS supply_usage (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company_id INTEGER,
         supply_id INTEGER,
         job_id INTEGER,
         quantity_used REAL,
         used_by INTEGER,
         used_at DATETIME,
+        FOREIGN KEY (company_id) REFERENCES companies(id),
         FOREIGN KEY (supply_id) REFERENCES supplies(id),
         FOREIGN KEY (used_by) REFERENCES users(id)
     )''')
@@ -419,6 +473,7 @@ def init_db():
     # Worker certifications
     c.execute('''CREATE TABLE IF NOT EXISTS worker_certifications (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company_id INTEGER,
         worker_id INTEGER,
         certification_name TEXT,
         issuing_body TEXT,
@@ -429,22 +484,26 @@ def init_db():
         verified_by INTEGER,
         verified_at DATETIME,
         created_at DATETIME,
+        FOREIGN KEY (company_id) REFERENCES companies(id),
         FOREIGN KEY (worker_id) REFERENCES users(id),
         FOREIGN KEY (verified_by) REFERENCES users(id)
     )''')
 
-    # Worker badges (achievements)
+    # Worker badges
     c.execute('''CREATE TABLE IF NOT EXISTS worker_badges (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company_id INTEGER,
         worker_id INTEGER,
         badge_name TEXT,
         earned_at DATETIME,
+        FOREIGN KEY (company_id) REFERENCES companies(id),
         FOREIGN KEY (worker_id) REFERENCES users(id)
     )''')
 
-    # Support tickets
+    # Support tickets (for users to report issues)
     c.execute('''CREATE TABLE IF NOT EXISTS support_tickets (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company_id INTEGER,
         ticket_id TEXT UNIQUE,
         user_id INTEGER,
         user_email TEXT,
@@ -458,57 +517,91 @@ def init_db():
         created_at DATETIME,
         updated_at DATETIME,
         resolved_at DATETIME,
+        FOREIGN KEY (company_id) REFERENCES companies(id),
         FOREIGN KEY (user_id) REFERENCES users(id),
         FOREIGN KEY (assigned_to) REFERENCES users(id)
     )''')
 
     c.execute('''CREATE TABLE IF NOT EXISTS support_messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company_id INTEGER,
         ticket_id INTEGER,
         user_id INTEGER,
         message TEXT,
         is_staff BOOLEAN DEFAULT 0,
         created_at DATETIME,
+        FOREIGN KEY (company_id) REFERENCES companies(id),
         FOREIGN KEY (ticket_id) REFERENCES support_tickets(id),
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
 
-    # Email templates
+    # Email templates (per company)
     c.execute('''CREATE TABLE IF NOT EXISTS email_templates (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company_id INTEGER,
         name TEXT,
         subject TEXT,
-        body TEXT
+        body TEXT,
+        FOREIGN KEY (company_id) REFERENCES companies(id)
     )''')
 
     # Error logs
     c.execute('''CREATE TABLE IF NOT EXISTS error_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company_id INTEGER,
         user_id INTEGER,
         error_type TEXT,
         error_message TEXT,
         page_url TEXT,
         stack_trace TEXT,
         created_at DATETIME,
+        FOREIGN KEY (company_id) REFERENCES companies(id),
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
 
     # ---------- Default Data ----------
-    # Default supplies
-    c.execute("SELECT COUNT(*) FROM supplies")
+    # Create default "Dust Bros & Co." company
+    c.execute("SELECT COUNT(*) FROM companies WHERE name = 'Dust Bros & Co.'")
+    if c.fetchone()[0] == 0:
+        c.execute("INSERT INTO companies (name, subdomain, created_at, is_active) VALUES (?,?,?,?)",
+                  ("Dust Bros & Co.", "dustbros", datetime.now().isoformat(), 1))
+        company_id = c.lastrowid
+    else:
+        c.execute("SELECT id FROM companies WHERE name = 'Dust Bros & Co.'")
+        company_id = c.fetchone()[0]
+
+    # Create default super admin account
+    c.execute("SELECT COUNT(*) FROM users WHERE role = 'super_admin'")
+    if c.fetchone()[0] == 0:
+        salt = bcrypt.gensalt()
+        pwd_hash = bcrypt.hashpw(b"Admin123!", salt)
+        c.execute("INSERT INTO users (username, email, password_hash, salt, role, company_id, can_manage_workers, is_active, approval_status, created_at, hire_date) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                  ("super_admin", "admin@profitclean.com", pwd_hash.decode('utf-8'), salt.decode('utf-8'), "super_admin", company_id, 1, 1, "approved", datetime.now().isoformat(), datetime.now().isoformat()))
+        super_admin_id = c.lastrowid
+        c.execute("UPDATE companies SET owner_id = ? WHERE id = ?", (super_admin_id, company_id))
+
+    # Create default business profile for Dust Bros & Co.
+    c.execute("SELECT COUNT(*) FROM business_profile WHERE company_id = ?", (company_id,))
+    if c.fetchone()[0] == 0:
+        c.execute("INSERT INTO business_profile (company_id, business_name, phone, email, hourly_wage, profit_target, min_job_fee, home_city, per_mile_rate, sales_tax_rate, setup_complete) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                  (company_id, "Dust Bros & Co.", "(555) 123-4567", "hello@dustbros.com", 15.0, 0.30, 150, "Orlando", 0.65, SALES_TAX_RATE, 1))
+
+    # Default supplies for Dust Bros & Co.
+    c.execute("SELECT COUNT(*) FROM supplies WHERE company_id = ?", (company_id,))
     if c.fetchone()[0] == 0:
         default_supplies = [
-            (1, "All-purpose cleaner", "Chemicals", "gallons", 5, 2, 15.00),
-            (1, "Paper towels", "Consumables", "rolls", 24, 12, 1.50),
-            (1, "Trash bags", "Consumables", "boxes", 10, 5, 12.00),
-            (1, "Glass cleaner", "Chemicals", "bottles", 8, 3, 8.00),
-            (1, "Vacuum bags", "Equipment", "pack", 20, 10, 5.00),
+            ("All-purpose cleaner", "Chemicals", "gallons", 5, 2, 15.00),
+            ("Paper towels", "Consumables", "rolls", 24, 12, 1.50),
+            ("Trash bags", "Consumables", "boxes", 10, 5, 12.00),
+            ("Glass cleaner", "Chemicals", "bottles", 8, 3, 8.00),
+            ("Vacuum bags", "Equipment", "pack", 20, 10, 5.00),
         ]
         for sup in default_supplies:
-            c.execute("INSERT INTO supplies (user_id, name, category, unit, current_stock, reorder_level, unit_cost) VALUES (?,?,?,?,?,?,?)", sup)
+            c.execute("INSERT INTO supplies (company_id, name, category, unit, current_stock, reorder_level, unit_cost) VALUES (?,?,?,?,?,?,?)",
+                      (company_id, sup[0], sup[1], sup[2], sup[3], sup[4], sup[5]))
 
-    # Email templates
-    c.execute("SELECT COUNT(*) FROM email_templates")
+    # Default email templates for Dust Bros & Co.
+    c.execute("SELECT COUNT(*) FROM email_templates WHERE company_id = ?", (company_id,))
     if c.fetchone()[0] == 0:
         templates = [
             ("estimate_sent", "New Estimate from {business_name}", "Dear {client_name},\n\nYour estimate for {property_type} in {city} is ${amount:,.2f}.\n\nClick here to approve: {approval_link}"),
@@ -518,28 +611,79 @@ def init_db():
             ("worker_approval", "Your account has been approved", "You can now log in."),
         ]
         for name, subj, body in templates:
-            c.execute("INSERT INTO email_templates (name, subject, body) VALUES (?,?,?)", (name, subj, body))
-
-    # Create default admin and manager accounts
-    c.execute("SELECT COUNT(*) FROM users WHERE role='admin'")
-    if c.fetchone()[0] == 0:
-        salt = bcrypt.gensalt()
-        pwd_hash = bcrypt.hashpw(b"Admin123!", salt)
-        c.execute("INSERT INTO users (username, email, password_hash, salt, role, can_manage_workers, is_active, approval_status, created_at, hire_date) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                  ("admin", "admin@profitclean.com", pwd_hash.decode('utf-8'), salt.decode('utf-8'), "admin", 1, 1, "approved", datetime.now().isoformat(), datetime.now().isoformat()))
-
-    c.execute("SELECT COUNT(*) FROM users WHERE role='manager'")
-    if c.fetchone()[0] == 0:
-        salt = bcrypt.gensalt()
-        pwd_hash = bcrypt.hashpw(b"Manager123!", salt)
-        c.execute("INSERT INTO users (username, email, password_hash, salt, role, can_manage_workers, is_active, approval_status, created_at, hire_date) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                  ("manager", "manager@profitclean.com", pwd_hash.decode('utf-8'), salt.decode('utf-8'), "manager", 1, 1, "approved", datetime.now().isoformat(), datetime.now().isoformat()))
+            c.execute("INSERT INTO email_templates (company_id, name, subject, body) VALUES (?,?,?,?)",
+                      (company_id, name, subj, body))
 
     conn.commit()
     conn.close()
 
 # ============================================================
-# HIERARCHICAL ACCESS HELPERS
+# MULTI-TENANT & SUPPORT HELPERS
+# ============================================================
+
+def get_current_user_company():
+    if 'user' not in st.session_state or not st.session_state.user:
+        return None
+    if 'company_id' in st.session_state.user:
+        return st.session_state.user['company_id']
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT company_id FROM users WHERE id = ?", (st.session_state.user['user_id'],))
+    row = c.fetchone()
+    conn.close()
+    company_id = row[0] if row else None
+    if company_id:
+        st.session_state.user['company_id'] = company_id
+    return company_id
+
+def create_company(company_name, subdomain, owner_email, owner_username, owner_password):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id FROM companies WHERE subdomain = ?", (subdomain,))
+    if c.fetchone():
+        conn.close()
+        return False, "Subdomain already taken"
+    c.execute("SELECT id FROM users WHERE email = ?", (owner_email,))
+    if c.fetchone():
+        conn.close()
+        return False, "Email already registered"
+    c.execute("INSERT INTO companies (name, subdomain, created_at, is_active) VALUES (?,?,?,?)",
+              (company_name, subdomain, datetime.now().isoformat(), 1))
+    company_id = c.lastrowid
+    salt = bcrypt.gensalt()
+    pwd_hash = bcrypt.hashpw(owner_password.encode('utf-8'), salt)
+    c.execute("""
+        INSERT INTO users (username, email, password_hash, salt, role, company_id, can_manage_workers, is_active, approval_status, created_at, hire_date)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)
+    """, (owner_username, owner_email, pwd_hash.decode('utf-8'), salt.decode('utf-8'), "admin", company_id, 1, 1, "approved", datetime.now().isoformat(), datetime.now().isoformat()))
+    owner_id = c.lastrowid
+    c.execute("UPDATE companies SET owner_id = ? WHERE id = ?", (owner_id, company_id))
+    c.execute("INSERT INTO business_profile (company_id, business_name, phone, email, hourly_wage, profit_target, min_job_fee, home_city, per_mile_rate, sales_tax_rate, setup_complete) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+              (company_id, company_name, "(555) 000-0000", owner_email, 15.0, 0.30, 150, "Orlando", 0.65, SALES_TAX_RATE, 1))
+    conn.commit()
+    conn.close()
+    return True, company_id
+
+def create_support_staff(email, username, password):
+    """Only super admin can call this."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id FROM users WHERE email = ?", (email,))
+    if c.fetchone():
+        conn.close()
+        return False, "Email already exists"
+    salt = bcrypt.gensalt()
+    pwd_hash = bcrypt.hashpw(password.encode('utf-8'), salt)
+    # Support staff can be attached to the main company (company_id=1) – they will switch using the switcher
+    c.execute("INSERT INTO users (username, email, password_hash, salt, role, company_id, can_manage_workers, is_active, approval_status, created_at, hire_date) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+              (username, email, pwd_hash.decode('utf-8'), salt.decode('utf-8'), "support_staff", 1, 0, 1, "approved", datetime.now().isoformat(), datetime.now().isoformat()))
+    user_id = c.lastrowid
+    conn.commit()
+    conn.close()
+    return True, user_id
+
+# ============================================================
+# HIERARCHICAL ACCESS HELPERS (UPDATED FOR SUPPORT STAFF)
 # ============================================================
 
 def get_descendant_user_ids(user_id):
@@ -558,11 +702,26 @@ def get_descendant_user_ids(user_id):
     conn.close()
     return ids
 
-def get_accessible_user_ids(current_user_id, current_user_role):
-    if current_user_role == 'admin':
+def get_accessible_user_ids(current_user_id, current_user_role, current_user_company):
+    if current_user_role == 'super_admin':
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute("SELECT id FROM users")
+        ids = [row[0] for row in c.fetchall()]
+        conn.close()
+        return ids
+    elif current_user_role == 'support_staff':
+        # Support staff can see all users (for troubleshooting), but actions are logged.
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT id FROM users")
+        ids = [row[0] for row in c.fetchall()]
+        conn.close()
+        return ids
+    elif current_user_role == 'admin':
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT id FROM users WHERE company_id = ?", (current_user_company,))
         ids = [row[0] for row in c.fetchall()]
         conn.close()
         return ids
@@ -571,7 +730,7 @@ def get_accessible_user_ids(current_user_id, current_user_role):
     elif current_user_role == 'supervisor':
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute("SELECT id FROM users WHERE supervisor_id = ? OR id = ?", (current_user_id, current_user_id))
+        c.execute("SELECT id FROM users WHERE supervisor_id = ? OR id = ? AND company_id = ?", (current_user_id, current_user_id, current_user_company))
         ids = [row[0] for row in c.fetchall()]
         conn.close()
         return ids
@@ -582,7 +741,7 @@ def user_belongs_to_hierarchy(current_user_id, target_user_id):
     return target_user_id in get_descendant_user_ids(current_user_id)
 
 # ============================================================
-# SECURITY / AUTH FUNCTIONS (basic)
+# SECURITY FUNCTIONS
 # ============================================================
 
 def hash_password(pwd):
@@ -621,10 +780,13 @@ def log_audit(user_id, action, details, ip=None):
         pass
 
 def get_business_name():
+    company_id = get_current_user_company()
+    if not company_id:
+        return "ProfitClean"
     try:
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute("SELECT business_name FROM business_profile WHERE id=1")
+        c.execute("SELECT business_name FROM business_profile WHERE company_id = ?", (company_id,))
         row = c.fetchone()
         conn.close()
         return row[0] if row else "ProfitClean"
@@ -636,16 +798,74 @@ def get_current_user_data():
         return None
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT id, username, email, role, manager_id, supervisor_id, hire_date, totp_enabled FROM users WHERE id = ?", (st.session_state.user['user_id'],))
+    c.execute("SELECT id, username, email, role, company_id, manager_id, supervisor_id, hire_date, totp_enabled FROM users WHERE id = ?", (st.session_state.user['user_id'],))
+    row = c.fetchone()
+    conn.close()
+    return row
+
+def get_company_settings():
+    company_id = get_current_user_company()
+    if not company_id:
+        return None
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT * FROM business_profile WHERE company_id = ?", (company_id,))
     row = c.fetchone()
     conn.close()
     return row
 
 # ============================================================
-# PART 2: AUTHENTICATION, 2FA, USER MANAGEMENT, PRICING ENGINE
+# EXPORT / IMPORT HELPERS (FOR SUPER ADMIN & SUPPORT STAFF)
 # ============================================================
 
-def create_user(username, email, password, role, manager_id=None, supervisor_id=None, ip_address=None):
+def export_company_data(company_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    tables = ["users", "clients", "estimates", "scheduled_jobs", "inspections", "quick_jobs", "monthly_expenses", "supplies", "team_messages", "support_tickets", "worker_certifications", "worker_badges"]
+    data = {"company_id": company_id, "export_date": datetime.now().isoformat(), "tables": {}}
+    for table in tables:
+        try:
+            c.execute(f"SELECT * FROM {table} WHERE company_id = ?", (company_id,))
+            rows = c.fetchall()
+            c.execute(f"PRAGMA table_info({table})")
+            columns = [col[1] for col in c.fetchall()]
+            table_data = []
+            for row in rows:
+                table_data.append(dict(zip(columns, row)))
+            data["tables"][table] = table_data
+        except:
+            data["tables"][table] = []
+    conn.close()
+    return json.dumps(data, indent=2, default=str)
+
+def import_company_data(dest_company_id, data):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    try:
+        for table in data["tables"].keys():
+            c.execute(f"DELETE FROM {table} WHERE company_id = ?", (dest_company_id,))
+        for table, rows in data["tables"].items():
+            if not rows:
+                continue
+            columns = [col for col in rows[0].keys() if col not in ('id', 'company_id')]
+            placeholders = ','.join(['?' for _ in columns])
+            for row in rows:
+                values = [row[col] for col in columns]
+                c.execute(f"INSERT INTO {table} (company_id, {','.join(columns)}) VALUES (?, {placeholders})", [dest_company_id] + values)
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Import error: {e}")
+        return False
+    finally:
+        conn.close()
+
+# ============================================================
+# PART 2: AUTHENTICATION, PRICING, CORE PAGE FUNCTIONS
+# (CORRECTED get_worker_performance)
+# ============================================================
+
+def create_user(username, email, password, role, company_id, manager_id=None, supervisor_id=None, ip_address=None):
     valid, msg = validate_password_strength(password)
     if not valid:
         return False, msg
@@ -654,19 +874,19 @@ def create_user(username, email, password, role, manager_id=None, supervisor_id=
     c = conn.cursor()
     try:
         c.execute("""
-            INSERT INTO users (username, email, password_hash, salt, role, manager_id, supervisor_id, can_manage_workers, is_active, approval_status, created_at, hire_date, created_ip)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """, (username, email, hashed, salt, role, manager_id, supervisor_id, 1 if role in ['manager','admin'] else 0, 1, 'approved', datetime.now().isoformat(), datetime.now().isoformat(), ip_address))
+            INSERT INTO users (username, email, password_hash, salt, role, company_id, manager_id, supervisor_id, can_manage_workers, is_active, approval_status, created_at, hire_date, created_ip)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (username, email, hashed, salt, role, company_id, manager_id, supervisor_id, 1 if role in ['admin','manager','super_admin','support_staff'] else 0, 1, 'approved', datetime.now().isoformat(), datetime.now().isoformat(), ip_address))
         user_id = c.lastrowid
         conn.commit()
-        log_audit(user_id, "user_created", f"Created {role} {username}")
+        log_audit(user_id, "user_created", f"Created {role} {username} in company {company_id}")
         return True, user_id
     except sqlite3.IntegrityError:
         return False, "Username or email already exists"
     finally:
         conn.close()
 
-def request_worker_account(name, email, password, manager_email):
+def request_worker_account(name, email, password, manager_email, company_id):
     valid, msg = validate_password_strength(password)
     if not valid:
         return False, msg
@@ -675,46 +895,46 @@ def request_worker_account(name, email, password, manager_email):
     c = conn.cursor()
     try:
         c.execute("""
-            INSERT INTO pending_workers (name, email, password_hash, salt, requested_manager_email, requested_at, status)
-            VALUES (?,?,?,?,?,?,?)
-        """, (name, email, hashed, salt, manager_email, datetime.now().isoformat(), 'pending'))
+            INSERT INTO pending_workers (name, email, password_hash, salt, requested_manager_email, company_id, requested_at, status)
+            VALUES (?,?,?,?,?,?,?,?)
+        """, (name, email, hashed, salt, manager_email, company_id, datetime.now().isoformat(), 'pending'))
         conn.commit()
-        log_audit(None, "worker_request", f"Worker {name} requested approval under {manager_email}")
+        log_audit(None, "worker_request", f"Worker {name} requested approval under {manager_email} for company {company_id}")
         return True, "Request submitted. Your manager will review."
     except sqlite3.IntegrityError:
         return False, "Email already in pending queue"
     finally:
         conn.close()
 
-def get_pending_workers_for_manager(manager_email):
+def get_pending_workers_for_manager(manager_email, company_id):
     conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query("SELECT id, name, email, requested_at FROM pending_workers WHERE requested_manager_email = ? AND status = 'pending'", conn, params=(manager_email,))
+    df = pd.read_sql_query("SELECT id, name, email, requested_at FROM pending_workers WHERE requested_manager_email = ? AND company_id = ? AND status = 'pending'", conn, params=(manager_email, company_id))
     conn.close()
     return df
 
-def approve_worker_request(request_id, manager_id):
+def approve_worker_request(request_id, manager_id, company_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT name, email, password_hash, salt FROM pending_workers WHERE id = ?", (request_id,))
+    c.execute("SELECT name, email, password_hash, salt FROM pending_workers WHERE id = ? AND company_id = ?", (request_id, company_id))
     row = c.fetchone()
     if row:
         name, email, pwd_hash, salt = row
         c.execute("""
-            INSERT INTO users (username, email, password_hash, salt, role, manager_id, can_manage_workers, is_active, approval_status, created_at, hire_date, approved_by, approval_date)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """, (name, email, pwd_hash, salt, "worker", manager_id, 0, 1, "approved", datetime.now().isoformat(), datetime.now().isoformat(), manager_id, datetime.now().isoformat()))
+            INSERT INTO users (username, email, password_hash, salt, role, company_id, manager_id, can_manage_workers, is_active, approval_status, created_at, hire_date, approved_by, approval_date)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (name, email, pwd_hash, salt, "worker", company_id, manager_id, 0, 1, "approved", datetime.now().isoformat(), datetime.now().isoformat(), manager_id, datetime.now().isoformat()))
         user_id = c.lastrowid
         c.execute("DELETE FROM pending_workers WHERE id = ?", (request_id,))
         conn.commit()
-        log_audit(manager_id, "worker_approved", f"Approved worker {name} (ID {user_id})")
+        log_audit(manager_id, "worker_approved", f"Approved worker {name} (ID {user_id}) for company {company_id}")
         return True, user_id
     conn.close()
     return False, None
 
-def deny_worker_request(request_id):
+def deny_worker_request(request_id, company_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("DELETE FROM pending_workers WHERE id = ?", (request_id,))
+    c.execute("DELETE FROM pending_workers WHERE id = ? AND company_id = ?", (request_id, company_id))
     conn.commit()
     conn.close()
     return True
@@ -722,10 +942,10 @@ def deny_worker_request(request_id):
 def authenticate_user(email, password, ip_address=None):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT id, username, password_hash, role, manager_id, supervisor_id, login_attempts, locked_until, is_active, approval_status, totp_enabled FROM users WHERE email = ?", (email,))
+    c.execute("SELECT id, username, password_hash, role, company_id, manager_id, supervisor_id, login_attempts, locked_until, is_active, approval_status, totp_enabled FROM users WHERE email = ?", (email,))
     user = c.fetchone()
     if user:
-        uid, uname, hashed, role, mgr_id, sup_id, attempts, locked, active, approval, totp_enabled = user
+        uid, uname, hashed, role, company_id, mgr_id, sup_id, attempts, locked, active, approval, totp_enabled = user
         if not active or approval != 'approved':
             conn.close()
             return False, "Account not active or not approved."
@@ -738,9 +958,9 @@ def authenticate_user(email, password, ip_address=None):
             expires = datetime.now() + timedelta(days=SESSION_EXPIRY_DAYS)
             c.execute("INSERT INTO sessions (user_id, session_token, expires_at, created_at) VALUES (?,?,?,?)", (uid, token, expires.isoformat(), datetime.now().isoformat()))
             conn.commit()
-            log_audit(uid, "login_success", f"User {uname} logged in", ip_address)
+            log_audit(uid, "login_success", f"User {uname} logged in to company {company_id}", ip_address)
             conn.close()
-            return True, {"user_id": uid, "username": uname, "role": role, "manager_id": mgr_id, "supervisor_id": sup_id, "totp_enabled": totp_enabled, "token": token}
+            return True, {"user_id": uid, "username": uname, "role": role, "company_id": company_id, "manager_id": mgr_id, "supervisor_id": sup_id, "totp_enabled": totp_enabled, "token": token}
         else:
             new_attempts = attempts + 1
             locked_until = None
@@ -788,7 +1008,7 @@ def require_role(allowed_roles):
         return wrapper
     return decorator
 
-# ----------------------------- 2FA (TOTP) functions -----------------------------
+# ----------------------------- 2FA (TOTP) -----------------------------
 def generate_totp_secret():
     return pyotp.random_base32()
 
@@ -821,7 +1041,7 @@ def verify_backup_code(user_id, code):
     conn.close()
     return False
 
-# ----------------------------- FLORIDA PRICING DATA -----------------------------
+# ----------------------------- FLORIDA PRICING -----------------------------
 FLORIDA_CITIES = [
     "Orlando", "Miami", "Tampa", "Jacksonville", "Cocoa Beach", 
     "Daytona Beach", "Naples", "Ocala", "Gainesville", "Tallahassee",
@@ -895,7 +1115,7 @@ def calculate_price_with_tiers(city, prop_type, sqft, bedrooms, bathrooms, freq,
     elif contract_months >= 3: total *= 0.95
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT hourly_wage, min_job_fee FROM business_profile WHERE id=1")
+    c.execute("SELECT hourly_wage, min_job_fee FROM business_profile WHERE company_id = ?", (get_current_user_company(),))
     row = c.fetchone()
     conn.close()
     hourly_wage = row[0] if row else 15.0
@@ -925,34 +1145,37 @@ def calculate_price_with_tiers(city, prop_type, sqft, bedrooms, bathrooms, freq,
         "travel_cost": travel_cost
     }
 
-# ----------------------------- WORKER / CLIENT / JOB HELPERS (with access control) -----------------------------
-def get_all_workers_for_manager(manager_id):
+# ----------------------------- WORKER / CLIENT / JOB HELPERS -----------------------------
+def get_all_workers_for_manager(manager_id, company_id):
     conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query("SELECT id, username, email, hire_date, is_active FROM users WHERE manager_id = ? AND role = 'worker'", conn, params=(manager_id,))
+    df = pd.read_sql_query("SELECT id, username, email, hire_date, is_active FROM users WHERE manager_id = ? AND company_id = ? AND role = 'worker'", conn, params=(manager_id, company_id))
     conn.close()
     return df
 
-def get_all_workers_for_supervisor(supervisor_id):
+def get_all_workers_for_supervisor(supervisor_id, company_id):
     conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query("SELECT id, username, email, hire_date, is_active FROM users WHERE supervisor_id = ? AND role = 'worker'", conn, params=(supervisor_id,))
+    df = pd.read_sql_query("SELECT id, username, email, hire_date, is_active FROM users WHERE supervisor_id = ? AND company_id = ? AND role = 'worker'", conn, params=(supervisor_id, company_id))
     conn.close()
     return df
 
 def get_all_clients():
+    company_id = get_current_user_company()
     uid = st.session_state.user['user_id']
-    accessible = get_accessible_user_ids(uid)
+    role = st.session_state.user['role']
+    accessible = get_accessible_user_ids(uid, role, company_id)
     placeholders = ','.join(['?' for _ in accessible])
     conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query(f"SELECT * FROM clients WHERE user_id IN ({placeholders}) ORDER BY business_name", conn, params=accessible)
+    df = pd.read_sql_query(f"SELECT * FROM clients WHERE company_id = ? AND user_id IN ({placeholders}) ORDER BY business_name", conn, params=[company_id] + accessible)
     conn.close()
     return df
 
 def add_client(business, contact, phone, email, address, city, state, zipc, lat, lon, notes):
+    company_id = get_current_user_company()
     uid = st.session_state.user['user_id']
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("INSERT INTO clients (user_id, business_name, contact_name, phone, email, address, city, state, zip, lat, lon, notes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-              (uid, business, contact, phone, email, address, city, state, zipc, lat, lon, notes, datetime.now().isoformat(), datetime.now().isoformat()))
+    c.execute("INSERT INTO clients (company_id, user_id, business_name, contact_name, phone, email, address, city, state, zip, lat, lon, notes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+              (company_id, uid, business, contact, phone, email, address, city, state, zipc, lat, lon, notes, datetime.now().isoformat(), datetime.now().isoformat()))
     cid = c.lastrowid
     conn.commit()
     conn.close()
@@ -974,11 +1197,12 @@ def delete_client(cid):
     conn.close()
 
 def schedule_job(client_id, client_name, client_email, estimate_id, worker_id, date, time_slot, notes=""):
+    company_id = get_current_user_company()
     uid = st.session_state.user['user_id']
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("INSERT INTO scheduled_jobs (user_id, client_id, client_name, client_email, estimate_id, assigned_worker_id, scheduled_date, scheduled_time, notes, status) VALUES (?,?,?,?,?,?,?,?,?,?)",
-              (uid, client_id, client_name, client_email, estimate_id, worker_id, date.isoformat(), time_slot, notes, "scheduled"))
+    c.execute("INSERT INTO scheduled_jobs (company_id, user_id, client_id, client_name, client_email, estimate_id, assigned_worker_id, scheduled_date, scheduled_time, notes, status) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+              (company_id, uid, client_id, client_name, client_email, estimate_id, worker_id, date.isoformat(), time_slot, notes, "scheduled"))
     job_id = c.lastrowid
     conn.commit()
     conn.close()
@@ -989,19 +1213,20 @@ def update_job_status(job_id, status):
     c = conn.cursor()
     if status == "completed":
         c.execute("UPDATE scheduled_jobs SET status = ?, completed_at = ? WHERE id = ?", (status, datetime.now().isoformat(), job_id))
-        # also update worker's completed count if needed
     else:
         c.execute("UPDATE scheduled_jobs SET status = ? WHERE id = ?", (status, job_id))
     conn.commit()
     conn.close()
 
 def get_scheduled_jobs(date_filter=None, status_filter=None):
+    company_id = get_current_user_company()
     uid = st.session_state.user['user_id']
-    accessible = get_accessible_user_ids(uid)
+    role = st.session_state.user['role']
+    accessible = get_accessible_user_ids(uid, role, company_id)
     placeholders = ','.join(['?' for _ in accessible])
     conn = sqlite3.connect(DB_PATH)
-    query = f"SELECT * FROM scheduled_jobs WHERE user_id IN ({placeholders})"
-    params = accessible.copy()
+    query = f"SELECT * FROM scheduled_jobs WHERE company_id = ? AND user_id IN ({placeholders})"
+    params = [company_id] + accessible
     if date_filter:
         query += " AND scheduled_date = ?"
         params.append(date_filter.isoformat())
@@ -1014,35 +1239,43 @@ def get_scheduled_jobs(date_filter=None, status_filter=None):
     return df
 
 def get_upcoming_jobs(days=7):
+    company_id = get_current_user_company()
     uid = st.session_state.user['user_id']
-    accessible = get_accessible_user_ids(uid)
+    role = st.session_state.user['role']
+    accessible = get_accessible_user_ids(uid, role, company_id)
     placeholders = ','.join(['?' for _ in accessible])
     today = datetime.now().date().isoformat()
     future = (datetime.now().date() + timedelta(days=days)).isoformat()
     conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query(f"SELECT * FROM scheduled_jobs WHERE user_id IN ({placeholders}) AND scheduled_date BETWEEN ? AND ? AND status = 'scheduled' ORDER BY scheduled_date", conn, params=accessible + [today, future])
+    df = pd.read_sql_query(f"SELECT * FROM scheduled_jobs WHERE company_id = ? AND user_id IN ({placeholders}) AND scheduled_date BETWEEN ? AND ? AND status = 'scheduled' ORDER BY scheduled_date", conn, params=[company_id] + accessible + [today, future])
     conn.close()
     return df
 
-# ----------------------------- PERFORMANCE & BADGES -----------------------------
+# ----------------------------- PERFORMANCE & BADGES (CORRECTED) -----------------------------
 def get_worker_performance(worker_id):
+    """Get worker's performance metrics from scheduled_jobs and quick_jobs"""
+    company_id = get_current_user_company()
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM job_assignments WHERE worker_id = ? AND status = 'completed'", (worker_id,))
+    # Count completed scheduled jobs for this worker
+    c.execute("SELECT COUNT(*) FROM scheduled_jobs WHERE assigned_worker_id = ? AND company_id = ? AND status = 'completed'", (worker_id, company_id))
     jobs = c.fetchone()[0]
-    c.execute("SELECT SUM(profit) FROM quick_jobs WHERE user_id = ?", (worker_id,))
+    # Get profit from quick_jobs
+    c.execute("SELECT SUM(profit) FROM quick_jobs WHERE user_id = ? AND company_id = ?", (worker_id, company_id))
     profit = c.fetchone()[0] or 0
-    c.execute("SELECT SUM(hours) FROM quick_jobs WHERE user_id = ?", (worker_id,))
+    # Get hours from quick_jobs
+    c.execute("SELECT SUM(hours) FROM quick_jobs WHERE user_id = ? AND company_id = ?", (worker_id, company_id))
     hours = c.fetchone()[0] or 0
     conn.close()
     return jobs, profit, hours
 
 def award_badge(worker_id, badge_name):
+    company_id = get_current_user_company()
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT 1 FROM worker_badges WHERE worker_id = ? AND badge_name = ?", (worker_id, badge_name))
+    c.execute("SELECT 1 FROM worker_badges WHERE worker_id = ? AND badge_name = ? AND company_id = ?", (worker_id, badge_name, company_id))
     if not c.fetchone():
-        c.execute("INSERT INTO worker_badges (worker_id, badge_name, earned_at) VALUES (?,?,?)", (worker_id, badge_name, datetime.now().isoformat()))
+        c.execute("INSERT INTO worker_badges (company_id, worker_id, badge_name, earned_at) VALUES (?,?,?,?)", (company_id, worker_id, badge_name, datetime.now().isoformat()))
         conn.commit()
     conn.close()
 
@@ -1068,60 +1301,66 @@ def update_worker_badges(worker_id):
     conn.close()
 
 def get_worker_badges(worker_id):
+    company_id = get_current_user_company()
     conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query("SELECT badge_name, earned_at FROM worker_badges WHERE worker_id = ? ORDER BY earned_at", conn, params=(worker_id,))
+    df = pd.read_sql_query("SELECT badge_name, earned_at FROM worker_badges WHERE worker_id = ? AND company_id = ? ORDER BY earned_at", conn, params=(worker_id, company_id))
     conn.close()
     return df
 
 # ----------------------------- SWEET SPOT APPROVAL -----------------------------
 def request_sweet_spot_approval(estimate_id, worker_id, requested_price, manager_id):
+    company_id = get_current_user_company()
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("INSERT INTO estimate_approvals (estimate_id, worker_id, requested_price, requested_at, status, manager_id) VALUES (?,?,?,?,?,?)",
-              (estimate_id, worker_id, requested_price, datetime.now().isoformat(), 'pending', manager_id))
+    c.execute("INSERT INTO estimate_approvals (company_id, estimate_id, worker_id, requested_price, requested_at, status, manager_id) VALUES (?,?,?,?,?,?,?)",
+              (company_id, estimate_id, worker_id, requested_price, datetime.now().isoformat(), 'pending', manager_id))
     conn.commit()
     conn.close()
-    log_audit(worker_id, "sweet_spot_request", f"Requested approval for estimate {estimate_id}")
+    log_audit(worker_id, "sweet_spot_request", f"Requested approval for estimate {estimate_id} in company {company_id}")
 
 def get_pending_sweet_spot_requests(manager_id):
+    company_id = get_current_user_company()
     conn = sqlite3.connect(DB_PATH)
     df = pd.read_sql_query("""
         SELECT ea.id, ea.estimate_id, u.username as worker_name, ea.requested_price, ea.requested_at, e.client_name, e.city
         FROM estimate_approvals ea
         JOIN users u ON ea.worker_id = u.id
         JOIN estimates e ON ea.estimate_id = e.id
-        WHERE ea.status = 'pending' AND ea.manager_id = ?
+        WHERE ea.status = 'pending' AND ea.manager_id = ? AND ea.company_id = ?
         ORDER BY ea.requested_at
-    """, conn, params=(manager_id,))
+    """, conn, params=(manager_id, company_id))
     conn.close()
     return df
 
 def approve_sweet_spot(request_id, manager_id):
+    company_id = get_current_user_company()
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT estimate_id, requested_price FROM estimate_approvals WHERE id = ?", (request_id,))
+    c.execute("SELECT estimate_id, requested_price FROM estimate_approvals WHERE id = ? AND company_id = ?", (request_id, company_id))
     row = c.fetchone()
     if row:
         est_id, price = row
-        c.execute("UPDATE estimates SET estimated_price = ?, status = 'sent' WHERE id = ?", (price, est_id))
+        c.execute("UPDATE estimates SET estimated_price = ?, status = 'sent' WHERE id = ? AND company_id = ?", (price, est_id, company_id))
         c.execute("UPDATE estimate_approvals SET status = 'approved', approved_at = ? WHERE id = ?", (datetime.now().isoformat(), request_id))
         conn.commit()
-        log_audit(manager_id, "sweet_spot_approved", f"Approved sweet spot for estimate {est_id}")
+        log_audit(manager_id, "sweet_spot_approved", f"Approved sweet spot for estimate {est_id} in company {company_id}")
         conn.close()
         return True
     conn.close()
     return False
 
 def reject_sweet_spot(request_id):
+    company_id = get_current_user_company()
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("UPDATE estimate_approvals SET status = 'rejected' WHERE id = ?", (request_id,))
+    c.execute("UPDATE estimate_approvals SET status = 'rejected' WHERE id = ? AND company_id = ?", (request_id, company_id))
     conn.commit()
     conn.close()
     return True
 
 # ----------------------------- CERTIFICATION FUNCTIONS -----------------------------
 def add_certification(worker_id, name, issuer, date_earned, expiration, file, notes):
+    company_id = get_current_user_company()
     file_path = None
     if file:
         ext = file.name.split('.')[-1]
@@ -1132,57 +1371,80 @@ def add_certification(worker_id, name, issuer, date_earned, expiration, file, no
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("""
-        INSERT INTO worker_certifications (worker_id, certification_name, issuing_body, date_earned, expiration_date, certificate_file_path, notes, created_at)
-        VALUES (?,?,?,?,?,?,?,?)
-    """, (worker_id, name, issuer, date_earned, expiration, file_path, notes, datetime.now().isoformat()))
+        INSERT INTO worker_certifications (company_id, worker_id, certification_name, issuing_body, date_earned, expiration_date, certificate_file_path, notes, created_at)
+        VALUES (?,?,?,?,?,?,?,?,?)
+    """, (company_id, worker_id, name, issuer, date_earned, expiration, file_path, notes, datetime.now().isoformat()))
     conn.commit()
     conn.close()
 
 def get_certifications_for_worker(worker_id):
+    company_id = get_current_user_company()
     conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query("SELECT * FROM worker_certifications WHERE worker_id = ? ORDER BY date_earned DESC", conn, params=(worker_id,))
+    df = pd.read_sql_query("SELECT * FROM worker_certifications WHERE worker_id = ? AND company_id = ? ORDER BY date_earned DESC", conn, params=(worker_id, company_id))
     conn.close()
     return df
 
 def verify_certification(cert_id, verifier_id):
+    company_id = get_current_user_company()
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("UPDATE worker_certifications SET verified_by = ?, verified_at = ? WHERE id = ?", (verifier_id, datetime.now().isoformat(), cert_id))
+    c.execute("UPDATE worker_certifications SET verified_by = ?, verified_at = ? WHERE id = ? AND company_id = ?", (verifier_id, datetime.now().isoformat(), cert_id, company_id))
     conn.commit()
     conn.close()
 
 # ============================================================
-# PART 3: SETUP WIZARD, LOGIN, ACCOUNT PAGES, DASHBOARD,
-# ESTIMATE, QUICK JOB, CLIENTS, WORKERS, SCHEDULE
+# PAGE FUNCTIONS (SETUP, LOGIN, DASHBOARD, ESTIMATE, QUICK, CLIENTS, WORKERS, SCHEDULE)
 # ============================================================
 
 def setup_wizard():
     st.title("🧹 ProfitClean")
     st.caption("Created by Dust Bros & Co.")
-    with st.form("setup"):
-        col1, col2 = st.columns(2)
-        with col1:
-            business_name = st.text_input("Business Name *", "Dust Bros and Co")
-            phone = st.text_input("Phone *", "(555) 123-4567")
-            hourly_wage = st.number_input("Base Hourly Wage", min_value=10.0, value=15.0, step=0.5)
-        with col2:
-            email = st.text_input("Email *", "hello@dustbros.com")
-            home_city = st.selectbox("Home Base City", FLORIDA_CITIES)
-            min_job_fee = st.number_input("Minimum Job Fee", min_value=50, value=150, step=25)
-        smtp_email = st.text_input("SMTP Email (optional)")
-        smtp_password = st.text_input("SMTP Password", type="password")
-        if st.form_submit_button("Start Using ProfitClean"):
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            c.execute("DELETE FROM business_profile")
-            c.execute("""
-                INSERT INTO business_profile (id, business_name, phone, email, hourly_wage, profit_target, min_job_fee, home_city, per_mile_rate, sales_tax_rate, smtp_email, smtp_password, setup_complete)
-                VALUES (1,?,?,?,?,?,?,?,?,?,?,?,1)
-            """, (business_name, phone, email, hourly_wage, 0.30, min_job_fee, home_city, 0.65, SALES_TAX_RATE, smtp_email, smtp_password))
-            conn.commit()
-            conn.close()
-            st.success("Setup complete! Redirecting...")
-            time.sleep(1)
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM companies")
+    company_count = c.fetchone()[0]
+    conn.close()
+    if company_count == 0:
+        st.info("Welcome! Let's set up your company.")
+        with st.form("setup"):
+            col1, col2 = st.columns(2)
+            with col1:
+                business_name = st.text_input("Company Name *", "Dust Bros and Co")
+                phone = st.text_input("Phone *", "(555) 123-4567")
+                hourly_wage = st.number_input("Base Hourly Wage", min_value=10.0, value=15.0, step=0.5)
+            with col2:
+                admin_email = st.text_input("Admin Email *", "admin@profitclean.com")
+                home_city = st.selectbox("Home Base City", FLORIDA_CITIES)
+                min_job_fee = st.number_input("Minimum Job Fee", min_value=50, value=150, step=25)
+            subdomain = st.text_input("Subdomain *", "dustbros", help="Will be used for your company URL")
+            admin_username = st.text_input("Admin Username *", "admin")
+            admin_password = st.text_input("Admin Password *", type="password", value="Admin123!")
+            confirm_password = st.text_input("Confirm Password *", type="password")
+            smtp_email = st.text_input("SMTP Email (optional)")
+            smtp_password = st.text_input("SMTP Password", type="password")
+            if st.form_submit_button("Create My Company"):
+                if admin_password != confirm_password:
+                    st.error("Passwords do not match")
+                elif not all([business_name, subdomain, admin_username, admin_email, admin_password]):
+                    st.error("Please fill all required fields")
+                else:
+                    success, result = create_company(business_name, subdomain, admin_email, admin_username, admin_password)
+                    if success:
+                        conn = sqlite3.connect(DB_PATH)
+                        c = conn.cursor()
+                        c.execute("UPDATE business_profile SET business_name=?, phone=?, hourly_wage=?, min_job_fee=?, home_city=?, per_mile_rate=?, sales_tax_rate=?, smtp_email=?, smtp_password=?, setup_complete=1 WHERE company_id=?", 
+                                  (business_name, phone, hourly_wage, min_job_fee, home_city, 0.65, SALES_TAX_RATE, smtp_email, smtp_password, result))
+                        conn.commit()
+                        conn.close()
+                        st.success("Company created! Please log in.")
+                        st.session_state.page = "login"
+                        st.rerun()
+                    else:
+                        st.error(result)
+    else:
+        st.info("ProfitClean is already set up. Please log in.")
+        if st.button("Go to Login"):
+            st.session_state.page = "login"
             st.rerun()
 
 def login_page():
@@ -1213,7 +1475,7 @@ def login_page():
             st.rerun()
     with col2:
         if st.button("🔑 Forgot Password?"):
-            st.info("Contact your administrator.")
+            st.info("Contact your company administrator.")
 
 def two_factor_page():
     st.markdown("### 🔐 Two‑Factor Authentication")
@@ -1241,33 +1503,82 @@ def two_factor_page():
 
 def create_account_page():
     st.markdown("### 📝 Create Your Account")
-    with st.form("create_account"):
-        name = st.text_input("Full Name *")
-        email = st.text_input("Email *")
-        password = st.text_input("Password *", type="password")
-        confirm = st.text_input("Confirm Password *", type="password")
-        role = st.selectbox("Role", ["worker", "manager"])
-        manager_email = st.text_input("Manager's Email (required for workers)", help="If you select worker, provide manager email")
-        if st.form_submit_button("Request Account"):
-            if password != confirm:
-                st.error("Passwords do not match")
-            elif not all([name, email, password]):
-                st.error("All fields required")
-            else:
-                if role == "worker":
-                    if not manager_email:
-                        st.error("Worker must provide manager email")
-                    else:
-                        success, msg = request_worker_account(name, email, password, manager_email)
-                        if success:
-                            st.success(msg)
-                            st.session_state.page = "login"
-                            st.rerun()
+    st.caption("Join an existing company or start your own")
+    account_type = st.radio("Do you want to:", ["Join an existing company", "Start my own cleaning company"])
+    if account_type == "Join an existing company":
+        with st.form("join_company"):
+            name = st.text_input("Full Name *")
+            email = st.text_input("Email *")
+            password = st.text_input("Password *", type="password")
+            confirm = st.text_input("Confirm Password *", type="password")
+            company_code = st.text_input("Company Invite Code *", help="Enter the subdomain or invite code provided by your manager")
+            role = st.selectbox("Requested Role", ["worker", "supervisor", "manager"])
+            if st.form_submit_button("Request to Join"):
+                if password != confirm:
+                    st.error("Passwords do not match")
+                elif not all([name, email, password, company_code]):
+                    st.error("All fields required")
+                else:
+                    conn = sqlite3.connect(DB_PATH)
+                    c = conn.cursor()
+                    c.execute("SELECT id FROM companies WHERE subdomain = ? AND is_active = 1", (company_code,))
+                    company = c.fetchone()
+                    conn.close()
+                    if company:
+                        company_id = company[0]
+                        conn = sqlite3.connect(DB_PATH)
+                        c = conn.cursor()
+                        c.execute("SELECT email FROM users WHERE company_id = ? AND role = 'manager' LIMIT 1", (company_id,))
+                        manager_row = c.fetchone()
+                        conn.close()
+                        manager_email = manager_row[0] if manager_row else None
+                        if manager_email:
+                            success, msg = request_worker_account(name, email, password, manager_email, company_id)
+                            if success:
+                                st.success(msg)
+                                st.info("Your manager will review and approve your account.")
+                                st.session_state.page = "login"
+                                st.rerun()
+                            else:
+                                st.error(msg)
                         else:
-                            st.error(msg)
-                else:  # manager
-                    st.error("Manager accounts must be created by admin. Please contact admin.")
-    if st.button("← Back"):
+                            st.error("No manager found for this company. Please contact the company directly.")
+                    else:
+                        st.error("Invalid company invite code")
+    else:
+        with st.form("create_company"):
+            st.markdown("#### Your Account")
+            name = st.text_input("Full Name *")
+            email = st.text_input("Email *")
+            password = st.text_input("Password *", type="password")
+            confirm = st.text_input("Confirm Password *", type="password")
+            st.markdown("#### Your Company")
+            business_name = st.text_input("Company Name *")
+            subdomain = st.text_input("Subdomain *", help="This will be your unique URL: yourcompany.profitclean.com")
+            phone = st.text_input("Phone *")
+            home_city = st.selectbox("Home Base City", FLORIDA_CITIES)
+            hourly_wage = st.number_input("Base Hourly Wage", min_value=10.0, value=15.0, step=0.5)
+            min_job_fee = st.number_input("Minimum Job Fee", min_value=50, value=150, step=25)
+            if st.form_submit_button("Create My Company"):
+                if password != confirm:
+                    st.error("Passwords do not match")
+                elif not all([name, email, password, business_name, subdomain, phone]):
+                    st.error("All fields required")
+                else:
+                    success, result = create_company(business_name, subdomain, email, name, password)
+                    if success:
+                        conn = sqlite3.connect(DB_PATH)
+                        c = conn.cursor()
+                        c.execute("UPDATE business_profile SET business_name=?, phone=?, hourly_wage=?, min_job_fee=?, home_city=?, per_mile_rate=?, sales_tax_rate=?, setup_complete=1 WHERE company_id=?", 
+                                  (business_name, phone, hourly_wage, min_job_fee, home_city, 0.65, SALES_TAX_RATE, result))
+                        conn.commit()
+                        conn.close()
+                        st.success("Company created successfully! Please log in.")
+                        st.session_state.page = "login"
+                        st.rerun()
+                    else:
+                        st.error(result)
+    if st.button("← Back to Login"):
         st.session_state.page = "login"
         st.rerun()
 
@@ -1313,37 +1624,18 @@ def edit_profile_page():
     if not user_data:
         st.error("User not found")
         return
-    uid, username, email, role, mgr_id, sup_id, hire_date, totp_enabled = user_data
-    with st.form("edit_profile"):
+    uid, username, email, role, company_id, mgr_id, sup_id, hire_date, totp_enabled = user_data
+    with st.form("edit_profile_form"):
         new_username = st.text_input("Username", username)
         new_email = st.text_input("Email", email)
         st.text_input("Role", role, disabled=True)
+        st.text_input("Company ID", str(company_id) if company_id else "N/A", disabled=True)
         st.text_input("Hire Date", hire_date[:10] if hire_date else "N/A", disabled=True)
         st.markdown("#### Change Password")
         cur_pwd = st.text_input("Current Password", type="password")
         new_pwd = st.text_input("New Password", type="password")
         confirm_pwd = st.text_input("Confirm New Password", type="password")
-        st.markdown("#### Two‑Factor Authentication")
-        if totp_enabled:
-            st.success("2FA is ENABLED")
-            if st.button("Disable 2FA"):
-                conn = sqlite3.connect(DB_PATH)
-                c = conn.cursor()
-                c.execute("UPDATE users SET totp_enabled = 0, totp_secret = NULL WHERE id = ?", (uid,))
-                conn.commit()
-                conn.close()
-                st.success("2FA disabled")
-                st.rerun()
-        else:
-            st.info("2FA is disabled. You can enable it.")
-            if st.button("Enable 2FA"):
-                secret = generate_totp_secret()
-                uri = get_totp_uri(secret, email)
-                st.session_state.totp_secret = secret
-                st.session_state.totp_email = email
-                st.session_state.page = "setup_2fa"
-                st.rerun()
-        if st.form_submit_button("Save Changes"):
+        if st.form_submit_button("Save Profile Changes"):
             updates = []
             params = []
             if new_username != username:
@@ -1353,7 +1645,6 @@ def edit_profile_page():
                 updates.append("email = ?")
                 params.append(new_email)
             if new_pwd:
-                # Verify current password
                 conn = sqlite3.connect(DB_PATH)
                 c = conn.cursor()
                 c.execute("SELECT password_hash FROM users WHERE id = ?", (uid,))
@@ -1381,17 +1672,39 @@ def edit_profile_page():
                 conn.close()
                 st.success("Profile updated")
                 st.rerun()
-    if st.button("← Back"):
+    st.markdown("---")
+    st.markdown("#### Two‑Factor Authentication")
+    if totp_enabled:
+        st.success("2FA is ENABLED")
+        if st.button("Disable 2FA"):
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("UPDATE users SET totp_enabled = 0, totp_secret = NULL WHERE id = ?", (uid,))
+            conn.commit()
+            conn.close()
+            st.success("2FA disabled")
+            st.rerun()
+    else:
+        st.info("2FA is disabled. You can enable it.")
+        if st.button("Enable 2FA"):
+            secret = generate_totp_secret()
+            uri = get_totp_uri(secret, email)
+            st.session_state.totp_secret = secret
+            st.session_state.totp_email = email
+            st.session_state.page = "setup_2fa"
+            st.rerun()
+    if st.button("← Back to Dashboard"):
         st.session_state.page = "dashboard"
         st.rerun()
 
-# ----------------------------- DASHBOARD -----------------------------
-@require_auth
 def dashboard():
     user = st.session_state.user
     business_name = get_business_name()
+    company_id = get_current_user_company()
     st.title(f"🧹 {business_name}")
-    st.caption(f"Welcome, {user['username']} ({user['role']}) | Created by Dust Bros & Co.")
+    st.caption(f"Welcome, {user['username']} ({user['role']}) | Company ID: {company_id} | Created by Dust Bros & Co.")
+    if st.session_state.user.get('role_override'):
+        st.warning(f"You are currently viewing data for company ID: {st.session_state.user['company_id']} (override active).")
     with st.sidebar:
         st.markdown("### 📋 Menu")
         menu_items = [
@@ -1416,6 +1729,8 @@ def dashboard():
             ("⚙️ Settings", "settings"),
             ("✏️ Edit Profile", "edit_profile"),
         ]
+        if user['role'] in ['super_admin', 'support_staff']:
+            menu_items.append(("🔧 Admin Tools", "admin_companies"))
         for label, page in menu_items:
             if st.button(label, use_container_width=True, key=f"nav_{page}"):
                 st.session_state.page = page
@@ -1430,16 +1745,15 @@ def dashboard():
             logout_user()
             st.rerun()
     st.markdown("---")
-    # Quick stats
-    accessible = get_accessible_user_ids(user['user_id'])
+    accessible = get_accessible_user_ids(user['user_id'], user['role'], company_id)
     placeholders = ','.join(['?' for _ in accessible])
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute(f"SELECT COUNT(*) FROM clients WHERE user_id IN ({placeholders})", accessible)
+    c.execute(f"SELECT COUNT(*) FROM clients WHERE company_id = ? AND user_id IN ({placeholders})", [company_id] + accessible)
     client_cnt = c.fetchone()[0]
-    c.execute(f"SELECT COUNT(*) FROM estimates WHERE user_id IN ({placeholders}) AND status='sent'", accessible)
+    c.execute(f"SELECT COUNT(*) FROM estimates WHERE company_id = ? AND user_id IN ({placeholders}) AND status='sent'", [company_id] + accessible)
     pending = c.fetchone()[0]
-    c.execute("SELECT COUNT(*) FROM users WHERE manager_id = ? AND role='worker'", (user['user_id'],))
+    c.execute("SELECT COUNT(*) FROM users WHERE manager_id = ? AND role='worker' AND company_id = ?", (user['user_id'], company_id))
     worker_cnt = c.fetchone()[0]
     conn.close()
     col1, col2, col3 = st.columns(3)
@@ -1448,13 +1762,12 @@ def dashboard():
     col3.metric("Workers Under You", worker_cnt)
     st.info("Use sidebar to navigate.")
 
-# ----------------------------- ESTIMATE PAGE -----------------------------
-@require_auth
 def estimate_page():
     if st.button("← Back"):
         st.session_state.page = "dashboard"
         st.rerun()
     st.markdown("### 📝 New Estimate")
+    company_id = get_current_user_company()
     city = st.selectbox("City", FLORIDA_CITIES)
     prop = st.selectbox("Property Type", list(PROPERTY_TYPES.keys()))
     freq = st.selectbox("Frequency", list(FREQUENCIES.keys()))
@@ -1500,32 +1813,28 @@ def estimate_page():
     c4.markdown(f'<div class="pricing-tier-fair">🎯 SWEET SPOT<br>${result["sweet_spot"]["total"]}<br>{result["sweet_spot"]["margin"]}% margin</div>', unsafe_allow_html=True)
     with st.expander("Internal Cost Breakdown"):
         st.write(f"True cost: ${result['true_cost']:.2f}")
-    # Save as draft (fair market)
     if st.button("Save as Draft (Fair Market)"):
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute("""INSERT INTO estimates (user_id, client_name, client_email, city, property_type, square_feet, bedrooms, bathrooms, frequency, complexity, travel_miles, toll_cost, add_on_window, add_on_carpet, add_on_floor, add_on_disinfection, add_on_pressure, subtotal, tax, estimated_price, lowest_price, fair_price, highest_price, sweet_spot_price, created_at, status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                  (st.session_state.user['user_id'], client_name, client_email, city, prop, sqft, bedrooms, bathrooms, freq, complexity, travel_miles, result['toll_estimate'], 1 if add_window else 0, 1 if add_carpet else 0, 1 if add_floor else 0, 1 if add_disinfection else 0, 1 if add_pressure else 0, result['fair']['subtotal'], result['fair']['tax'], result['fair']['total'], result['lowest']['total'], result['fair']['total'], result['highest']['total'], result['sweet_spot']['total'], datetime.now().isoformat(), "draft"))
+        c.execute("""INSERT INTO estimates (company_id, user_id, client_name, client_email, city, property_type, square_feet, bedrooms, bathrooms, frequency, complexity, travel_miles, toll_cost, add_on_window, add_on_carpet, add_on_floor, add_on_disinfection, add_on_pressure, subtotal, tax, estimated_price, lowest_price, fair_price, highest_price, sweet_spot_price, created_at, status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                  (company_id, st.session_state.user['user_id'], client_name, client_email, city, prop, sqft, bedrooms, bathrooms, freq, complexity, travel_miles, result['toll_estimate'], 1 if add_window else 0, 1 if add_carpet else 0, 1 if add_floor else 0, 1 if add_disinfection else 0, 1 if add_pressure else 0, result['fair']['subtotal'], result['fair']['tax'], result['fair']['total'], result['lowest']['total'], result['fair']['total'], result['highest']['total'], result['sweet_spot']['total'], datetime.now().isoformat(), "draft"))
         conn.commit()
         conn.close()
         st.success("Estimate saved as draft.")
-    # Sweet spot approval request (for workers)
     if st.session_state.user['role'] == 'worker':
         manager_id = st.session_state.user.get('manager_id')
         if manager_id:
             if st.button("📨 Request Sweet‑Spot Approval"):
-                # First save estimate as draft if not already, then request approval
                 st.warning("Please save the estimate first, then request approval from the Workers page.")
         else:
             st.info("You don't have a manager assigned.")
 
-# ----------------------------- QUICK JOB -----------------------------
-@require_auth
 def quick_job_page():
     if st.button("← Back"):
         st.session_state.page = "dashboard"
         st.rerun()
     st.markdown("### ⚡ Quick Job Entry")
+    company_id = get_current_user_company()
     with st.form("quick"):
         date = st.date_input("Date", datetime.now())
         desc = st.text_input("Description")
@@ -1534,7 +1843,7 @@ def quick_job_page():
         expenses = st.number_input("Expenses", 0.0, 500.0, 25.0)
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute("SELECT hourly_wage FROM business_profile WHERE id=1")
+        c.execute("SELECT hourly_wage FROM business_profile WHERE company_id = ?", (company_id,))
         row = c.fetchone()
         conn.close()
         hourly = row[0] if row else 15.0
@@ -1543,16 +1852,14 @@ def quick_job_page():
         if st.form_submit_button("Save"):
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
-            c.execute("INSERT INTO quick_jobs (user_id, job_date, description, hours, amount_invoiced, job_expenses, profit, created_at) VALUES (?,?,?,?,?,?,?,?)",
-                      (st.session_state.user['user_id'], date.isoformat(), desc, hours, amount, expenses, profit, datetime.now().isoformat()))
+            c.execute("INSERT INTO quick_jobs (company_id, user_id, job_date, description, hours, amount_invoiced, job_expenses, profit, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                      (company_id, st.session_state.user['user_id'], date.isoformat(), desc, hours, amount, expenses, profit, datetime.now().isoformat()))
             conn.commit()
             conn.close()
             update_worker_badges(st.session_state.user['user_id'])
             st.success("Quick job saved!")
             st.rerun()
 
-# ----------------------------- CLIENTS PAGE -----------------------------
-@require_auth
 def clients_page():
     if st.button("← Back"):
         st.session_state.page = "dashboard"
@@ -1595,34 +1902,50 @@ def clients_page():
                     delete_client(row['id'])
                     st.rerun()
 
-# ----------------------------- WORKERS PAGE (Manager & Admin) -----------------------------
-@require_role(['admin','manager'])
 def workers_page():
     if st.button("← Back"):
         st.session_state.page = "dashboard"
         st.rerun()
     st.markdown("### 👷 Worker Management")
     user = st.session_state.user
-    if user['role'] == 'admin':
+    company_id = get_current_user_company()
+    if user['role'] == 'super_admin':
         conn = sqlite3.connect(DB_PATH)
-        workers = pd.read_sql_query("SELECT id, username, email, manager_id, supervisor_id, is_active, hire_date FROM users WHERE role IN ('worker','supervisor')", conn)
+        workers = pd.read_sql_query("SELECT id, username, email, company_id, manager_id, supervisor_id, role, is_active, hire_date FROM users WHERE role IN ('worker','supervisor','manager')", conn)
         conn.close()
-        st.subheader("All Workers")
+        st.subheader("All Workers (All Companies)")
         st.dataframe(workers)
-        with st.expander("Assign Worker to Manager/Supervisor"):
-            worker_id = st.selectbox("Worker", workers['id'].tolist())
-            manager_id = st.number_input("Manager ID", min_value=1)
-            supervisor_id = st.number_input("Supervisor ID", min_value=1)
-            if st.button("Assign"):
-                conn = sqlite3.connect(DB_PATH)
-                c = conn.cursor()
-                c.execute("UPDATE users SET manager_id = ?, supervisor_id = ? WHERE id = ?", (manager_id, supervisor_id, worker_id))
-                conn.commit()
-                conn.close()
-                st.success("Updated")
+    elif user['role'] == 'support_staff':
+        conn = sqlite3.connect(DB_PATH)
+        workers = pd.read_sql_query("SELECT id, username, email, company_id, manager_id, supervisor_id, role, is_active, hire_date FROM users", conn)
+        conn.close()
+        st.subheader("All Workers (Troubleshooting View)")
+        st.dataframe(workers)
+        st.info("Support staff can view all users but cannot modify them here. Use Admin Tools to switch company.")
+    elif user['role'] == 'admin':
+        conn = sqlite3.connect(DB_PATH)
+        workers = pd.read_sql_query("SELECT id, username, email, manager_id, supervisor_id, role, is_active, hire_date FROM users WHERE company_id = ?", conn, params=(company_id,))
+        conn.close()
+        st.subheader("All Users in Your Company")
+        st.dataframe(workers)
+        with st.expander("➕ Create New Manager"):
+            with st.form("create_manager"):
+                name = st.text_input("Name")
+                email = st.text_input("Email")
+                temp_password = st.text_input("Temporary Password", type="password")
+                if st.form_submit_button("Create Manager"):
+                    if name and email and temp_password:
+                        success, msg = create_user(name, email, temp_password, "manager", company_id, manager_id=user['user_id'])
+                        if success:
+                            st.success(f"Manager {name} created")
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                    else:
+                        st.error("All fields required")
     else:  # manager
         st.subheader("Your Workers")
-        workers = get_all_workers_for_manager(user['user_id'])
+        workers = get_all_workers_for_manager(user['user_id'], company_id)
         st.dataframe(workers)
         st.subheader("Invite New Worker")
         with st.form("invite"):
@@ -1631,7 +1954,7 @@ def workers_page():
             temp_password = st.text_input("Temporary Password", type="password")
             if st.form_submit_button("Invite"):
                 if name and email and temp_password:
-                    success, msg = create_user(name, email, temp_password, "worker", manager_id=user['user_id'])
+                    success, msg = create_user(name, email, temp_password, "worker", company_id, manager_id=user['user_id'])
                     if success:
                         st.success(f"Worker {name} created")
                         st.rerun()
@@ -1640,22 +1963,21 @@ def workers_page():
                 else:
                     st.error("All fields required")
         st.subheader("Pending Worker Requests")
-        pending = get_pending_workers_for_manager(st.session_state.user.get('email', ''))
+        pending = get_pending_workers_for_manager(st.session_state.user.get('email', ''), company_id)
         if not pending.empty:
             for _, req in pending.iterrows():
                 st.write(f"{req['name']} ({req['email']}) requested on {req['requested_at']}")
                 col1, col2 = st.columns(2)
                 if col1.button(f"Approve", key=f"app_{req['id']}"):
-                    approve_worker_request(req['id'], user['user_id'])
+                    approve_worker_request(req['id'], user['user_id'], company_id)
                     st.success("Approved")
                     st.rerun()
                 if col2.button(f"Deny", key=f"den_{req['id']}"):
-                    deny_worker_request(req['id'])
+                    deny_worker_request(req['id'], company_id)
                     st.success("Denied")
                     st.rerun()
         else:
             st.info("No pending requests")
-        # Sweet spot approval requests for this manager
         st.subheader("Sweet‑Spot Approval Requests")
         sweet_requests = get_pending_sweet_spot_requests(user['user_id'])
         if not sweet_requests.empty:
@@ -1673,13 +1995,12 @@ def workers_page():
         else:
             st.info("No sweet‑spot requests pending")
 
-# ----------------------------- SCHEDULE PAGE -----------------------------
-@require_auth
 def schedule_page():
     if st.button("← Back"):
         st.session_state.page = "dashboard"
         st.rerun()
     st.markdown("### 📅 Job Schedule")
+    company_id = get_current_user_company()
     view_date = st.date_input("Date", datetime.now())
     status_filter = st.selectbox("Status", ["All","scheduled","completed","cancelled"])
     df = get_scheduled_jobs(date_filter=view_date, status_filter=status_filter)
@@ -1691,10 +2012,10 @@ def schedule_page():
         clients_df = get_all_clients()
         client_options = ["Select..."] + clients_df['business_name'].tolist()
         client = st.selectbox("Client", client_options)
-        accessible_workers = get_accessible_user_ids(st.session_state.user['user_id'])
+        accessible_workers = get_accessible_user_ids(st.session_state.user['user_id'], st.session_state.user['role'], company_id)
         placeholders = ','.join(['?' for _ in accessible_workers])
         conn = sqlite3.connect(DB_PATH)
-        workers_df = pd.read_sql_query(f"SELECT id, username FROM users WHERE role='worker' AND id IN ({placeholders})", conn, params=accessible_workers)
+        workers_df = pd.read_sql_query(f"SELECT id, username FROM users WHERE role='worker' AND company_id = ? AND id IN ({placeholders})", conn, params=[company_id] + accessible_workers)
         conn.close()
         worker_options = ["Unassigned"] + workers_df['username'].tolist()
         worker = st.selectbox("Worker", worker_options)
@@ -1708,13 +2029,12 @@ def schedule_page():
                 st.rerun()
 
 # ============================================================
-# PART 4: INSPECTIONS, PROFIT, HISTORY, CHAT, SUPPLIES, AI,
-# QR, GPS, BACKUP, SUPPORT, SETTINGS, PERFORMANCE,
-# CERTIFICATIONS, CLIENT PORTAL
+# PART 3: REMAINING PAGE FUNCTIONS & MAIN ROUTING
+# INSPECTIONS, PROFIT, HISTORY, CHAT, SUPPLIES, AI, QR, GPS,
+# BACKUP, SUPPORT, SETTINGS, PERFORMANCE, CERTIFICATIONS,
+# CLIENT PORTAL, ADMIN COMPANIES, TERMS, MAIN
 # ============================================================
 
-# ----------------------------- INSPECTIONS (Dynamic) -----------------------------
-@require_auth
 def inspections_page():
     if st.button("← Back"):
         st.session_state.page = "dashboard"
@@ -1735,45 +2055,51 @@ def inspections_page():
             area['status'] = status
             area['notes'] = notes
     if st.button("Save Inspection"):
+        company_id = get_current_user_company()
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute("INSERT INTO inspections (user_id, client_name, areas_json, status, started_at) VALUES (?,?,?,?,?)",
-                  (st.session_state.user['user_id'], "Sample Client", json.dumps(st.session_state.inspection_areas), "completed", datetime.now().isoformat()))
+        c.execute("INSERT INTO inspections (company_id, user_id, client_name, areas_json, status, started_at) VALUES (?,?,?,?,?,?)",
+                  (company_id, st.session_state.user['user_id'], "Sample Client", json.dumps(st.session_state.inspection_areas), "completed", datetime.now().isoformat()))
         conn.commit()
         conn.close()
         st.success("Inspection saved")
         st.session_state.inspection_areas = []
         st.rerun()
 
-# ----------------------------- PROFIT DASHBOARD -----------------------------
-@require_auth
 def profit_page():
     if st.button("← Back"):
         st.session_state.page = "dashboard"
         st.rerun()
     st.markdown("### 💰 Profit Dashboard")
+    company_id = get_current_user_company()
     conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query("SELECT * FROM quick_jobs WHERE user_id = ? ORDER BY job_date DESC", conn, params=(st.session_state.user['user_id'],))
+    df = pd.read_sql_query("SELECT * FROM quick_jobs WHERE user_id = ? AND company_id = ? ORDER BY job_date DESC", conn, params=(st.session_state.user['user_id'], company_id))
     c = conn.cursor()
-    c.execute("SELECT insurance, vehicle, software, advertising, other FROM monthly_expenses WHERE user_id = ? AND month_year = ?", (st.session_state.user['user_id'], datetime.now().strftime("%Y-%m")))
+    c.execute("SELECT insurance, vehicle, software, advertising, other FROM monthly_expenses WHERE user_id = ? AND company_id = ? AND month_year = ?", 
+              (st.session_state.user['user_id'], company_id, datetime.now().strftime("%Y-%m")))
     exp_row = c.fetchone()
     conn.close()
-    expenses = {"insurance":0,"vehicle":0,"software":0,"advertising":0,"other":0}
+    expenses = {"insurance":0.0,"vehicle":0.0,"software":0.0,"advertising":0.0,"other":0.0}
     if exp_row:
-        expenses = dict(zip(["insurance","vehicle","software","advertising","other"], [float(x) if x else 0 for x in exp_row]))
+        expenses = dict(zip(["insurance","vehicle","software","advertising","other"], [float(x) if x is not None else 0.0 for x in exp_row]))
     total_exp = sum(expenses.values())
     st.markdown("#### Monthly Fixed Expenses")
-    col1,col2,col3,col4,col5 = st.columns(5)
-    new_ins = col1.number_input("Insurance", value=expenses["insurance"], step=50.0)
-    new_veh = col2.number_input("Vehicle", value=expenses["vehicle"], step=50.0)
-    new_sw = col3.number_input("Software", value=expenses["software"], step=25.0)
-    new_adv = col4.number_input("Advertising", value=expenses["advertising"], step=50.0)
-    new_other = col5.number_input("Other", value=expenses["other"], step=50.0)
+    col1, col2, col3, col4, col5 = st.columns(5)
+    with col1:
+        new_ins = st.number_input("Insurance", value=float(expenses["insurance"]), step=50.0)
+    with col2:
+        new_veh = st.number_input("Vehicle", value=float(expenses["vehicle"]), step=50.0)
+    with col3:
+        new_sw = st.number_input("Software", value=float(expenses["software"]), step=25.0)
+    with col4:
+        new_adv = st.number_input("Advertising", value=float(expenses["advertising"]), step=50.0)
+    with col5:
+        new_other = st.number_input("Other", value=float(expenses["other"]), step=50.0)
     if st.button("Save Expenses"):
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute("INSERT OR REPLACE INTO monthly_expenses (user_id, month_year, insurance, vehicle, software, advertising, other) VALUES (?,?,?,?,?,?,?)",
-                  (st.session_state.user['user_id'], datetime.now().strftime("%Y-%m"), new_ins, new_veh, new_sw, new_adv, new_other))
+        c.execute("INSERT OR REPLACE INTO monthly_expenses (user_id, company_id, month_year, insurance, vehicle, software, advertising, other) VALUES (?,?,?,?,?,?,?,?)",
+                  (st.session_state.user['user_id'], company_id, datetime.now().strftime("%Y-%m"), new_ins, new_veh, new_sw, new_adv, new_other))
         conn.commit()
         conn.close()
         st.success("Saved")
@@ -1781,34 +2107,32 @@ def profit_page():
     if df.empty:
         st.info("No quick jobs yet")
     else:
-        total_rev = df["amount_invoiced"].sum()
-        total_profit = df["profit"].sum()
+        total_rev = float(df["amount_invoiced"].sum())
+        total_profit = float(df["profit"].sum())
         margin = (total_profit/total_rev*100) if total_rev>0 else 0
-        col1,col2,col3 = st.columns(3)
+        col1, col2, col3 = st.columns(3)
         col1.metric("Total Revenue", f"${total_rev:,.2f}")
         col2.metric("Total Profit", f"${total_profit:,.2f}")
         col3.metric("Margin", f"{margin:.1f}%")
         net = total_profit - total_exp
         st.metric("Net Profit (after overhead)", f"${net:,.2f}")
         st.dataframe(df[["job_date","description","hours","amount_invoiced","profit"]])
-        # Chart
         df['month'] = pd.to_datetime(df['job_date']).dt.strftime("%Y-%m")
         monthly = df.groupby('month')['profit'].sum().reset_index()
         if not monthly.empty:
             fig = px.bar(monthly, x='month', y='profit', title="Monthly Profit")
             st.plotly_chart(fig, use_container_width=True)
 
-# ----------------------------- HISTORY -----------------------------
-@require_auth
 def history_page():
     if st.button("← Back"):
         st.session_state.page = "dashboard"
         st.rerun()
     st.markdown("### 📋 Estimate History")
-    accessible = get_accessible_user_ids(st.session_state.user['user_id'])
+    company_id = get_current_user_company()
+    accessible = get_accessible_user_ids(st.session_state.user['user_id'], st.session_state.user['role'], company_id)
     placeholders = ','.join(['?' for _ in accessible])
     conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query(f"SELECT id, client_name, city, property_type, estimated_price, created_at, status FROM estimates WHERE user_id IN ({placeholders}) ORDER BY created_at DESC", conn, params=accessible)
+    df = pd.read_sql_query(f"SELECT id, client_name, city, property_type, estimated_price, created_at, status FROM estimates WHERE company_id = ? AND user_id IN ({placeholders}) ORDER BY created_at DESC", conn, params=[company_id] + accessible)
     conn.close()
     if df.empty:
         st.info("No estimates")
@@ -1817,8 +2141,26 @@ def history_page():
         csv = df.to_csv(index=False)
         st.download_button("Export CSV", csv, "estimates.csv", "text/csv")
 
-# ----------------------------- TEAM CHAT -----------------------------
-@require_auth
+def send_message(message, channel='general', recipient_id=None):
+    user = st.session_state.user
+    company_id = get_current_user_company()
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT INTO team_messages (company_id, user_id, username, user_role, message, channel, is_private, recipient_id, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+              (company_id, user['user_id'], user['username'], user['role'], message, channel, 1 if recipient_id else 0, recipient_id, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+
+def get_messages(channel='general', user_id=None, limit=50):
+    company_id = get_current_user_company()
+    conn = sqlite3.connect(DB_PATH)
+    if user_id:
+        df = pd.read_sql_query("SELECT id, username, user_role, message, created_at FROM team_messages WHERE company_id = ? AND ((is_private=0 AND channel=?) OR (is_private=1 AND (user_id=? OR recipient_id=?))) ORDER BY created_at DESC LIMIT ?", conn, params=(company_id, channel, user_id, user_id, limit))
+    else:
+        df = pd.read_sql_query("SELECT id, username, user_role, message, created_at FROM team_messages WHERE company_id = ? AND is_private=0 AND channel=? ORDER BY created_at DESC LIMIT ?", conn, params=(company_id, channel, limit))
+    conn.close()
+    return df
+
 def chat_page():
     if st.button("← Back"):
         st.session_state.page = "dashboard"
@@ -1834,8 +2176,32 @@ def chat_page():
     for _, m in messages[::-1].iterrows():
         st.write(f"**{m['username']}**: {m['message']} ({m['created_at'][11:16]})")
 
-# ----------------------------- SUPPLIES -----------------------------
-@require_auth
+def get_all_supplies():
+    company_id = get_current_user_company()
+    user_id = st.session_state.user['user_id']
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query("SELECT * FROM supplies WHERE company_id = ? AND user_id = ? ORDER BY category, name", conn, params=(company_id, user_id))
+    conn.close()
+    return df
+
+def get_low_stock_supplies():
+    company_id = get_current_user_company()
+    user_id = st.session_state.user['user_id']
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query("SELECT * FROM supplies WHERE company_id = ? AND user_id = ? AND current_stock <= reorder_level", conn, params=(company_id, user_id))
+    conn.close()
+    return df
+
+def add_supply(name, category, unit, stock, reorder, cost):
+    company_id = get_current_user_company()
+    user_id = st.session_state.user['user_id']
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT INTO supplies (company_id, user_id, name, category, unit, current_stock, reorder_level, unit_cost, last_updated) VALUES (?,?,?,?,?,?,?,?,?)",
+              (company_id, user_id, name, category, unit, stock, reorder, cost, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+
 def supplies_page():
     if st.button("← Back"):
         st.session_state.page = "dashboard"
@@ -1862,8 +2228,6 @@ def supplies_page():
                     add_supply(name, cat, unit, stock, reorder, cost)
                     st.rerun()
 
-# ----------------------------- AI TASKS -----------------------------
-@require_auth
 def ai_tasks_page():
     if st.button("← Back"):
         st.session_state.page = "dashboard"
@@ -1887,17 +2251,27 @@ def ai_tasks_page():
         for t in tasks:
             st.checkbox(t)
 
-# ----------------------------- QR TRACKING -----------------------------
-@require_auth
+def generate_worker_qr(worker_id, worker_name):
+    data = f"profitclean://worker/{worker_id}/{datetime.now().strftime('%Y%m%d')}"
+    qr = qrcode.QRCode(version=1, box_size=10, border=5)
+    qr.add_data(data)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    buffered = BytesIO()
+    img.save(buffered, format="PNG")
+    img_str = base64.b64encode(buffered.getvalue()).decode()
+    return f"data:image/png;base64,{img_str}"
+
 def qr_tracking_page():
     if st.button("← Back"):
         st.session_state.page = "dashboard"
         st.rerun()
     st.markdown("### 📱 QR Tracking")
-    accessible = get_accessible_user_ids(st.session_state.user['user_id'])
+    company_id = get_current_user_company()
+    accessible = get_accessible_user_ids(st.session_state.user['user_id'], st.session_state.user['role'], company_id)
     placeholders = ','.join(['?' for _ in accessible])
     conn = sqlite3.connect(DB_PATH)
-    workers_df = pd.read_sql_query(f"SELECT id, username FROM users WHERE role='worker' AND id IN ({placeholders})", conn, params=accessible)
+    workers_df = pd.read_sql_query(f"SELECT id, username FROM users WHERE role='worker' AND company_id = ? AND id IN ({placeholders})", conn, params=[company_id] + accessible)
     conn.close()
     if workers_df.empty:
         st.info("No workers")
@@ -1908,8 +2282,6 @@ def qr_tracking_page():
             qr = generate_worker_qr(wid, selected)
             st.image(qr, width=200)
 
-# ----------------------------- GPS TRACKING (Opt‑in) -----------------------------
-@require_auth
 def gps_tracking_page():
     if st.button("← Back"):
         st.session_state.page = "dashboard"
@@ -1919,8 +2291,75 @@ def gps_tracking_page():
     if st.button("Share Location (Test)"):
         st.success("Location shared (mock). In production, browser geolocation would be used.")
 
-# ----------------------------- BACKUP & RESTORE -----------------------------
-@require_role(['admin'])
+def ensure_backup_dir():
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+
+def create_backup():
+    ensure_backup_dir()
+    user_id = st.session_state.user['user_id']
+    company_id = get_current_user_company()
+    accessible = get_accessible_user_ids(user_id, st.session_state.user['role'], company_id)
+    backup_data = {"version": "3.0", "backup_date": datetime.now().isoformat(), "user_id": user_id, "company_id": company_id, "accessible_users": accessible, "data": {}}
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    tables = ["clients", "estimates", "quick_jobs", "monthly_expenses", "scheduled_jobs", "inspections", "supplies", "team_messages", "support_tickets"]
+    for table in tables:
+        try:
+            placeholders = ','.join(['?' for _ in accessible])
+            c.execute(f"SELECT * FROM {table} WHERE company_id = ? AND user_id IN ({placeholders})", [company_id] + accessible)
+            rows = c.fetchall()
+            c.execute(f"PRAGMA table_info({table})")
+            columns = [col[1] for col in c.fetchall()]
+            data = []
+            for row in rows:
+                data.append(dict(zip(columns, row)))
+            backup_data["data"][table] = data
+        except:
+            backup_data["data"][table] = []
+    conn.close()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_file = os.path.join(BACKUP_DIR, f"backup_user_{user_id}_{timestamp}.json")
+    with open(backup_file, 'w') as f:
+        json.dump(backup_data, f, indent=2, default=str)
+    backups = sorted([f for f in os.listdir(BACKUP_DIR) if f.startswith(f"backup_user_{user_id}_")])
+    for old in backups[:-30]:
+        os.remove(os.path.join(BACKUP_DIR, old))
+    return backup_file
+
+def restore_from_backup(backup_file):
+    with open(backup_file, 'r') as f:
+        backup = json.load(f)
+    user_id = st.session_state.user['user_id']
+    company_id = get_current_user_company()
+    data = backup.get("data", {})
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    for table, rows in data.items():
+        if not rows:
+            continue
+        c.execute(f"DELETE FROM {table} WHERE company_id = ? AND user_id = ?", (company_id, user_id))
+        for row in rows:
+            columns = [col for col in row.keys() if col != 'id']
+            placeholders = ','.join(['?' for _ in columns])
+            values = [row[col] for col in columns]
+            try:
+                c.execute(f"INSERT INTO {table} ({','.join(columns)}) VALUES ({placeholders})", values)
+            except:
+                pass
+    conn.commit()
+    conn.close()
+    return True
+
+def get_backup_list():
+    ensure_backup_dir()
+    user_id = st.session_state.user['user_id']
+    backups = []
+    for f in os.listdir(BACKUP_DIR):
+        if f.startswith(f"backup_user_{user_id}_") and f.endswith(".json"):
+            path = os.path.join(BACKUP_DIR, f)
+            backups.append({"file": f, "path": path, "date": datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y-%m-%d %H:%M:%S"), "size": f"{os.path.getsize(path)/1024:.1f} KB"})
+    return sorted(backups, key=lambda x: x["date"], reverse=True)
+
 def backup_page():
     if st.button("← Back"):
         st.session_state.page = "dashboard"
@@ -1939,8 +2378,27 @@ def backup_page():
             if restore_from_backup(path):
                 st.success("Restored! Refresh page.")
 
-# ----------------------------- SUPPORT TICKETS -----------------------------
-@require_auth
+def create_support_ticket(issue_type, description, steps, screenshot=None):
+    user_id = st.session_state.user['user_id']
+    user_email = st.session_state.user.get('email', '')
+    company_id = get_current_user_company()
+    ticket_id = f"TKT-{datetime.now().strftime('%Y%m%d')}-{secrets.token_hex(4).upper()}"
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT INTO support_tickets (company_id, ticket_id, user_id, user_email, issue_type, description, steps_to_reproduce, screenshot, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+              (company_id, ticket_id, user_id, user_email, issue_type, description, steps, screenshot, datetime.now().isoformat(), datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+    return ticket_id
+
+def get_user_tickets():
+    user_id = st.session_state.user['user_id']
+    company_id = get_current_user_company()
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query("SELECT ticket_id, issue_type, description, status, created_at FROM support_tickets WHERE user_id = ? AND company_id = ? ORDER BY created_at DESC", conn, params=(user_id, company_id))
+    conn.close()
+    return df
+
 def support_page():
     if st.button("← Back"):
         st.session_state.page = "dashboard"
@@ -1958,16 +2416,15 @@ def support_page():
     if not tickets.empty:
         st.dataframe(tickets)
 
-# ----------------------------- SETTINGS (Admin only) -----------------------------
-@require_role(['admin'])
 def settings_page():
     if st.button("← Back"):
         st.session_state.page = "dashboard"
         st.rerun()
     st.markdown("### ⚙️ Business Settings")
+    company_id = get_current_user_company()
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT business_name, phone, email, hourly_wage, min_job_fee, home_city FROM business_profile WHERE id=1")
+    c.execute("SELECT business_name, phone, email, hourly_wage, min_job_fee, home_city, smtp_email, smtp_password FROM business_profile WHERE company_id = ?", (company_id,))
     row = c.fetchone()
     conn.close()
     if row:
@@ -1978,18 +2435,20 @@ def settings_page():
             wage = st.number_input("Hourly Wage", value=row[3])
             min_fee = st.number_input("Min Job Fee", value=row[4])
             home = st.selectbox("Home City", FLORIDA_CITIES, index=FLORIDA_CITIES.index(row[5]) if row[5] in FLORIDA_CITIES else 0)
+            smtp_email = st.text_input("SMTP Email", value=row[6] if row[6] else "")
+            smtp_password = st.text_input("SMTP Password", type="password", value=row[7] if row[7] else "")
             if st.form_submit_button("Save"):
                 conn = sqlite3.connect(DB_PATH)
                 c = conn.cursor()
-                c.execute("UPDATE business_profile SET business_name=?, phone=?, email=?, hourly_wage=?, min_job_fee=?, home_city=? WHERE id=1",
-                          (bname, phone, email, wage, min_fee, home))
+                c.execute("UPDATE business_profile SET business_name=?, phone=?, email=?, hourly_wage=?, min_job_fee=?, home_city=?, smtp_email=?, smtp_password=? WHERE company_id=?",
+                          (bname, phone, email, wage, min_fee, home, smtp_email, smtp_password, company_id))
                 conn.commit()
                 conn.close()
                 st.success("Saved")
                 st.rerun()
+    else:
+        st.warning("Business profile not found")
 
-# ----------------------------- MY PERFORMANCE (Worker & Supervisor View) -----------------------------
-@require_auth
 def my_performance_page():
     if st.button("← Back"):
         st.session_state.page = "dashboard"
@@ -2015,7 +2474,6 @@ def my_performance_page():
     if not badges.empty:
         st.subheader("Earned Badges")
         st.dataframe(badges)
-    # Chart of monthly profit (own data)
     conn = sqlite3.connect(DB_PATH)
     df = pd.read_sql_query("SELECT strftime('%Y-%m', job_date) as month, SUM(profit) as profit FROM quick_jobs WHERE user_id = ? GROUP BY month ORDER BY month", conn, params=(uid,))
     conn.close()
@@ -2023,8 +2481,6 @@ def my_performance_page():
         fig = px.line(df, x='month', y='profit', title="Your Monthly Profit")
         st.plotly_chart(fig, use_container_width=True)
 
-# ----------------------------- CERTIFICATIONS (Worker & Manager) -----------------------------
-@require_auth
 def certifications_page():
     if st.button("← Back"):
         st.session_state.page = "dashboard"
@@ -2051,16 +2507,17 @@ def certifications_page():
                         add_certification(uid, name, issuer, date_earned.isoformat(), expiration.isoformat() if expiration else None, file, notes)
                         st.success("Certification added")
                         st.rerun()
-    elif user_role in ['supervisor','manager','admin']:
-        accessible = get_accessible_user_ids(uid)
+    elif user_role in ['supervisor','admin','super_admin','support_staff']:
+        company_id = get_current_user_company()
+        accessible = get_accessible_user_ids(uid, user_role, company_id)
         placeholders = ','.join(['?' for _ in accessible])
         conn = sqlite3.connect(DB_PATH)
         df = pd.read_sql_query(f"""
             SELECT u.username, c.certification_name, c.issuing_body, c.date_earned, c.expiration_date, c.verified_by, c.id
             FROM worker_certifications c
             JOIN users u ON c.worker_id = u.id
-            WHERE u.id IN ({placeholders})
-        """, conn, params=accessible)
+            WHERE u.company_id = ? AND u.id IN ({placeholders})
+        """, conn, params=[company_id] + accessible)
         conn.close()
         if df.empty:
             st.info("No certifications from your team.")
@@ -2072,7 +2529,6 @@ def certifications_page():
                 st.success("Verified")
                 st.rerun()
 
-# ----------------------------- CLIENT PORTAL -----------------------------
 def client_login_page():
     st.markdown("### 👤 Client Portal Login")
     with st.form("client_login"):
@@ -2080,13 +2536,14 @@ def client_login_page():
         if st.form_submit_button("Login"):
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
-            c.execute("SELECT id, business_name FROM clients WHERE email = ?", (email,))
+            c.execute("SELECT id, business_name, company_id FROM clients WHERE email = ?", (email,))
             client = c.fetchone()
             conn.close()
             if client:
                 st.session_state.client_logged_in = True
                 st.session_state.client_id = client[0]
                 st.session_state.client_name = client[1]
+                st.session_state.client_company_id = client[2]
                 st.session_state.page = "client_dashboard"
                 st.rerun()
             else:
@@ -2102,7 +2559,8 @@ def client_dashboard():
         st.rerun()
     st.markdown(f"### 👋 Welcome, {st.session_state.client_name}")
     conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query("SELECT id, city, property_type, estimated_price, created_at, status FROM estimates WHERE client_id = ? ORDER BY created_at DESC", conn, params=(st.session_state.client_id,))
+    df = pd.read_sql_query("SELECT id, city, property_type, estimated_price, created_at, status FROM estimates WHERE client_id = ? AND company_id = ? ORDER BY created_at DESC", 
+                           conn, params=(st.session_state.client_id, st.session_state.client_company_id))
     conn.close()
     if df.empty:
         st.info("No estimates")
@@ -2113,27 +2571,180 @@ def client_dashboard():
                 if st.button(f"Approve Estimate #{row['id']}"):
                     conn = sqlite3.connect(DB_PATH)
                     c = conn.cursor()
-                    c.execute("UPDATE estimates SET status = 'approved', approved_at = ? WHERE id = ?", (datetime.now().isoformat(), row['id']))
+                    c.execute("UPDATE estimates SET status = 'approved', approved_at = ? WHERE id = ? AND client_id = ?", 
+                              (datetime.now().isoformat(), row['id'], st.session_state.client_id))
                     conn.commit()
                     conn.close()
                     st.success("Approved! We'll contact you.")
                     st.rerun()
 
+# ----------------------------- TERMS OF SERVICE PAGE -----------------------------
+def terms_page():
+    st.markdown("### 📜 Terms of Service")
+    st.caption("Last Updated: 2025")
+    st.markdown("""
+    **1. Ownership**  
+    This application and all source code, design, algorithms, and business logic are the exclusive property of Dust Bros & Co.
+    
+    **2. Prohibited Actions**  
+    You may not:
+    - Copy, modify, or reverse engineer any part of this application
+    - Use the application to create a competing product
+    - Share, distribute, or sublicense the application or its source code
+    
+    **3. License**  
+    You are granted a non-exclusive, non-transferable license to use this application for your internal business purposes only.
+    
+    **4. Termination**  
+    Any violation of these terms will result in immediate termination of your access.
+    
+    **5. Contact**  
+    legal@dustbros.com
+    """)
+    
+    if st.button("← Back to Dashboard"):
+        st.session_state.page = "dashboard"
+        st.rerun()
+
+# ----------------------------- ADMIN COMPANIES PAGE (TROUBLESHOOTING) -----------------------------
+@require_role(['super_admin', 'support_staff'])
+def admin_companies_page():
+    if st.button("← Back to Dashboard"):
+        st.session_state.page = "dashboard"
+        st.rerun()
+    st.markdown("### 🏢 Admin Tools")
+    st.caption("Super Admin & Support Staff Dashboard")
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query("""
+        SELECT c.id, c.name, c.subdomain, u.username as owner, 
+               c.created_at, c.is_active,
+               (SELECT COUNT(*) FROM users WHERE company_id = c.id) as user_count,
+               (SELECT COUNT(*) FROM clients WHERE company_id = c.id) as client_count
+        FROM companies c
+        LEFT JOIN users u ON c.owner_id = u.id
+        ORDER BY c.created_at DESC
+    """, conn)
+    conn.close()
+    st.dataframe(df, use_container_width=True)
+
+    # Company Switcher (Super Admin & Support Staff)
+    with st.expander("🔧 Switch to Company (Troubleshooting)"):
+        st.warning("⚠️ Switching will change your session to act as a user of the selected company. All actions are logged.")
+        company_id_switch = st.selectbox("Select company to switch to", df['id'].tolist(), format_func=lambda x: f"{df[df['id']==x]['name'].iloc[0]} (ID: {x})")
+        if st.button("Switch to this company"):
+            if st.session_state.user.get('role') in ['super_admin', 'support_staff']:
+                st.session_state.original_company_id = st.session_state.user.get('company_id')
+                st.session_state.user['company_id'] = company_id_switch
+                st.session_state.user['role_override'] = True
+                log_audit(st.session_state.user['user_id'], "company_switch", f"Switched to company ID {company_id_switch}")
+                st.success(f"Switched to company ID {company_id_switch}. You are now viewing that company's data.")
+                st.rerun()
+            else:
+                st.error("Only super admin or support staff can switch companies.")
+        if st.button("Reset to my original company"):
+            if 'original_company_id' in st.session_state:
+                st.session_state.user['company_id'] = st.session_state.original_company_id
+                del st.session_state.original_company_id
+                st.session_state.user.pop('role_override', None)
+                log_audit(st.session_state.user['user_id'], "company_switch_reset", "Reset to original company")
+                st.success("Reset to your original company.")
+                st.rerun()
+            else:
+                st.info("No override active.")
+
+    # Export Company Data (both roles)
+    with st.expander("📤 Export Company Data (Troubleshooting)"):
+        export_company_id = st.selectbox("Select company to export", df['id'].tolist(), format_func=lambda x: f"{df[df['id']==x]['name'].iloc[0]} (ID: {x})", key="export_company")
+        if st.button("Export this company to JSON"):
+            export_data = export_company_data(export_company_id)
+            if export_data:
+                st.download_button("Download JSON", export_data, f"company_{export_company_id}_backup.json", "application/json")
+            else:
+                st.error("Export failed.")
+
+    # Import Company Data (only super admin)
+    if st.session_state.user['role'] == 'super_admin':
+        with st.expander("📥 Import Company Data (Migration)"):
+            st.warning("⚠️ This will REPLACE data in the destination company! Use with caution.")
+            import_file = st.file_uploader("Upload JSON backup file", type=['json'])
+            dest_company_id = st.selectbox("Destination company ID", df['id'].tolist(), format_func=lambda x: f"{df[df['id']==x]['name'].iloc[0]} (ID: {x})", key="import_dest")
+            if import_file and st.button("Import into destination company"):
+                try:
+                    data = json.load(import_file)
+                    success = import_company_data(dest_company_id, data)
+                    if success:
+                        st.success(f"Data imported into company ID {dest_company_id}. Refresh to see changes.")
+                    else:
+                        st.error("Import failed. Check log.")
+                except Exception as e:
+                    st.error(f"Invalid file: {e}")
+
+    # Create New Company (super admin only)
+    if st.session_state.user['role'] == 'super_admin':
+        with st.expander("➕ Create New Company"):
+            with st.form("create_company_admin"):
+                company_name = st.text_input("Company Name")
+                subdomain = st.text_input("Subdomain")
+                admin_email = st.text_input("Admin Email")
+                admin_username = st.text_input("Admin Username")
+                admin_password = st.text_input("Admin Password", type="password")
+                if st.form_submit_button("Create Company"):
+                    if all([company_name, subdomain, admin_email, admin_username, admin_password]):
+                        success, result = create_company(company_name, subdomain, admin_email, admin_username, admin_password)
+                        if success:
+                            st.success(f"Company '{company_name}' created successfully!")
+                            st.rerun()
+                        else:
+                            st.error(result)
+                    else:
+                        st.error("All fields required")
+
+    # Create Support Staff Account (super admin only)
+    if st.session_state.user['role'] == 'super_admin':
+        with st.expander("👥 Create Support Staff Account"):
+            with st.form("create_support"):
+                support_email = st.text_input("Email")
+                support_username = st.text_input("Username")
+                support_password = st.text_input("Temporary Password", type="password")
+                if st.form_submit_button("Create Support Staff"):
+                    if all([support_email, support_username, support_password]):
+                        success, msg = create_support_staff(support_email, support_username, support_password)
+                        if success:
+                            st.success(f"Support staff {support_username} created. They can log in and use troubleshooting tools.")
+                        else:
+                            st.error(msg)
+                    else:
+                        st.error("All fields required")
+
+    # Company Activation/Deactivation (super admin only)
+    if st.session_state.user['role'] == 'super_admin':
+        with st.expander("⚙️ Company Actions (Activate/Deactivate)"):
+            company_id = st.number_input("Company ID", min_value=1, step=1)
+            new_status = st.selectbox("Set Active Status", [1, 0], format_func=lambda x: "Active" if x else "Inactive")
+            if st.button("Update Company Status"):
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                c.execute("UPDATE companies SET is_active = ? WHERE id = ?", (new_status, company_id))
+                conn.commit()
+                conn.close()
+                st.success(f"Company {company_id} status updated")
+                st.rerun()
+
 # ============================================================
-# PART 5: MAIN ROUTING AND APPLICATION ENTRY POINT
+# MAIN ROUTING
 # ============================================================
 
 def main():
     init_db()
 
-    # Check if setup is complete
+    # Check if any companies exist (if not, show setup wizard)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT setup_complete FROM business_profile WHERE id=1")
-    setup = c.fetchone()
+    c.execute("SELECT COUNT(*) FROM companies")
+    company_count = c.fetchone()[0]
     conn.close()
 
-    if not setup or setup[0] == 0:
+    if company_count == 0:
         setup_wizard()
     else:
         # Initialize session state page if not present
@@ -2145,11 +2756,10 @@ def main():
             if st.session_state.page == "client_dashboard":
                 client_dashboard()
             else:
-                # Force client dashboard
                 st.session_state.page = "client_dashboard"
                 client_dashboard()
         else:
-            # Page routing for authenticated users (admin/manager/supervisor/worker)
+            # Page routing for authenticated users
             pages = {
                 "login": login_page,
                 "two_factor": two_factor_page,
@@ -2175,6 +2785,8 @@ def main():
                 "backup": backup_page,
                 "support": support_page,
                 "settings": settings_page,
+                "terms": terms_page,
+                "admin_companies": admin_companies_page,
             }
             current = st.session_state.page
             if current in pages:
@@ -2183,4 +2795,4 @@ def main():
                 login_page()
 
 if __name__ == "__main__":
-    main()
+    main()       
