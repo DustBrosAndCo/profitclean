@@ -2525,33 +2525,42 @@ def estimate_page():
         st.write(f"Travel cost: ${result['travel_cost']:.2f}")
         st.write(f"Toll estimate: ${result['toll_estimate']:.2f}")
     
-    if st.button("Save as Draft (Fair Market)") and client_name and client_email:
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("""INSERT INTO estimates (company_id, user_id, client_name, client_email, city, property_type, square_feet, bedrooms, bathrooms, frequency, complexity, travel_miles, toll_cost, add_on_window, add_on_carpet, add_on_floor, add_on_disinfection, add_on_pressure, subtotal, tax, estimated_price, lowest_price, fair_price, highest_price, sweet_spot_price, created_at, status, expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                  (company_id, st.session_state.user['user_id'], client_name, client_email, city, prop, sqft, bedrooms, bathrooms, freq, complexity, travel_miles, result['toll_estimate'], 1 if add_window else 0, 1 if add_carpet else 0, 1 if add_floor else 0, 1 if add_disinfection else 0, 1 if add_pressure else 0, result['fair']['subtotal'], result['fair']['tax'], result['fair']['total'], result['lowest']['total'], result['fair']['total'], result['highest']['total'], result['sweet_spot']['total'], datetime.now().isoformat(), "draft", (datetime.now() + timedelta(days=30)).isoformat()))
-        estimate_id = c.lastrowid
-        conn.commit()
-        conn.close()
-        
-        # Add to history
-        add_estimate_history_entry(estimate_id, None, "draft", st.session_state.user['user_id'], "Initial draft created")
-        
-        st.success("Estimate saved as draft.")
-        
-        # Option to send estimate
-        if st.button("📧 Send Estimate to Client"):
-            # Generate approval link (in production, this would be a proper URL)
-            approval_link = f"https://app.profitclean.com/approve/{estimate_id}/{secrets.token_hex(16)}"
-            if send_estimate_email(company_id, estimate_id, client_email, client_name, result['fair']['total'], approval_link):
-                st.success(f"Estimate sent to {client_email}")
-                c.execute("UPDATE estimates SET status = 'sent' WHERE id = ?", (estimate_id,))
-                conn.commit()
-            else:
-                st.error("Failed to send email. Check SMTP settings.")
+    col_save, col_send = st.columns(2)
     
-    elif st.button("Save as Draft (Fair Market)") and (not client_name or not client_email):
-        st.error("Please enter both client name and email before saving")
+    with col_save:
+        save_draft_btn = st.button("Save as Draft (Fair Market)", key="save_draft_estimate")
+    
+    if save_draft_btn:
+        if client_name and client_email:
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("""INSERT INTO estimates (company_id, user_id, client_name, client_email, city, property_type, square_feet, bedrooms, bathrooms, frequency, complexity, travel_miles, toll_cost, add_on_window, add_on_carpet, add_on_floor, add_on_disinfection, add_on_pressure, subtotal, tax, estimated_price, lowest_price, fair_price, highest_price, sweet_spot_price, created_at, status, expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                      (company_id, st.session_state.user['user_id'], client_name, client_email, city, prop, sqft, bedrooms, bathrooms, freq, complexity, travel_miles, result['toll_estimate'], 1 if add_window else 0, 1 if add_carpet else 0, 1 if add_floor else 0, 1 if add_disinfection else 0, 1 if add_pressure else 0, result['fair']['subtotal'], result['fair']['tax'], result['fair']['total'], result['lowest']['total'], result['fair']['total'], result['highest']['total'], result['sweet_spot']['total'], datetime.now().isoformat(), "draft", (datetime.now() + timedelta(days=30)).isoformat()))
+            estimate_id = c.lastrowid
+            conn.commit()
+            conn.close()
+            
+            # Add to history
+            add_estimate_history_entry(estimate_id, None, "draft", st.session_state.user['user_id'], "Initial draft created")
+            
+            st.success("Estimate saved as draft.")
+            
+            # Option to send estimate
+            with col_send:
+                if st.button("📧 Send Estimate to Client", key="send_estimate_email"):
+                    # Generate approval link (in production, this would be a proper URL)
+                    approval_link = f"https://app.profitclean.com/approve/{estimate_id}/{secrets.token_hex(16)}"
+                    if send_estimate_email(company_id, estimate_id, client_email, client_name, result['fair']['total'], approval_link):
+                        st.success(f"Estimate sent to {client_email}")
+                        conn = sqlite3.connect(DB_PATH)
+                        c = conn.cursor()
+                        c.execute("UPDATE estimates SET status = 'sent' WHERE id = ?", (estimate_id,))
+                        conn.commit()
+                        conn.close()
+                    else:
+                        st.error("Failed to send email. Check SMTP settings.")
+        else:
+            st.error("Please enter both client name and email before saving")
 
 def quick_job_page():
     if st.button("← Back"):
