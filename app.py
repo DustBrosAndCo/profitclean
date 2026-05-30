@@ -2690,6 +2690,57 @@ def workers_page():
                             st.error(msg)
                     else:
                         st.error("All fields required")
+        # Management actions for company admins: transfer or deactivate workers
+        st.markdown("#### Manage Worker")
+        if not workers.empty:
+            sel_worker = st.selectbox("Select worker to manage", workers['id'].tolist(), format_func=lambda x: f"{workers[workers['id']==x]['username'].iloc[0]} ({x})")
+            col1, col2, col3 = st.columns([2,2,1])
+            with col1:
+                # Transfer within Admin UI
+                companies_conn = sqlite3.connect(DB_PATH)
+                comps_df = pd.read_sql_query("SELECT id, name FROM companies WHERE is_active = 1 ORDER BY name", companies_conn)
+                companies_conn.close()
+                dest = st.selectbox("Transfer to Company", comps_df['id'].tolist(), format_func=lambda x: comps_df[comps_df['id']==x]['name'].iloc[0])
+                if st.button("Transfer Worker"):
+                    conn = sqlite3.connect(DB_PATH)
+                    c = conn.cursor()
+                    # retrieve current company
+                    c.execute("SELECT company_id FROM users WHERE id = ?", (sel_worker,))
+                    row = c.fetchone()
+                    from_company = row[0] if row else None
+                    try:
+                        c.execute("UPDATE users SET company_id = ? WHERE id = ?", (dest, sel_worker))
+                        c.execute("INSERT INTO worker_transfers (worker_id, from_company_id, to_company_id, transferred_by, transferred_at) VALUES (?,?,?,?,?)",
+                                  (sel_worker, from_company, dest, st.session_state.user['user_id'], datetime.now().isoformat()))
+                        c.execute("INSERT INTO audit_log (user_id, action, details, created_at) VALUES (?,?,?,?)",
+                                  (st.session_state.user['user_id'], 'transfer_worker', f'Worker {sel_worker} from {from_company} to {dest}', datetime.now().isoformat()))
+                        conn.commit()
+                        conn.close()
+                        st.success("Worker transferred successfully")
+                        st.rerun()
+                    except Exception as e:
+                        conn.rollback()
+                        conn.close()
+                        st.error(f"Transfer failed: {e}")
+            with col2:
+                if st.button("Deactivate Worker"):
+                    conn = sqlite3.connect(DB_PATH)
+                    c = conn.cursor()
+                    try:
+                        c.execute("UPDATE users SET is_active = 0 WHERE id = ?", (sel_worker,))
+                        c.execute("INSERT INTO audit_log (user_id, action, details, created_at) VALUES (?,?,?,?)",
+                                  (st.session_state.user['user_id'], 'deactivate_worker', f'Worker {sel_worker} deactivated', datetime.now().isoformat()))
+                        conn.commit()
+                        conn.close()
+                        st.success("Worker deactivated")
+                        st.rerun()
+                    except Exception as e:
+                        conn.rollback()
+                        conn.close()
+                        st.error(f"Failed to deactivate: {e}")
+            with col3:
+                if st.button("Refresh List"):
+                    st.rerun()
     else:
         st.subheader("Your Workers")
         workers = get_all_workers_for_manager(user['user_id'], company_id)
@@ -3686,7 +3737,27 @@ def admin_companies_page():
                                            format_func=lambda x: companies_df[companies_df['id']==x]['name'].iloc[0])
             
             if st.button("Transfer Worker"):
-                st.success(f"Worker transferred (mock - implement full logic)")
+                # Perform transfer
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                try:
+                    # get current company of worker
+                    c.execute("SELECT company_id FROM users WHERE id = ?", (selected_worker,))
+                    row = c.fetchone()
+                    from_company = row[0] if row else None
+                    c.execute("UPDATE users SET company_id = ? WHERE id = ?", (dest_company, selected_worker))
+                    c.execute("INSERT INTO worker_transfers (worker_id, from_company_id, to_company_id, transferred_by, transferred_at) VALUES (?,?,?,?,?)",
+                              (selected_worker, from_company, dest_company, st.session_state.user['user_id'], datetime.now().isoformat()))
+                    c.execute("INSERT INTO audit_log (user_id, action, details, created_at) VALUES (?,?,?,?)",
+                              (st.session_state.user['user_id'], 'transfer_worker', f'Worker {selected_worker} transferred from {from_company} to {dest_company}', datetime.now().isoformat()))
+                    conn.commit()
+                    st.success("Worker transferred successfully")
+                    conn.close()
+                    st.rerun()
+                except Exception as e:
+                    conn.rollback()
+                    conn.close()
+                    st.error(f"Transfer failed: {e}")
     
     # TAB 4: AUDIT LOG
     with tab4:
