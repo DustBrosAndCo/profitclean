@@ -2026,9 +2026,9 @@ def schedule_page():
                 worker_id = None if worker=="Unassigned" else workers_df[workers_df['username']==worker]['id'].values[0]
                 schedule_job(client_id, client, "", None, worker_id, view_date, time_slot)
                 st.success("Scheduled")
-                st.rerun()
+                st.rerun()    
 
-# ============================================================
+                # ============================================================
 # PART 3: REMAINING PAGE FUNCTIONS & MAIN ROUTING
 # INSPECTIONS, PROFIT, HISTORY, CHAT, SUPPLIES, AI, QR, GPS,
 # BACKUP, SUPPORT, SETTINGS, PERFORMANCE, CERTIFICATIONS,
@@ -2780,7 +2780,7 @@ def dashboard():
             logout_user()
             st.rerun()
     st.markdown("---")
-    # FIXED: Added user['role'] as second argument
+    # CORRECTED: Added all three required arguments
     accessible = get_accessible_user_ids(user['user_id'], user['role'], company_id)
     placeholders = ','.join(['?' for _ in accessible])
     conn = sqlite3.connect(DB_PATH)
@@ -2863,4 +2863,4 @@ def main():
                 login_page()
 
 if __name__ == "__main__":
-    main()    
+    main()
