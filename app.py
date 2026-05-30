@@ -3665,6 +3665,53 @@ def admin_companies_page():
                     if st.button("❌ Cancel", key="cancel_action"):
                         del st.session_state.pending_action
                         st.rerun()
+            elif action['type'] == 'delete_company':
+                st.error(f"🗑️ **PERMANENTLY DELETE** Company: **{action['company_name']}**?")
+                st.warning(f"⚠️ This will delete:\n- {action['user_count']} user(s)\n- {action['client_count']} client(s)\n- All associated data (estimates, jobs, schedules, etc.)\n\n**This action CANNOT be undone.**")
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("🗑️ Yes, Delete Permanently", key="confirm_delete"):
+                        try:
+                            conn = sqlite3.connect(DB_PATH)
+                            c = conn.cursor()
+                            company_id = action['company_id']
+                            
+                            # Delete all users in the company (cascades to sessions, badges, etc.)
+                            c.execute("DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE company_id = ?)", (company_id,))
+                            c.execute("DELETE FROM user_badges WHERE user_id IN (SELECT id FROM users WHERE company_id = ?)", (company_id,))
+                            c.execute("DELETE FROM users WHERE company_id = ?", (company_id,))
+                            
+                            # Delete all client data
+                            c.execute("DELETE FROM scheduled_jobs WHERE client_id IN (SELECT id FROM clients WHERE company_id = ?)", (company_id,))
+                            c.execute("DELETE FROM estimates WHERE client_id IN (SELECT id FROM clients WHERE company_id = ?)", (company_id,))
+                            c.execute("DELETE FROM clients WHERE company_id = ?", (company_id,))
+                            
+                            # Delete company-specific data
+                            c.execute("DELETE FROM quick_jobs WHERE company_id = ?", (company_id,))
+                            c.execute("DELETE FROM email_templates WHERE company_id = ?", (company_id,))
+                            c.execute("DELETE FROM business_profile WHERE company_id = ?", (company_id,))
+                            c.execute("DELETE FROM worker_transfers WHERE from_company_id = ? OR to_company_id = ?", (company_id, company_id))
+                            
+                            # Finally, delete the company
+                            c.execute("DELETE FROM companies WHERE id = ?", (company_id,))
+                            
+                            conn.commit()
+                            conn.close()
+                            st.success(f"✅ **{action['company_name']}** and all its data have been permanently deleted.")
+                            del st.session_state.pending_action
+                            time.sleep(2)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Error deleting company: {e}")
+                            if 'conn' in locals():
+                                conn.rollback()
+                                conn.close()
+                            del st.session_state.pending_action
+                            st.rerun()
+                with col2:
+                    if st.button("❌ Cancel", key="cancel_delete"):
+                        del st.session_state.pending_action
+                        st.rerun()
     
     # TAB 2: USERS & WORKERS
     with tab2:
