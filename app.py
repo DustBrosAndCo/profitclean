@@ -812,84 +812,17 @@ def migrate_database():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
-    # Get existing columns
+    # Check if invite_code column exists in users table
     c.execute("PRAGMA table_info(users)")
-    existing_columns = [col[1] for col in c.fetchall()]
+    columns = [col[1] for col in c.fetchall()]
     
-    # Add missing columns to users table
-    new_columns = {
-        'phone': 'TEXT',
-        'address': 'TEXT',
-        'emergency_contact': 'TEXT',
-        'hourly_rate': 'REAL'
-    }
-    
-    for col_name, col_type in new_columns.items():
-        if col_name not in existing_columns:
-            try:
-                c.execute(f"ALTER TABLE users ADD COLUMN {col_name} {col_type}")
-                print(f"Added {col_name} column to users table")
-            except sqlite3.OperationalError as e:
-                print(f"Could not add {col_name}: {e}")
-    
-    # Add missing columns to business_profile
-    c.execute("PRAGMA table_info(business_profile)")
-    bp_columns = [col[1] for col in c.fetchall()]
-    
-    bp_new_columns = {
-        'smtp_server': 'TEXT',
-        'smtp_port': 'INTEGER DEFAULT 587',
-        'logo_url': 'TEXT',
-        'business_hours': 'TEXT',
-        'cancellation_policy': 'TEXT'
-    }
-    
-    for col_name, col_type in bp_new_columns.items():
-        if col_name not in bp_columns:
-            try:
-                c.execute(f"ALTER TABLE business_profile ADD COLUMN {col_name} {col_type}")
-                print(f"Added {col_name} column to business_profile")
-            except sqlite3.OperationalError as e:
-                print(f"Could not add {col_name}: {e}")
-    
-    # Add missing columns to estimates
-    c.execute("PRAGMA table_info(estimates)")
-    est_columns = [col[1] for col in c.fetchall()]
-    
-    est_new_columns = {
-        'expires_at': 'DATETIME',
-        'notes': 'TEXT',
-        'follow_up_reminder': 'DATETIME'
-    }
-    
-    for col_name, col_type in est_new_columns.items():
-        if col_name not in est_columns:
-            try:
-                c.execute(f"ALTER TABLE estimates ADD COLUMN {col_name} {col_type}")
-                print(f"Added {col_name} column to estimates")
-            except sqlite3.OperationalError as e:
-                print(f"Could not add {col_name}: {e}")
-    
-    # Add missing columns to scheduled_jobs
-    c.execute("PRAGMA table_info(scheduled_jobs)")
-    job_columns = [col[1] for col in c.fetchall()]
-    
-    job_new_columns = {
-        'job_template_id': 'INTEGER',
-        'actual_hours': 'REAL',
-        'actual_cost': 'REAL',
-        'client_signature': 'TEXT',
-        'photos_before': 'TEXT',
-        'photos_after': 'TEXT'
-    }
-    
-    for col_name, col_type in job_new_columns.items():
-        if col_name not in job_columns:
-            try:
-                c.execute(f"ALTER TABLE scheduled_jobs ADD COLUMN {col_name} {col_type}")
-                print(f"Added {col_name} column to scheduled_jobs")
-            except sqlite3.OperationalError as e:
-                print(f"Could not add {col_name}: {e}")
+    # Add invite_code column if it doesn't exist
+    if 'invite_code' not in columns:
+        try:
+            c.execute("ALTER TABLE users ADD COLUMN invite_code TEXT")
+            print("Added invite_code column to users table")
+        except sqlite3.OperationalError as e:
+            print(f"Could not add invite_code: {e}")
     
     # Generate invite codes for existing users
     try:
@@ -3647,20 +3580,44 @@ def admin_companies_page():
         st.markdown("### User Management")
         
         conn = sqlite3.connect(DB_PATH)
-        users_df = pd.read_sql_query("""
+    
+    # First check if invite_code column exists
+    c = conn.cursor()
+    c.execute("PRAGMA table_info(users)")
+    existing_columns = [col[1] for col in c.fetchall()]
+    
+    # Build query dynamically
+    if 'invite_code' in existing_columns:
+        query = """
             SELECT u.id, u.username, u.email, u.role, u.company_id, u.is_active, u.created_at, u.invite_code,
                    c.name as company_name, c.subdomain
             FROM users u
             LEFT JOIN companies c ON u.company_id = c.id
             WHERE u.role != 'super_admin'
             ORDER BY c.name, u.role, u.username
-        """, conn)
+        """
+    else:
+        query = """
+            SELECT u.id, u.username, u.email, u.role, u.company_id, u.is_active, u.created_at,
+                   '' as invite_code, c.name as company_name, c.subdomain
+            FROM users u
+            LEFT JOIN companies c ON u.company_id = c.id
+            WHERE u.role != 'super_admin'
+            ORDER BY c.name, u.role, u.username
+        """
+    
+    try:
+        users_df = pd.read_sql_query(query, conn)
+    except Exception as e:
+        st.error(f"Error loading users: {e}")
+        users_df = pd.DataFrame()
+    finally:
         conn.close()
-        
-        if users_df.empty:
-            st.info("No users found.")
-        else:
-            st.dataframe(users_df, use_container_width=True)
+    
+    if users_df.empty:
+        st.info("No users found.")
+    else:
+        st.dataframe(users_df, use_container_width=True)
     
     # TAB 3: WORKER TRANSFER (simplified - same as original)
     with tab3:
@@ -3781,8 +3738,9 @@ def admin_companies_page():
 # ============================================================
 
 def main():
+    # First, initialize database and run migrations
     init_db()
-    migrate_database()
+    migrate_database()  # This MUST run before any queries that need invite_code
     
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
