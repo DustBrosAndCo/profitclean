@@ -1478,80 +1478,363 @@ def estimate_toll(origin, dest):
     return KNOWN_TOLLS.get(key, 5.00)
 
 def calculate_price_with_tiers(city, prop_type, sqft, bedrooms, bathrooms, freq, complexity, travel_miles, add_ons, holiday, num_locations, notice_hours, contract_months, company_id=None):
-    """Enhanced pricing calculation with company_id parameter"""
+    """
+    ENHANCED PRICING CALCULATOR with 4 Tiers & 40% House Margin Guarantee
+    
+    TIERS:
+    1. BREAK EVEN: 0% margin - Just covering costs
+    2. SWEET SPOT: 40% margin - RECOMMENDED (House keeps 40%)
+    3. FAIR MARKET: 30% margin - Competitive with local market
+    4. PREMIUM: 50% margin - Rush/Emergency/Premium service
+    """
     if company_id is None:
         company_id = get_current_user_company()
     
-    coastal = ["Cocoa Beach", "Daytona Beach", "Naples", "Fort Myers", "Sarasota"]
-    rural = ["Ocala", "Gainesville", "Lake City", "Sebring"]
-    if city in coastal:
+    # ============================================================
+    # 1. LOCATION & ZONE MULTIPLIERS
+    # ============================================================
+    coastal = ["Cocoa Beach", "Daytona Beach", "Naples", "Fort Myers", "Sarasota", "Miami Beach", "Palm Beach"]
+    rural = ["Ocala", "Gainesville", "Lake City", "Sebring", "Palatka", "Arcadia"]
+    major_metros = ["Miami", "Orlando", "Tampa", "Jacksonville", "St. Petersburg"]
+    
+    if city in major_metros:
+        zone_mult, travel_fee = 1.25, 65
+        zone_name = "Major Metro"
+    elif city in coastal:
         zone_mult, travel_fee = 1.18, 55
+        zone_name = "Coastal"
     elif city in rural:
-        zone_mult, travel_fee = 1.28, 65
+        zone_mult, travel_fee = 1.10, 45
+        zone_name = "Rural"
     else:
         zone_mult, travel_fee = 1.0, 45
-    prop = PROPERTY_TYPES.get(prop_type, {"multiplier":1.0, "base_rate":0.14})
-    prop_mult, base_rate = prop["multiplier"], prop["base_rate"]
+        zone_name = "Standard"
+    
+    # ============================================================
+    # 2. PROPERTY & FREQUENCY FACTORS
+    # ============================================================
+    prop = PROPERTY_TYPES.get(prop_type, {"multiplier": 1.0, "base_rate": 0.14})
+    prop_mult = prop["multiplier"]
+    base_rate = prop["base_rate"]
     freq_mult = FREQUENCIES.get(freq, 1.0)
-    comp_factor = 0.7 + (complexity/10)
+    
+    # Complexity factor (1-10 scale)
+    comp_factor = 0.6 + (complexity / 10)  # Range: 0.7 to 1.6
+    complexity_description = {
+        1: "Very Simple",
+        2-3: "Simple",
+        4-6: "Moderate",
+        7-8: "Complex",
+        9-10: "Very Complex"
+    }
+    complexity_level = "Moderate"
+    for key, desc in complexity_description.items():
+        if isinstance(key, tuple):
+            if key[0] <= complexity <= key[1]:
+                complexity_level = desc
+        elif complexity == key:
+            complexity_level = desc
+    
+    # ============================================================
+    # 3. BASE SUBTOTAL CALCULATION
+    # ============================================================
     if prop_type == "🏠 Airbnb / Short-Term Rental":
-        subtotal = ((bedrooms*45)+(bathrooms*25))*prop_mult*comp_factor
+        # Per-room pricing model
+        room_price = 45 if city in major_metros else 35
+        bathroom_price = 25 if city in major_metros else 20
+        subtotal = ((bedrooms * room_price) + (bathrooms * bathroom_price)) * prop_mult * comp_factor
+        pricing_model = "Per Room"
     else:
-        subtotal = sqft * base_rate * zone_mult * prop_mult * freq_mult * comp_factor
+        # Per square foot pricing model
+        adjusted_base_rate = base_rate * zone_mult * prop_mult * freq_mult * comp_factor
+        subtotal = sqft * adjusted_base_rate
+        pricing_model = "Per Square Foot"
+    
+    # ============================================================
+    # 4. TRAVEL COSTS
+    # ============================================================
     travel_cost = (travel_miles * 0.65) + travel_fee
     tolls = estimate_toll(city, "orlando")
-    total = subtotal + travel_cost + tolls
-    add_on_total = 0
-    if add_ons.get('window_cleaning'): add_on_total += 50
-    if add_ons.get('carpet_cleaning'): add_on_total += sqft * 0.20
-    if add_ons.get('floor_waxing'): add_on_total += sqft * 0.30
-    if add_ons.get('disinfection'): add_on_total += 75
-    if add_ons.get('pressure_washing'): add_on_total += 125
-    total += add_on_total
-    if holiday != "None": total *= (1 + HOLIDAY_RATES.get(holiday,0))
-    if notice_hours <= 12: total *= 1.75
-    elif notice_hours <= 24: total *= 1.50
-    elif notice_hours <= 48: total *= 1.25
-    if num_locations >= 7: total *= 0.85
-    elif num_locations >= 4: total *= 0.90
-    elif num_locations >= 2: total *= 0.95
-    if contract_months >= 24: total *= 0.80
-    elif contract_months >= 12: total *= 0.85
-    elif contract_months >= 6: total *= 0.90
-    elif contract_months >= 3: total *= 0.95
     
+    # ============================================================
+    # 5. ADD-ONS
+    # ============================================================
+    add_on_total = 0
+    add_on_details = []
+    
+    if add_ons.get('window_cleaning'):
+        add_on_total += 50
+        add_on_details.append("Window Cleaning (+$50)")
+    if add_ons.get('carpet_cleaning'):
+        carpet_cost = sqft * 0.25 if sqft > 0 else 75
+        add_on_total += carpet_cost
+        add_on_details.append(f"Carpet Cleaning (+${carpet_cost:.0f})")
+    if add_ons.get('floor_waxing'):
+        wax_cost = sqft * 0.35 if sqft > 0 else 100
+        add_on_total += wax_cost
+        add_on_details.append(f"Floor Waxing (+${wax_cost:.0f})")
+    if add_ons.get('disinfection'):
+        add_on_total += 75
+        add_on_details.append("Disinfection (+$75)")
+    if add_ons.get('pressure_washing'):
+        add_on_total += 125 if sqft < 5000 else 200
+        add_on_details.append("Pressure Washing (+$125+)")
+    
+    total = subtotal + travel_cost + tolls + add_on_total
+    
+    # ============================================================
+    # 6. MODIFIERS (Holiday, Emergency, Volume, Contract)
+    # ============================================================
+    modifier_details = []
+    
+    # Holiday surcharge
+    if holiday != "None":
+        holiday_rate = HOLIDAY_RATES.get(holiday, 0.25)
+        total *= (1 + holiday_rate)
+        modifier_details.append(f"Holiday Surcharge (+{holiday_rate*100:.0f}%)")
+    
+    # Emergency/Notice period
+    if notice_hours <= 12:
+        total *= 1.75
+        modifier_details.append("Emergency (Same Day) +75%")
+    elif notice_hours <= 24:
+        total *= 1.50
+        modifier_details.append("Rush (Next Day) +50%")
+    elif notice_hours <= 48:
+        total *= 1.25
+        modifier_details.append("Short Notice (2 days) +25%")
+    
+    # Volume discount (multiple locations)
+    if num_locations >= 10:
+        total *= 0.80
+        modifier_details.append(f"Volume Discount ({num_locations} locations) -20%")
+    elif num_locations >= 5:
+        total *= 0.85
+        modifier_details.append(f"Volume Discount ({num_locations} locations) -15%")
+    elif num_locations >= 2:
+        total *= 0.90
+        modifier_details.append(f"Multiple Locations Discount ({num_locations}) -10%")
+    
+    # Contract length discount
+    if contract_months >= 24:
+        total *= 0.75
+        modifier_details.append("2+ Year Contract -25%")
+    elif contract_months >= 12:
+        total *= 0.80
+        modifier_details.append("1 Year Contract -20%")
+    elif contract_months >= 6:
+        total *= 0.85
+        modifier_details.append("6 Month Contract -15%")
+    elif contract_months >= 3:
+        total *= 0.90
+        modifier_details.append("Quarterly Contract -10%")
+    
+    # ============================================================
+    # 7. TRUE COST CALCULATION (Labor + Materials + Overhead)
+    # ============================================================
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT hourly_wage, min_job_fee FROM business_profile WHERE company_id = ?", (company_id,))
+    c.execute("SELECT hourly_wage, min_job_fee, profit_target FROM business_profile WHERE company_id = ?", (company_id,))
     row = c.fetchone()
     conn.close()
+    
     hourly_wage = row[0] if row else 15.0
     min_job_fee = row[1] if row else 150
-    if sqft>0: labor_hours = (sqft/500)*comp_factor
-    else: labor_hours = (bedrooms*0.75)+(bathrooms*0.5)
+    profit_target = row[2] if row else 0.40
+    
+    # Labor hours estimation
+    if sqft > 0:
+        base_hours = sqft / 500
+        labor_hours = base_hours * comp_factor
+    else:
+        labor_hours = (bedrooms * 0.75) + (bathrooms * 0.5)
+    
+    # Adjust for complexity
+    if complexity >= 8:
+        labor_hours *= 1.5
+    elif complexity >= 6:
+        labor_hours *= 1.25
+    
     labor_cost = labor_hours * hourly_wage
-    materials_cost = (sqft*0.025) if sqft>0 else 25
-    true_cost = labor_cost + materials_cost + travel_cost + tolls
-    if true_cost < min_job_fee: true_cost = min_job_fee
-    lowest = math.ceil(true_cost)
-    fair = math.ceil(total)
-    highest = math.ceil(total * 1.3)
-    sweet_spot = math.ceil((lowest + fair) / 2)
-    tax_rate = SALES_TAX_RATE
-    return {
-        "lowest": {"total": math.ceil(lowest*(1+tax_rate)), "subtotal": lowest, "tax": round(lowest*tax_rate,2), "margin":0},
-        "fair": {"total": math.ceil(fair*(1+tax_rate)), "subtotal": fair, "tax": round(fair*tax_rate,2), "margin": round(((fair-true_cost)/fair)*100,1) if fair>0 else 0},
-        "highest": {"total": math.ceil(highest*(1+tax_rate)), "subtotal": highest, "tax": round(highest*tax_rate,2), "margin": round(((highest-true_cost)/highest)*100,1) if highest>0 else 0},
-        "sweet_spot": {"total": math.ceil(sweet_spot*(1+tax_rate)), "subtotal": sweet_spot, "tax": round(sweet_spot*tax_rate,2), "margin": round(((sweet_spot-true_cost)/sweet_spot)*100,1) if sweet_spot>0 else 0},
-        "true_cost": true_cost,
-        "toll_estimate": tolls,
-        "add_on_total": add_on_total,
-        "labor_hours": labor_hours,
-        "labor_cost": labor_cost,
-        "materials_cost": materials_cost,
-        "travel_cost": travel_cost
+    
+    # Materials cost (with complexity adjustment)
+    if sqft > 0:
+        materials_cost = sqft * 0.035  # $0.035 per sq ft
+    else:
+        materials_cost = bedrooms * 15 + bathrooms * 10
+    
+    if complexity >= 7:
+        materials_cost *= 1.3
+    
+    # Overhead (15% for admin, insurance, vehicle maintenance)
+    overhead_rate = 0.15
+    overhead_cost = (labor_cost + materials_cost) * overhead_rate
+    
+    # TRUE TOTAL COST
+    true_cost = labor_cost + materials_cost + overhead_cost + travel_cost + tolls
+    
+    # Apply minimum job fee
+    if true_cost < min_job_fee:
+        true_cost = min_job_fee
+        cost_breakdown = f"Minimum job fee applied (${min_job_fee})"
+    else:
+        cost_breakdown = "Calculated from actual costs"
+    
+    # ============================================================
+    # 8. MARKET INTELLIGENCE - Competitor Rates
+    # ============================================================
+    # Market rates based on city and property type
+    market_rates = {
+        "major_metro": {"min": 0.16, "avg": 0.22, "max": 0.30},
+        "coastal": {"min": 0.14, "avg": 0.19, "max": 0.26},
+        "standard": {"min": 0.12, "avg": 0.16, "max": 0.22},
+        "rural": {"min": 0.10, "avg": 0.14, "max": 0.18}
     }
-
+    
+    zone_market = "standard"
+    if city in major_metros:
+        zone_market = "major_metro"
+    elif city in coastal:
+        zone_market = "coastal"
+    elif city in rural:
+        zone_market = "rural"
+    
+    market_min = market_rates[zone_market]["min"] * prop_mult
+    market_avg = market_rates[zone_market]["avg"] * prop_mult
+    market_max = market_rates[zone_market]["max"] * prop_mult
+    
+    if sqft > 0:
+        competitor_min_price = sqft * market_min
+        competitor_avg_price = sqft * market_avg
+        competitor_max_price = sqft * market_max
+    else:
+        competitor_min_price = bedrooms * 45
+        competitor_avg_price = bedrooms * 55
+        competitor_max_price = bedrooms * 70
+    
+    # ============================================================
+    # 9. FOUR PRICE TIERS WITH GUARANTEED HOUSE MARGIN
+    # ============================================================
+    # TIER 1: BREAK EVEN (0% margin - covers all costs)
+    break_even = math.ceil(true_cost)
+    break_even_margin = 0
+    break_even_house = 0
+    
+    # TIER 2: SWEET SPOT (40% margin - HOUSE KEEPS 40%)
+    desired_margin = profit_target if profit_target > 0 else 0.40
+    sweet_spot_raw = true_cost / (1 - desired_margin)
+    sweet_spot = math.ceil(sweet_spot_raw)
+    sweet_spot_margin = round(((sweet_spot - true_cost) / sweet_spot) * 100, 1)
+    sweet_spot_house_keeps = sweet_spot_margin
+    
+    # TIER 3: FAIR MARKET (30% margin - competitive)
+    fair_market_raw = true_cost / (1 - 0.30)
+    fair_market = math.ceil(max(fair_market_raw, sweet_spot * 0.85))
+    fair_market_margin = round(((fair_market - true_cost) / fair_market) * 100, 1)
+    fair_market_house_keeps = fair_market_margin
+    
+    # TIER 4: PREMIUM (50% margin - premium service)
+    premium_raw = true_cost / (1 - 0.50)
+    premium = math.ceil(max(premium_raw, sweet_spot * 1.25))
+    premium_margin = round(((premium - true_cost) / premium) * 100, 1)
+    premium_house_keeps = premium_margin
+    
+    # Adjust based on market competitiveness
+    # Ensure sweet spot is competitive but profitable
+    if competitor_avg_price > sweet_spot:
+        # Our price is below market average - we can raise it
+        sweet_spot = math.ceil(min(sweet_spot * 1.1, competitor_avg_price))
+    elif competitor_avg_price < sweet_spot * 0.7:
+        # Our price is too high - lower to stay competitive
+        sweet_spot = math.ceil(max(break_even, competitor_avg_price))
+    
+    # Recalculate sweet spot margin after adjustment
+    sweet_spot_margin = round(((sweet_spot - true_cost) / sweet_spot) * 100, 1)
+    sweet_spot_house_keeps = sweet_spot_margin
+    
+    # ============================================================
+    # 10. TAX CALCULATION
+    # ============================================================
+    tax_rate = SALES_TAX_RATE
+    
+    # ============================================================
+    # 11. RETURN RESULTS WITH FULL DETAILS
+    # ============================================================
+    return {
+        # Price Tiers
+        "break_even": {
+            "total": math.ceil(break_even * (1 + tax_rate)),
+            "subtotal": break_even,
+            "tax": round(break_even * tax_rate, 2),
+            "margin": break_even_margin,
+            "house_keeps": break_even_house,
+            "description": "Just covers costs - no profit"
+        },
+        "sweet_spot": {
+            "total": math.ceil(sweet_spot * (1 + tax_rate)),
+            "subtotal": sweet_spot,
+            "tax": round(sweet_spot * tax_rate, 2),
+            "margin": sweet_spot_margin,
+            "house_keeps": sweet_spot_house_keeps,
+            "description": f"RECOMMENDED - {desired_margin*100:.0f}% house margin"
+        },
+        "fair_market": {
+            "total": math.ceil(fair_market * (1 + tax_rate)),
+            "subtotal": fair_market,
+            "tax": round(fair_market * tax_rate, 2),
+            "margin": fair_market_margin,
+            "house_keeps": fair_market_house_keeps,
+            "description": "Competitive with local market rates"
+        },
+        "premium": {
+            "total": math.ceil(premium * (1 + tax_rate)),
+            "subtotal": premium,
+            "tax": round(premium * tax_rate, 2),
+            "margin": premium_margin,
+            "house_keeps": premium_house_keeps,
+            "description": "Premium/Rush/Emergency service"
+        },
+        
+        # Cost Breakdown
+        "true_cost": true_cost,
+        "cost_breakdown": cost_breakdown,
+        "labor_hours": round(labor_hours, 2),
+        "labor_cost": round(labor_cost, 2),
+        "materials_cost": round(materials_cost, 2),
+        "overhead_cost": round(overhead_cost, 2),
+        "travel_cost": round(travel_cost, 2),
+        "toll_estimate": round(tolls, 2),
+        "add_on_total": round(add_on_total, 2),
+        "add_on_details": add_on_details,
+        
+        # Modifiers Applied
+        "modifier_details": modifier_details,
+        "zone_name": zone_name,
+        "zone_multiplier": zone_mult,
+        "complexity_level": complexity_level,
+        "pricing_model": pricing_model,
+        
+        # Market Intelligence
+        "market_insights": {
+            "zone": zone_market,
+            "competitor_min": round(competitor_min_price, 2),
+            "competitor_avg": round(competitor_avg_price, 2),
+            "competitor_max": round(competitor_max_price, 2),
+            "market_position": "Below Average" if sweet_spot < competitor_avg_price else "Above Average" if sweet_spot > competitor_avg_price else "At Market",
+            "recommendation": "Great value - competitive price" if sweet_spot <= competitor_avg_price else "Premium position - justify with quality"
+        },
+        
+        # Summary
+        "summary": {
+            "total_cost": round(true_cost, 2),
+            "recommended_price": sweet_spot,
+            "recommended_total": math.ceil(sweet_spot * (1 + tax_rate)),
+            "house_profit": round(sweet_spot - true_cost, 2),
+            "house_margin": sweet_spot_margin,
+            "savings_vs_premium": round(((premium - sweet_spot) / premium) * 100, 1),
+            "premium_vs_break_even": round(((premium - break_even) / break_even) * 100, 1)
+        }
+    }
 
 # ============================================================
 # USER MANAGEMENT FUNCTIONS
@@ -2486,7 +2769,7 @@ def dashboard():
     
     st.info("Use sidebar to navigate.")
 
-def estimate_page():
+def def estimate_page():
     if st.button("← Back"):
         st.session_state.page = "dashboard"
         st.rerun()
@@ -2539,22 +2822,102 @@ def estimate_page():
     
     result = calculate_price_with_tiers(city, prop, sqft, bedrooms, bathrooms, freq, complexity, travel_miles, add_ons, holiday, num_locations, notice, contract_months, company_id)
     
-    st.markdown("### 💰 Pricing Options")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.markdown(f'<div class="pricing-tier-low">🔥 LOWEST<br>${result["lowest"]["total"]}<br>0% margin</div>', unsafe_allow_html=True)
-    c2.markdown(f'<div class="pricing-tier-fair">💰 FAIR<br>${result["fair"]["total"]}<br>{result["fair"]["margin"]}% margin</div>', unsafe_allow_html=True)
-    c3.markdown(f'<div class="pricing-tier-high">⭐ HIGHEST<br>${result["highest"]["total"]}<br>{result["highest"]["margin"]}% margin</div>', unsafe_allow_html=True)
-    c4.markdown(f'<div class="pricing-tier-fair">🎯 SWEET SPOT<br>${result["sweet_spot"]["total"]}<br>{result["sweet_spot"]["margin"]}% margin</div>', unsafe_allow_html=True)
+    # ============================================================
+    # NEW: 4-TIER PRICING DISPLAY WITH MARKET INTELLIGENCE
+    # ============================================================
+    st.markdown("### 💰 Four Pricing Tiers")
     
-    with st.expander("Internal Cost Breakdown"):
-        st.write(f"True cost: ${result['true_cost']:.2f}")
-        st.write(f"Labor hours: {result['labor_hours']:.2f}")
-        st.write(f"Labor cost: ${result['labor_cost']:.2f}")
-        st.write(f"Materials cost: ${result['materials_cost']:.2f}")
-        st.write(f"Travel cost: ${result['travel_cost']:.2f}")
-        st.write(f"Toll estimate: ${result['toll_estimate']:.2f}")
+    # Market intelligence summary
+    with st.expander("📊 Market Intelligence & Competitor Analysis", expanded=False):
+        st.markdown(f"""
+        **Location Analysis:** {result.get('zone_name', 'Standard')} area (Multiplier: {result.get('zone_multiplier', 1.0)}x)
+        **Complexity Level:** {result.get('complexity_level', 'Moderate')}
+        **Pricing Model:** {result.get('pricing_model', 'Per Square Foot')}
+        
+        **Competitor Rates in {city}:**
+        - 💰 Minimum: ${result.get('market_insights', {}).get('competitor_min', 0):,.2f}
+        - 📊 Average: ${result.get('market_insights', {}).get('competitor_avg', 0):,.2f}
+        - 💎 Premium: ${result.get('market_insights', {}).get('competitor_max', 0):,.2f}
+        
+        **Our Position:** {result.get('market_insights', {}).get('market_position', 'At Market')}
+        **Recommendation:** {result.get('market_insights', {}).get('recommendation', 'Competitive price')}
+        """)
     
-    # Single save button (fixed version)
+    # Display 4 price tiers
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.markdown(f"""
+        <div style="text-align: center; padding: 15px; border-radius: 12px; background: #fef3c7; border: 2px solid #f59e0b;">
+            <h4>📉 BREAK EVEN</h4>
+            <h2 style="color: #d97706;">${result['break_even']['total']:,}</h2>
+            <p><strong>{result['break_even']['margin']}% margin</strong></p>
+            <small>House keeps: ${(result['break_even']['subtotal'] - result['true_cost']):,.2f}</small>
+            <p style="font-size: 12px; margin-top: 10px;">⚠️ No profit - just covering costs</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown(f"""
+        <div style="text-align: center; padding: 15px; border-radius: 12px; background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; border: 2px solid #10b981;">
+            <h4>🎯 SWEET SPOT</h4>
+            <h2 style="color: white;">${result['sweet_spot']['total']:,}</h2>
+            <p><strong>{result['sweet_spot']['margin']}% margin</strong></p>
+            <small>🏠 House keeps: ${(result['sweet_spot']['subtotal'] - result['true_cost']):,.2f}</small>
+            <p style="font-size: 12px; margin-top: 10px;">✅ RECOMMENDED - Best value</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        st.markdown(f"""
+        <div style="text-align: center; padding: 15px; border-radius: 12px; background: #d1fae5; border: 2px solid #10b981;">
+            <h4>💰 FAIR MARKET</h4>
+            <h2 style="color: #059669;">${result['fair_market']['total']:,}</h2>
+            <p><strong>{result['fair_market']['margin']}% margin</strong></p>
+            <small>House keeps: ${(result['fair_market']['subtotal'] - result['true_cost']):,.2f}</small>
+            <p style="font-size: 12px; margin-top: 10px;">📊 Competitive with local market</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col4:
+        st.markdown(f"""
+        <div style="text-align: center; padding: 15px; border-radius: 12px; background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%); color: white; border: 2px solid #8b5cf6;">
+            <h4>⭐ PREMIUM</h4>
+            <h2 style="color: white;">${result['premium']['total']:,}</h2>
+            <p><strong>{result['premium']['margin']}% margin</strong></p>
+            <small>🏠 House keeps: ${(result['premium']['subtotal'] - result['true_cost']):,.2f}</small>
+            <p style="font-size: 12px; margin-top: 10px;">⚡ Rush/Emergency/Premium</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Detailed cost breakdown
+    with st.expander("🔍 Detailed Cost Breakdown", expanded=False):
+        st.markdown(f"""
+        **True Cost Calculation:**
+        - Labor ({result['labor_hours']:.1f} hrs @ ${result.get('hourly_wage', 15)}/hr): ${result['labor_cost']:,.2f}
+        - Materials: ${result['materials_cost']:,.2f}
+        - Overhead (15%): ${result.get('overhead_cost', result['labor_cost'] * 0.15):,.2f}
+        - Travel: ${result['travel_cost']:,.2f}
+        - Tolls: ${result['toll_estimate']:,.2f}
+        - **Total Cost: ${result['true_cost']:,.2f}**
+        
+        **Add-ons Applied:**
+        {chr(10).join([f'- {detail}' for detail in result.get('add_on_details', [])]) if result.get('add_on_details') else '- None'}
+        
+        **Modifiers Applied:**
+        {chr(10).join([f'- {mod}' for mod in result.get('modifier_details', [])]) if result.get('modifier_details') else '- None'}
+        """)
+    
+    # Summary
+    st.info(f"""
+    💡 **Pricing Summary:**
+    - Total Cost: ${result['summary']['total_cost']:,.2f}
+    - 🎯 Recommended Price: ${result['summary']['recommended_total']:,}
+    - 🏠 House Profit: ${result['summary']['house_profit']:,.2f} ({result['summary']['house_margin']}% margin)
+    - 📈 Premium is {result['summary']['premium_vs_break_even']:.0f}% higher than Break Even
+    """)
+    
+    # Single save button (updated to use sweet_spot as primary)
     if st.button("💾 Save as Draft", key="save_draft_estimate"):
         if client_name and client_email:
             conn = sqlite3.connect(DB_PATH)
@@ -2582,14 +2945,14 @@ def estimate_page():
             columns_str = ', '.join(base_columns)
             placeholders = ', '.join(['?' for _ in base_columns])
             
-            # Prepare values
+            # Prepare values (UPDATED to use new tier names)
             base_values = [
                 company_id, st.session_state.user['user_id'], client_name, client_email, city, prop, 
                 sqft, bedrooms, bathrooms, freq, complexity, travel_miles, result['toll_estimate'], 
                 1 if add_window else 0, 1 if add_carpet else 0, 1 if add_floor else 0, 
                 1 if add_disinfection else 0, 1 if add_pressure else 0, 
-                result['fair']['subtotal'], result['fair']['tax'], result['fair']['total'], 
-                result['lowest']['total'], result['fair']['total'], result['highest']['total'], 
+                result['sweet_spot']['subtotal'], result['sweet_spot']['tax'], result['sweet_spot']['total'], 
+                result['break_even']['total'], result['fair_market']['total'], result['premium']['total'], 
                 result['sweet_spot']['total'], datetime.now().isoformat(), "draft"
             ]
             
@@ -2612,7 +2975,7 @@ def estimate_page():
             # Separate button for sending email (appears after save)
             if st.button("📧 Send Estimate to Client Now"):
                 approval_link = f"https://app.profitclean.com/approve/{estimate_id}/{secrets.token_hex(16)}"
-                if send_estimate_email(company_id, estimate_id, client_email, client_name, result['fair']['total'], approval_link):
+                if send_estimate_email(company_id, estimate_id, client_email, client_name, result['sweet_spot']['total'], approval_link):
                     st.success(f"📧 Estimate sent to {client_email}")
                     conn = sqlite3.connect(DB_PATH)
                     c = conn.cursor()
