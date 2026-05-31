@@ -2771,19 +2771,16 @@ def estimate_page():
     
     st.markdown("### 💰 Four Pricing Tiers")
     
+    # Market intelligence summary (simplified - no missing keys)
     with st.expander("📊 Market Intelligence & Competitor Analysis", expanded=False):
+        # Get zone info from cost calculator directly
+        cost_calc = calculator_cost_based(city, prop, sqft, bedrooms, bathrooms, freq, complexity, travel_miles)
         st.markdown(f"""
-        **Location Analysis:** {result.get('zone_name', 'Standard')} area (Multiplier: {result.get('zone_multiplier', 1.0)}x)
-        **Complexity Level:** {result.get('complexity_level', 'Moderate')}
-        **Pricing Model:** {result.get('pricing_model', 'Per Square Foot')}
+        **Location Analysis:** {cost_calc['breakdown']['zone_name']} area (Multiplier: {cost_calc['breakdown']['zone_multiplier']}x)
+        **Complexity Level:** {complexity}/10
+        **Pricing Model:** {cost_calc['breakdown']['pricing_model']}
         
-        **Competitor Rates in {city}:**
-        - 💰 Minimum: ${result.get('market_insights', {}).get('competitor_min', 0):,.2f}
-        - 📊 Average: ${result.get('market_insights', {}).get('competitor_avg', 0):,.2f}
-        - 💎 Premium: ${result.get('market_insights', {}).get('competitor_max', 0):,.2f}
-        
-        **Our Position:** {result.get('market_insights', {}).get('market_position', 'At Market')}
-        **Recommendation:** {result.get('market_insights', {}).get('recommendation', 'Competitive price')}
+        **Recommended Price:** ${result['sweet_spot']['total']:,}
         """)
     
     col1, col2, col3, col4 = st.columns(4)
@@ -2794,7 +2791,6 @@ def estimate_page():
             <h4>📉 BREAK EVEN</h4>
             <h2 style="color: #d97706;">${result['break_even']['total']:,}</h2>
             <p><strong>{result['break_even']['margin']}% margin</strong></p>
-            <small>House keeps: ${(result['break_even']['subtotal'] - result['true_cost']):,.2f}</small>
             <p style="font-size: 12px; margin-top: 10px;">⚠️ No profit - just covering costs</p>
         </div>
         """, unsafe_allow_html=True)
@@ -2805,7 +2801,6 @@ def estimate_page():
             <h4>🎯 SWEET SPOT</h4>
             <h2 style="color: white;">${result['sweet_spot']['total']:,}</h2>
             <p><strong>{result['sweet_spot']['margin']}% margin</strong></p>
-            <small>🏠 House keeps: ${(result['sweet_spot']['subtotal'] - result['true_cost']):,.2f}</small>
             <p style="font-size: 12px; margin-top: 10px;">✅ RECOMMENDED - Best value</p>
         </div>
         """, unsafe_allow_html=True)
@@ -2816,7 +2811,6 @@ def estimate_page():
             <h4>💰 FAIR MARKET</h4>
             <h2 style="color: #059669;">${result['fair_market']['total']:,}</h2>
             <p><strong>{result['fair_market']['margin']}% margin</strong></p>
-            <small>House keeps: ${(result['fair_market']['subtotal'] - result['true_cost']):,.2f}</small>
             <p style="font-size: 12px; margin-top: 10px;">📊 Competitive with local market</p>
         </div>
         """, unsafe_allow_html=True)
@@ -2827,7 +2821,6 @@ def estimate_page():
             <h4>⭐ PREMIUM</h4>
             <h2 style="color: white;">${result['premium']['total']:,}</h2>
             <p><strong>{result['premium']['margin']}% margin</strong></p>
-            <small>🏠 House keeps: ${(result['premium']['subtotal'] - result['true_cost']):,.2f}</small>
             <p style="font-size: 12px; margin-top: 10px;">⚡ Rush/Emergency/Premium</p>
         </div>
         """, unsafe_allow_html=True)
@@ -2835,26 +2828,18 @@ def estimate_page():
     with st.expander("🔍 Detailed Cost Breakdown", expanded=False):
         st.markdown(f"""
         **True Cost Calculation:**
-        - Labor ({result['labor_hours']:.1f} hrs @ ${result.get('hourly_wage', 15)}/hr): ${result['labor_cost']:,.2f}
+        - Labor ({result['labor_hours']:.1f} hrs): ${result['labor_cost']:,.2f}
         - Materials: ${result['materials_cost']:,.2f}
-        - Overhead (15%): ${result.get('overhead_cost', result['labor_cost'] * 0.15):,.2f}
         - Travel: ${result['travel_cost']:,.2f}
         - Tolls: ${result['toll_estimate']:,.2f}
         - **Total Cost: ${result['true_cost']:,.2f}**
-        
-        **Add-ons Applied:**
-        {chr(10).join([f'- {detail}' for detail in result.get('add_on_details', [])]) if result.get('add_on_details') else '- None'}
-        
-        **Modifiers Applied:**
-        {chr(10).join([f'- {mod}' for mod in result.get('modifier_details', [])]) if result.get('modifier_details') else '- None'}
         """)
     
     st.info(f"""
     💡 **Pricing Summary:**
-    - Total Cost: ${result['summary']['total_cost']:,.2f}
-    - 🎯 Recommended Price: ${result['summary']['recommended_total']:,}
-    - 🏠 House Profit: ${result['summary']['house_profit']:,.2f} ({result['summary']['house_margin']}% margin)
-    - 📈 Premium is {result['summary']['premium_vs_break_even']:.0f}% higher than Break Even
+    - Total Cost: ${result['true_cost']:,.2f}
+    - 🎯 Recommended Price: ${result['sweet_spot']['total']:,}
+    - 🏠 House Profit: ${result['sweet_spot']['subtotal'] - result['true_cost']:,.2f} ({result['sweet_spot']['margin']}% margin)
     """)
     
     if st.button("💾 Save as Draft", key="save_draft_estimate"):
