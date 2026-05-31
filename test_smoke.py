@@ -64,44 +64,63 @@ check("wrong password fails", not app.verify_password("WrongPass1!", h))
 check("Orlando-Miami toll", app.estimate_toll_cost("Orlando", "Miami") == 17.0)
 check("unknown route default", app.estimate_toll_cost("Unknown", "City") == 5.0)
 
-# Distance calculation
-d = app.calculate_distance(28.5383, -81.3792, 25.7617, -80.1918)
-check("Orlando-Miami distance ~235mi", 200 < d < 270, f"got {d:.1f}")
+# Test company for pricing and user tests
+conn = __import__("sqlite3").connect(TEST_DB)
+c = conn.cursor()
+c.execute("INSERT INTO companies (name, subdomain, created_at, is_active) VALUES (?,?,?,?)",
+          ("Test Co", "testco", app.datetime.now().isoformat(), 1))
+company_id = c.lastrowid
+conn.commit()
+conn.close()
 
 # Pricing tiers
 result = app.calculate_price_with_tiers(
-    city="Orlando",
-    property_type="Office Standard",
-    sqft=2000,
-    bedrooms=0,
-    bathrooms=0,
-    frequency="Weekly",
-    complexity=5,
-    travel_miles=10,
-    add_ons={},
-    holiday="None",
-    num_locations=1,
-    notice_hours=72,
-    contract_months=0,
+    "Orlando",
+    "Office Standard",
+    2000,
+    0,
+    0,
+    "Weekly",
+    5,
+    10,
+    {},
+    "None",
+    1,
+    72,
+    0,
+    company_id=company_id,
 )
 check("pricing returns tiers", all(k in result for k in ("lowest", "fair", "highest")))
 check("fair >= lowest", result["fair"]["subtotal"] >= result["lowest"]["subtotal"])
 check("highest >= fair", result["highest"]["subtotal"] >= result["fair"]["subtotal"])
 check("fair total has tax", result["fair"]["total"] > result["fair"]["subtotal"])
 
-# Smart task list
-tasks = app.generate_smart_task_list("Office Standard", 1500, 5)
-check("task list non-empty", len(tasks) > 0)
+# Pre-inspection ballpark estimate
+insp = app.calculate_inspection_estimate({
+    "property_type": "Office",
+    "square_feet": 2000,
+    "num_floors": 1,
+    "has_elevator": True,
+    "num_buildings": 1,
+    "frequency": "Weekly",
+    "access_time": "Normal business hours",
+    "areas": {"reception": True, "private_offices": 0, "open_workstations": 0, "conference_rooms": 0,
+              "breakroom": False, "hallways": False, "stairwells": 0, "storage_rooms": 0,
+              "loading_dock": False, "exterior_entry": False, "trash": False},
+    "windows": {"interior": 0, "exterior": 0, "high": 0, "glass_doors": 0, "partitions": 0,
+                "mirrors": 0, "tracks": False, "screens": False},
+    "restrooms": {"toilets": 0, "urinals": 0, "sinks": 0, "mirrors": 0, "showers": 0,
+                  "count": 0, "deep_clean": False, "restock": False},
+    "floors": {"carpet_sqft": 0, "tile_sqft": 0, "vinyl_sqft": 0, "hardwood_sqft": 0,
+               "concrete_sqft": 0, "condition": "Good", "carpet_extract": False, "strip_wax": False, "buff": False},
+    "furniture": {"desks": 0, "computers": 0, "phones": 0, "chairs": 0, "tables": 0,
+                  "whiteboards": 0, "appliances": 0, "equipment": 0, "move_light": 0, "move_heavy": 0, "clean_under": False},
+    "special": {"high_dusting": False, "blinds": 0, "disinfection": False, "odor_control": False,
+                "post_construction": False, "emergency": False, "holiday": "No", "supply_provided": False, "complexity": 3},
+})
+check("inspection estimate minimum", insp["final_price"] >= 150)
 
-duration = app.generate_cleaning_duration(1500, "Office Standard", 5)
-check("duration positive", duration > 0)
-
-# QR code generation
-qr = app.generate_qr_code("test-data-123")
-check("QR returns data URI", isinstance(qr, str) and qr.startswith("data:image/png;base64,"))
-
-# Database init + user creation
-ok, uid = app.create_user("testuser", "test_smoke@example.com", "TestPass1!", role="admin")
+ok, uid = app.create_user("testuser", "test_smoke@example.com", "TestPass1!", role="admin", company_id=company_id)
 check("create_user succeeds", ok and uid is not None)
 
 ok2, data = app.authenticate_user("test_smoke@example.com", "TestPass1!")

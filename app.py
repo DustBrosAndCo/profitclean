@@ -1475,6 +1475,11 @@ def estimate_toll(origin, dest):
     return KNOWN_TOLLS.get(key, 5.00)
 
 
+def estimate_toll_cost(origin, dest):
+    """Alias for tests and backward compatibility."""
+    return estimate_toll(origin, dest)
+
+
 # ============================================================
 # ENHANCED PRICING CALCULATION WITH 4 TIERS
 # ============================================================
@@ -2652,7 +2657,7 @@ def dashboard():
             ("👥 Clients", "clients"),
             ("👷 Workers", "workers"),
             ("📅 Schedule", "schedule"),
-            ("🔍 Inspections", "inspections"),
+            ("🔍 Pre-Inspection", "inspections"),
             ("💰 Profit", "profit"),
             ("📋 History", "history"),
             ("💬 Team Chat", "chat"),
@@ -3202,36 +3207,674 @@ def job_templates_page():
                 else:
                     st.error("Template name required")
 
-def inspections_page():
-    if st.button("← Back"):
+def calculate_inspection_estimate(data):
+    """Calculate ballpark estimate from inspection data (Medium to High range, excludes travel/tolls)"""
+    
+    base_price = 0
+    adjustments = 0
+    adjustment_details = []
+    
+    # ============================================================
+    # BASE PRICE FROM SQUARE FOOTAGE
+    # ============================================================
+    sqft = data['square_feet']
+    
+    # Base rate per sq ft (Medium to High range)
+    base_rate_per_sqft = 0.18  # Florida average for commercial
+    
+    # Adjust for property type
+    property_multipliers = {
+        "Office": 1.0,
+        "Retail": 1.1,
+        "Warehouse": 0.85,
+        "Medical/Dental": 1.5,
+        "Restaurant": 2.0,
+        "School/Daycare": 1.3,
+        "Hotel": 1.2,
+        "Gym/Fitness": 1.3,
+        "Church": 1.0,
+        "Other": 1.0
+    }
+    
+    prop_mult = property_multipliers.get(data['property_type'], 1.0)
+    
+    # Adjust for frequency
+    freq_multipliers = {
+        "One-time": 1.0,
+        "Daily": 0.7,
+        "Weekly": 0.85,
+        "Bi-weekly": 1.0,
+        "Monthly": 1.2
+    }
+    
+    freq_mult = freq_multipliers.get(data['frequency'], 1.0)
+    
+    # Adjust for floors
+    floor_penalty = 1 + ((data['num_floors'] - 1) * 0.10) if data['num_floors'] > 1 else 1
+    if not data['has_elevator'] and data['num_floors'] > 1:
+        floor_penalty += 0.05 * (data['num_floors'] - 1)
+    
+    # Adjust for multiple buildings
+    building_penalty = 1 + ((data['num_buildings'] - 1) * 0.15) if data['num_buildings'] > 1 else 1
+    
+    # Complexity factor
+    complexity_factor = 1 + ((data['special']['complexity'] - 3) * 0.05)
+    
+    base_price = sqft * base_rate_per_sqft * prop_mult * freq_mult * floor_penalty * building_penalty * complexity_factor
+    
+    # ============================================================
+    # ADD-ONS (Based on inspection findings)
+    # ============================================================
+    
+    # Restrooms
+    restroom_fixtures = (
+        data['restrooms']['toilets'] * 3.50 +
+        data['restrooms']['urinals'] * 2.50 +
+        data['restrooms']['sinks'] * 4.00 +
+        data['restrooms']['mirrors'] * 2.00
+    )
+    if restroom_fixtures > 0:
+        adjustments += restroom_fixtures
+        adjustment_details.append(f"Restroom fixtures: ${restroom_fixtures:.0f}")
+    
+    if data['restrooms']['showers'] > 0:
+        shower_cost = data['restrooms']['showers'] * 8.00
+        adjustments += shower_cost
+        adjustment_details.append(f"Showers: ${shower_cost:.0f}")
+    
+    if data['restrooms']['deep_clean']:
+        deep_clean_cost = 75
+        adjustments += deep_clean_cost
+        adjustment_details.append(f"Restroom deep clean: ${deep_clean_cost}")
+    
+    # Windows
+    window_cost = (
+        data['windows']['interior'] * 3.00 +
+        data['windows']['exterior'] * 5.00 +
+        data['windows']['high'] * 12.00 +
+        data['windows']['glass_doors'] * 4.00 +
+        data['windows']['partitions'] * 2.00 +
+        data['windows']['mirrors'] * 2.00
+    )
+    if window_cost > 0:
+        adjustments += window_cost
+        adjustment_details.append(f"Windows/glass: ${window_cost:.0f}")
+    
+    if data['windows']['tracks']:
+        track_cost = data['windows']['interior'] * 2.00 if data['windows']['interior'] > 0 else 25
+        adjustments += track_cost
+        adjustment_details.append(f"Window tracks: ${track_cost:.0f}")
+    
+    # Floors
+    floor_cleaning = (
+        data['floors']['carpet_sqft'] * 0.05 +
+        data['floors']['tile_sqft'] * 0.08 +
+        data['floors']['vinyl_sqft'] * 0.07 +
+        data['floors']['hardwood_sqft'] * 0.12 +
+        data['floors']['concrete_sqft'] * 0.04
+    )
+    if floor_cleaning > 0:
+        adjustments += floor_cleaning
+        adjustment_details.append(f"Floor cleaning: ${floor_cleaning:.0f}")
+    
+    if data['floors']['carpet_extract']:
+        extract_cost = data['floors'].get('carpet_sqft', 0) * 0.20
+        adjustments += extract_cost
+        adjustment_details.append(f"Carpet extraction: ${extract_cost:.0f}")
+    
+    if data['floors']['strip_wax']:
+        strip_cost = (data['floors']['tile_sqft'] + data['floors']['vinyl_sqft']) * 0.35
+        adjustments += strip_cost
+        adjustment_details.append(f"Strip & wax: ${strip_cost:.0f}")
+    
+    # Furniture & Equipment
+    furniture_cost = (
+        data['furniture']['desks'] * 2.00 +
+        data['furniture']['computers'] * 1.50 +
+        data['furniture']['phones'] * 1.00 +
+        data['furniture']['chairs'] * 1.00 +
+        data['furniture']['tables'] * 3.00 +
+        data['furniture']['whiteboards'] * 2.00
+    )
+    if furniture_cost > 0:
+        adjustments += furniture_cost
+        adjustment_details.append(f"Furniture/equipment: ${furniture_cost:.0f}")
+    
+    # Moving furniture
+    moving_cost = data['furniture']['move_light'] * 2.00 + data['furniture']['move_heavy'] * 15.00
+    if moving_cost > 0:
+        adjustments += moving_cost
+        adjustment_details.append(f"Moving furniture: ${moving_cost:.0f}")
+    
+    if data['furniture']['clean_under'] and moving_cost > 0:
+        under_cost = data['furniture']['move_heavy'] * 10.00 if data['furniture']['move_heavy'] > 0 else 25
+        adjustments += under_cost
+        adjustment_details.append(f"Clean under items: ${under_cost:.0f}")
+    
+    # Special conditions
+    if data['special']['high_dusting']:
+        dust_cost = sqft * 0.015
+        adjustments += dust_cost
+        adjustment_details.append(f"High dusting: ${dust_cost:.0f}")
+    
+    if data['special']['blinds'] > 0:
+        blind_cost = data['special']['blinds'] * 4.00
+        adjustments += blind_cost
+        adjustment_details.append(f"Blinds: ${blind_cost:.0f}")
+    
+    if data['special']['disinfection']:
+        disinfection_cost = sqft * 0.03
+        adjustments += disinfection_cost
+        adjustment_details.append(f"Disinfection: ${disinfection_cost:.0f}")
+    
+    if data['special']['odor_control']:
+        adjustments += 45
+        adjustment_details.append("Odor control: $45")
+    
+    if data['special']['post_construction']:
+        post_cost = sqft * 0.15
+        adjustments += post_cost
+        adjustment_details.append(f"Post-construction: ${post_cost:.0f}")
+    
+    subtotal = base_price + adjustments
+    if data['special']['emergency']:
+        emergency_surcharge = subtotal * 0.25
+        adjustments += emergency_surcharge
+        adjustment_details.append(f"Emergency/Rush: +25% (${emergency_surcharge:.0f})")
+        subtotal = base_price + adjustments
+    
+    if data['special']['holiday'] == "Yes - Holiday":
+        holiday_surcharge = subtotal * 0.35
+        adjustments += holiday_surcharge
+        adjustment_details.append(f"Holiday surcharge: +35% (${holiday_surcharge:.0f})")
+        subtotal = base_price + adjustments
+    elif data['special']['holiday'] == "Yes - Weekend":
+        weekend_surcharge = subtotal * 0.25
+        adjustments += weekend_surcharge
+        adjustment_details.append(f"Weekend surcharge: +25% (${weekend_surcharge:.0f})")
+        subtotal = base_price + adjustments
+    
+    if data['special']['supply_provided']:
+        supply_discount = subtotal * 0.10
+        adjustments -= supply_discount
+        adjustment_details.append(f"Client provides supplies: -10% (${supply_discount:.0f})")
+    
+    # Access time adjustment
+    if data['access_time'] == "After hours (6PM-6AM)":
+        adjustments += base_price * 0.20
+        adjustment_details.append("After-hours access: +20%")
+    elif data['access_time'] == "Weekend only":
+        adjustments += base_price * 0.25
+        adjustment_details.append("Weekend only: +25%")
+    elif data['access_time'] == "Very restricted window":
+        adjustments += base_price * 0.35
+        adjustment_details.append("Restricted access: +35%")
+    
+    # Areas multiplier
+    area_count = sum([
+        1 if data['areas']['reception'] else 0,
+        1 if data['areas']['breakroom'] else 0,
+        1 if data['areas']['hallways'] else 0,
+        1 if data['areas']['loading_dock'] else 0,
+        data['areas']['private_offices'] / 5 if data['areas']['private_offices'] > 0 else 0,
+        data['areas']['conference_rooms'] / 2 if data['areas']['conference_rooms'] > 0 else 0
+    ])
+    
+    if area_count > 3:
+        area_multiplier = 1 + (area_count * 0.05)
+        base_price *= area_multiplier
+        adjustment_details.append(f"Multiple areas ({int(area_count)}): +{int((area_multiplier-1)*100)}%")
+    
+    # Minimum job fee
+    final_price = base_price + adjustments
+    if final_price < 150:
+        final_price = 150
+        adjustment_details.append("Minimum job fee applied: $150")
+    
+    # Round to nearest $25 for ballpark
+    final_price = round(final_price / 25) * 25
+    
+    # Generate included summary
+    included_summary = f"- {sqft:,} sq ft {data['property_type']} cleaning\n"
+    included_summary += f"- {data['frequency']} frequency\n"
+    if data['num_floors'] > 1:
+        included_summary += f"- {data['num_floors']} floors\n"
+    if data['restrooms']['toilets'] > 0:
+        included_summary += f"- {data['restrooms']['toilets']} toilet(s), {data['restrooms']['sinks']} sink(s)\n"
+    if data['windows']['interior'] > 0:
+        included_summary += f"- {data['windows']['interior']} interior windows\n"
+    
+    adjustment_summary = "\n".join([f"- {detail}" for detail in adjustment_details[:10]])
+    if len(adjustment_details) > 10:
+        adjustment_summary += f"\n- ... and {len(adjustment_details) - 10} more adjustments"
+    
+    # Calculate confidence score
+    confidence = 70
+    if data['special']['complexity'] >= 5:
+        confidence -= 10
+    if sqft > 0:
+        confidence += 10
+    if len(adjustment_details) > 5:
+        confidence += 10
+    confidence = min(95, max(40, confidence))
+    
+    return {
+        "base_price": round(base_price),
+        "adjustments": round(adjustments),
+        "final_price": final_price,
+        "included_summary": included_summary,
+        "adjustment_summary": adjustment_summary,
+        "confidence": confidence
+    }
+
+
+def pre_inspection_page():
+    """Quick pre-inspection checklist for ballpark estimates (Medium to High range)"""
+    if st.button("← Back to Dashboard"):
         st.session_state.page = "dashboard"
         st.rerun()
-    st.markdown("### 🔍 Pre‑Inspection Checklist")
-    st.info("Dynamic inspection system: add rooms, take notes, save versions.")
-    if 'inspection_areas' not in st.session_state:
-        st.session_state.inspection_areas = []
-    new_area = st.text_input("Add area (e.g., Restroom, Office, Kitchen)")
-    if st.button("➕ Add Area"):
-        if new_area:
-            st.session_state.inspection_areas.append({"name": new_area, "status": "pending", "notes": ""})
-            st.rerun()
-    for idx, area in enumerate(st.session_state.inspection_areas):
-        with st.expander(f"{area['name']} – {area['status']}"):
-            status = st.selectbox("Status", ["pending","in_progress","completed"], index=["pending","in_progress","completed"].index(area['status']), key=f"stat_{idx}")
-            notes = st.text_area("Notes", value=area.get('notes', ''), key=f"notes_{idx}")
-            area['status'] = status
-            area['notes'] = notes
-    if st.button("Save Inspection"):
-        company_id = get_current_user_company()
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("INSERT INTO inspections (company_id, user_id, client_name, areas_json, status, started_at) VALUES (?,?,?,?,?,?)",
-                  (company_id, st.session_state.user['user_id'], "Sample Client", json.dumps(st.session_state.inspection_areas), "completed", datetime.now().isoformat()))
-        conn.commit()
-        conn.close()
-        st.success("Inspection saved")
-        st.session_state.inspection_areas = []
+    
+    if 'user' not in st.session_state or not st.session_state.user:
+        st.warning("Please log in to use the pre-inspection checklist.")
+        st.session_state.page = "login"
         st.rerun()
+        return
+    
+    st.markdown("### 🔍 Pre-Inspection Checklist")
+    st.caption("Quick estimate generator - fill in what you see to get a ballpark price (Medium to High range, excludes travel/tolls)")
+    
+    # Create tabs for different inspection categories
+    tabs = st.tabs([
+        "🏢 Property Basics", 
+        "🧹 Areas to Clean", 
+        "🪟 Windows & Glass",
+        "🚽 Restrooms", 
+        "🧼 Floors", 
+        "🖥️ Equipment & Furniture",
+        "🔧 Special Conditions"
+    ])
+    
+    # ============================================================
+    # TAB 1: PROPERTY BASICS
+    # ============================================================
+    with tabs[0]:
+        st.markdown("#### Property Information")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            property_type = st.selectbox(
+                "Property Type",
+                ["Office", "Retail", "Warehouse", "Medical/Dental", "Restaurant", 
+                 "School/Daycare", "Hotel", "Gym/Fitness", "Church", "Other"],
+                key="insp_prop_type"
+            )
+            
+            if property_type == "Other":
+                property_type_other = st.text_input("Please specify", key="insp_prop_other")
+                property_type = property_type_other if property_type_other else "Other"
+            
+            square_feet = st.number_input("Estimated Square Feet", min_value=100, max_value=500000, value=2000, step=500, key="insp_sqft")
+        
+        with col2:
+            num_floors = st.number_input("Number of Floors", min_value=1, max_value=20, value=1, key="insp_floors")
+            has_elevator = st.checkbox("Building has elevator", key="insp_elevator")
+            multi_building = st.checkbox("Multiple buildings on site", key="insp_multi_building")
+            
+            if multi_building:
+                num_buildings = st.number_input("Number of buildings", min_value=2, max_value=10, value=2, key="insp_buildings")
+            else:
+                num_buildings = 1
+        
+        st.markdown("---")
+        st.markdown("#### Job Timing")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            frequency = st.selectbox(
+                "Cleaning Frequency",
+                ["One-time", "Daily", "Weekly", "Bi-weekly", "Monthly"],
+                key="insp_freq"
+            )
+        
+        with col2:
+            access_time = st.selectbox(
+                "Access Time",
+                ["Normal business hours", "After hours (6PM-6AM)", "Weekend only", "Very restricted window"],
+                key="insp_access"
+            )
+    
+    # ============================================================
+    # TAB 2: AREAS TO CLEAN
+    # ============================================================
+    with tabs[1]:
+        st.markdown("#### Select Areas That Need Cleaning")
+        st.caption("Check all that apply")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            reception_area = st.checkbox("Reception/Waiting Area", key="insp_reception")
+            private_offices = st.number_input("Private Offices", min_value=0, value=0, key="insp_offices")
+            open_workstations = st.number_input("Open Workstations", min_value=0, value=0, key="insp_workstations")
+            conference_rooms = st.number_input("Conference Rooms", min_value=0, value=0, key="insp_conference")
+            breakroom_kitchen = st.checkbox("Breakroom/Kitchen", key="insp_breakroom")
+        
+        with col2:
+            hallways = st.checkbox("Hallways/Corridors", key="insp_hallways")
+            stairwells = st.number_input("Stairwells", min_value=0, value=0, key="insp_stairs")
+            storage_rooms = st.number_input("Storage/Supply Rooms", min_value=0, value=0, key="insp_storage")
+            st.checkbox("Janitor Closet (if provided)", key="insp_janitor")
+            loading_dock = st.checkbox("Loading Dock/Warehouse Area", key="insp_dock")
+        
+        with col3:
+            exterior_entry = st.checkbox("Exterior Entry/Lobby", key="insp_exterior")
+            st.checkbox("Sidewalk/Patio (sweep only)", key="insp_sidewalk")
+            st.checkbox("Parking Garage (sweep)", key="insp_parking")
+            trash_recycling = st.checkbox("Trash/Recycling Collection", key="insp_trash")
+    
+    # ============================================================
+    # TAB 3: WINDOWS & GLASS
+    # ============================================================
+    with tabs[2]:
+        st.markdown("#### Window & Glass Cleaning")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            interior_windows = st.number_input("Interior Windows", min_value=0, value=0, key="insp_int_windows", help="Count individual window panes")
+            exterior_windows = st.number_input("Exterior Windows (ground floor)", min_value=0, value=0, key="insp_ext_windows")
+            high_windows = st.number_input("High/Atrium Windows (need ladder)", min_value=0, value=0, key="insp_high_windows")
+        
+        with col2:
+            glass_doors = st.number_input("Glass Doors", min_value=0, value=0, key="insp_glass_doors")
+            glass_partitions = st.number_input("Glass Partitions/Walls (linear ft)", min_value=0, value=0, key="insp_partitions")
+            mirrors = st.number_input("Large Mirrors", min_value=0, value=0, key="insp_mirrors")
+        
+        window_tracks = st.checkbox("Window Tracks need cleaning", key="insp_tracks")
+        st.checkbox("Window Screens need cleaning", key="insp_screens")
+    
+    # ============================================================
+    # TAB 4: RESTROOMS
+    # ============================================================
+    with tabs[3]:
+        st.markdown("#### Restroom Details")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            num_toilets = st.number_input("Toilets", min_value=0, value=0, key="insp_toilets")
+            num_urinals = st.number_input("Urinals", min_value=0, value=0, key="insp_urinals")
+        
+        with col2:
+            num_sinks = st.number_input("Sinks", min_value=0, value=0, key="insp_sinks")
+            num_mirrors_rest = st.number_input("Mirrors (restroom)", min_value=0, value=0, key="insp_rest_mirrors")
+        
+        with col3:
+            num_showers = st.number_input("Showers (locker rooms)", min_value=0, value=0, key="insp_showers")
+            restroom_count = st.number_input("Number of Restrooms", min_value=0, value=0, key="insp_restroom_count")
+        
+        deep_clean = st.checkbox("Deep clean required (grout, hard water stains, etc.)", key="insp_deep_clean")
+        restock_supplies = st.checkbox("Restock supplies (soap, paper towels, TP)", key="insp_restock")
+    
+    # ============================================================
+    # TAB 5: FLOORS
+    # ============================================================
+    with tabs[4]:
+        st.markdown("#### Floor Types & Conditions")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            carpet_sqft = st.number_input("Carpet (sq ft)", min_value=0, value=0, key="insp_carpet")
+            tile_sqft = st.number_input("Tile (sq ft)", min_value=0, value=0, key="insp_tile")
+            vinyl_sqft = st.number_input("Vinyl/LVP (sq ft)", min_value=0, value=0, key="insp_vinyl")
+        
+        with col2:
+            hardwood_sqft = st.number_input("Hardwood (sq ft)", min_value=0, value=0, key="insp_hardwood")
+            concrete_sqft = st.number_input("Concrete/Polished (sq ft)", min_value=0, value=0, key="insp_concrete")
+            
+            floor_condition = st.select_slider(
+                "Floor Condition",
+                options=["Excellent", "Good", "Fair", "Poor", "Very Poor"],
+                value="Good",
+                key="insp_floor_condition"
+            )
+        
+        st.markdown("#### Additional Floor Services")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            carpet_extract = st.checkbox("Carpet Extraction/Deep Clean", key="insp_extract")
+        with col2:
+            strip_wax = st.checkbox("Strip & Wax (tile/vinyl)", key="insp_wax")
+        with col3:
+            floor_buff = st.checkbox("Daily Buff/Polish", key="insp_buff")
+        
+        if carpet_extract:
+            st.number_input("Extraction square feet", min_value=0, value=carpet_sqft, key="insp_extract_sqft")
+        
+        # Area rugs
+        st.markdown("#### Area Rugs")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.number_input("Small (3x5 or less)", min_value=0, value=0, key="insp_small_rugs")
+        with col2:
+            st.number_input("Medium (5x8)", min_value=0, value=0, key="insp_medium_rugs")
+        with col3:
+            st.number_input("Large (8x10+)", min_value=0, value=0, key="insp_large_rugs")
+    
+    # ============================================================
+    # TAB 6: EQUIPMENT & FURNITURE
+    # ============================================================
+    with tabs[5]:
+        st.markdown("#### Equipment & Furniture Cleaning")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            desks = st.number_input("Desks", min_value=0, value=0, key="insp_desks")
+            computers = st.number_input("Computers/Monitors", min_value=0, value=0, key="insp_computers")
+            phones = st.number_input("Phones", min_value=0, value=0, key="insp_phones")
+            chairs = st.number_input("Chairs (dust/wipe)", min_value=0, value=0, key="insp_chairs")
+        
+        with col2:
+            tables = st.number_input("Tables", min_value=0, value=0, key="insp_tables")
+            whiteboards = st.number_input("Whiteboards", min_value=0, value=0, key="insp_whiteboards")
+            appliances = st.number_input("Appliances (fridge, microwave, etc.)", min_value=0, value=0, key="insp_appliances")
+            equipment = st.number_input("Special Equipment (machines, etc.)", min_value=0, value=0, key="insp_equipment")
+        
+        st.markdown("#### Furniture Moving")
+        move_light = st.number_input("Light furniture to move (chairs, small tables)", min_value=0, value=0, key="insp_move_light")
+        move_heavy = st.number_input("Heavy items to move (machines, large desks)", min_value=0, value=0, key="insp_move_heavy")
+        clean_under = st.checkbox("Clean under moved items", key="insp_clean_under")
+    
+    # ============================================================
+    # TAB 7: SPECIAL CONDITIONS
+    # ============================================================
+    with tabs[6]:
+        st.markdown("#### Special Conditions (Adds to price)")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            high_dusting = st.checkbox("High dusting (ceilings, fans, vents)", key="insp_high_dust")
+            if high_dusting:
+                st.number_input("Square feet for high dusting", min_value=0, value=square_feet, key="insp_high_dust_sqft")
+            
+            blind_cleaning = st.number_input("Blinds to clean", min_value=0, value=0, key="insp_blinds")
+            disinfection = st.checkbox("Disinfection (high-touch surfaces)", key="insp_disinfection")
+            odor_control = st.checkbox("Odor control treatment", key="insp_odor")
+        
+        with col2:
+            post_construction = st.checkbox("Post-construction cleaning", key="insp_post_construction")
+            emergency = st.checkbox("Emergency/Rush (less than 48hr notice)", key="insp_emergency")
+            holiday_clean = st.selectbox("Holiday/After-hours", ["No", "Yes - Holiday", "Yes - Weekend"], key="insp_holiday")
+            
+            st.checkbox("Client provides cleaning supplies", key="insp_supplies")
+            
+            complexity_rating = st.select_slider(
+                "Overall Complexity (1-10)",
+                options=[1,2,3,4,5,6,7,8,9,10],
+                value=3,
+                key="insp_complexity"
+            )
+    
+    # ============================================================
+    # CALCULATE BALLPARK ESTIMATE
+    # ============================================================
+    
+    inspection_data = {
+        "property_type": property_type,
+        "square_feet": square_feet,
+        "num_floors": num_floors,
+        "has_elevator": has_elevator,
+        "num_buildings": num_buildings,
+        "frequency": frequency,
+        "access_time": access_time,
+        "areas": {
+            "reception": reception_area,
+            "private_offices": private_offices,
+            "open_workstations": open_workstations,
+            "conference_rooms": conference_rooms,
+            "breakroom": breakroom_kitchen,
+            "hallways": hallways,
+            "stairwells": stairwells,
+            "storage_rooms": storage_rooms,
+            "loading_dock": loading_dock,
+            "exterior_entry": exterior_entry,
+            "trash": trash_recycling
+        },
+        "windows": {
+            "interior": interior_windows,
+            "exterior": exterior_windows,
+            "high": high_windows,
+            "glass_doors": glass_doors,
+            "partitions": glass_partitions,
+            "mirrors": mirrors,
+            "tracks": window_tracks,
+            "screens": st.session_state.get("insp_screens", False)
+        },
+        "restrooms": {
+            "toilets": num_toilets,
+            "urinals": num_urinals,
+            "sinks": num_sinks,
+            "mirrors": num_mirrors_rest,
+            "showers": num_showers,
+            "count": restroom_count,
+            "deep_clean": deep_clean,
+            "restock": restock_supplies
+        },
+        "floors": {
+            "carpet_sqft": carpet_sqft,
+            "tile_sqft": tile_sqft,
+            "vinyl_sqft": vinyl_sqft,
+            "hardwood_sqft": hardwood_sqft,
+            "concrete_sqft": concrete_sqft,
+            "condition": floor_condition,
+            "carpet_extract": carpet_extract,
+            "strip_wax": strip_wax,
+            "buff": floor_buff
+        },
+        "furniture": {
+            "desks": desks,
+            "computers": computers,
+            "phones": phones,
+            "chairs": chairs,
+            "tables": tables,
+            "whiteboards": whiteboards,
+            "appliances": appliances,
+            "equipment": equipment,
+            "move_light": move_light,
+            "move_heavy": move_heavy,
+            "clean_under": clean_under
+        },
+        "special": {
+            "high_dusting": high_dusting,
+            "blinds": blind_cleaning,
+            "disinfection": disinfection,
+            "odor_control": odor_control,
+            "post_construction": post_construction,
+            "emergency": emergency,
+            "holiday": holiday_clean,
+            "supply_provided": st.session_state.get("insp_supplies", False),
+            "complexity": complexity_rating
+        }
+    }
+    
+    if st.button("💰 Generate Ballpark Estimate", type="primary", use_container_width=True, key="insp_generate_btn"):
+        st.session_state.insp_payload = inspection_data
+        st.session_state.insp_estimate = calculate_inspection_estimate(inspection_data)
+        st.session_state.pop("insp_saved", None)
+    
+    if st.session_state.get("insp_estimate") and st.session_state.get("insp_payload"):
+        estimate = st.session_state.insp_estimate
+        saved_payload = st.session_state.insp_payload
+        
+        st.markdown("---")
+        st.markdown("### 📋 Inspection Estimate Results")
+        st.caption("*Excludes travel mileage, tolls, and parking fees*")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col2:
+            st.markdown(f"""
+            <div style="text-align: center; padding: 20px; border-radius: 16px; background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white;">
+                <h3>💰 BALLPARK ESTIMATE</h3>
+                <h1 style="font-size: 48px;">${estimate['final_price']:,}</h1>
+                <p>Medium to High Range</p>
+                <small>Excludes travel & tolls</small>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with st.expander("📊 Estimate Breakdown", expanded=True):
+            st.markdown(f"""
+            **Base Price:** ${estimate['base_price']:,}
+            **Adjustments:** +${estimate['adjustments']:,}
+            **Total:** ${estimate['final_price']:,}
+            
+            ---
+            **What's Included:**
+            {estimate['included_summary']}
+            
+            **Adjustments Applied:**
+            {estimate['adjustment_summary']}
+            """)
+        
+        if estimate['confidence'] >= 80:
+            st.success(f"🎯 Confidence Level: {estimate['confidence']}% - This estimate is well-calibrated")
+        elif estimate['confidence'] >= 60:
+            st.warning(f"⚠️ Confidence Level: {estimate['confidence']}% - Consider more details")
+        else:
+            st.error(f"❌ Confidence Level: {estimate['confidence']}% - More information needed for accuracy")
+        
+        if st.button("💾 Save This Inspection", key="save_inspection_btn"):
+            company_id = get_current_user_company()
+            if not company_id:
+                st.error("Could not determine your company. Please log in again.")
+            else:
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                c.execute("""
+                    INSERT INTO inspections (company_id, user_id, client_name, areas_json, inspection_data, status, started_at, completed_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    company_id,
+                    st.session_state.user['user_id'],
+                    "Walk-in Inspection",
+                    json.dumps(saved_payload),
+                    json.dumps(estimate),
+                    "completed",
+                    datetime.now().isoformat(),
+                    datetime.now().isoformat()
+                ))
+                conn.commit()
+                conn.close()
+                st.session_state.insp_saved = True
+                st.success("Inspection saved! You can reference it later.")
+
+
+def inspections_page():
+    pre_inspection_page()
 
 def profit_page():
     if st.button("← Back"):
@@ -3496,24 +4139,51 @@ def create_backup():
 def restore_from_backup(backup_file):
     with open(backup_file, 'r') as f:
         backup = json.load(f)
-    user_id = st.session_state.user['user_id']
-    company_id = get_current_user_company()
-    data = backup.get("data", {})
+    return restore_personal_backup_data(backup)
+
+
+def restore_personal_backup_data(backup_data):
+    """Restore a user-scoped backup (create_backup format)."""
+    user_id = backup_data.get('user_id') or st.session_state.user['user_id']
+    company_id = backup_data.get('company_id') or get_current_user_company()
+    if not company_id:
+        return False
+    data = backup_data.get("data", {})
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     for table, rows in data.items():
-        if not rows:
-            continue
-        c.execute(f"DELETE FROM {table} WHERE company_id = ? AND user_id = ?", (company_id, user_id))
-        for row in rows:
-            columns = [col for col in row.keys() if col != 'id']
-            placeholders = ','.join(['?' for _ in columns])
-            values = [row[col] for col in columns]
-            try:
+        try:
+            c.execute(f"DELETE FROM {table} WHERE company_id = ? AND user_id = ?", (company_id, user_id))
+            for row in rows or []:
+                columns = [col for col in row.keys() if col != 'id']
+                placeholders = ','.join(['?' for _ in columns])
+                values = [row[col] for col in columns]
                 c.execute(f"INSERT INTO {table} ({','.join(columns)}) VALUES ({placeholders})", values)
-            except:
-                pass
+        except Exception as e:
+            print(f"Personal restore error on {table}: {e}")
     conn.commit()
+    conn.close()
+    return True
+
+
+def restore_full_system_backup_data(backup_data):
+    """Restore a full system backup (create_full_system_backup format)."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA foreign_keys = OFF")
+    c = conn.cursor()
+    for table, rows in backup_data.get('data', {}).items():
+        try:
+            c.execute(f"DELETE FROM {table}")
+            if rows:
+                columns = list(rows[0].keys())
+                placeholders = ','.join(['?' for _ in columns])
+                for row in rows:
+                    values = [row[col] for col in columns]
+                    c.execute(f"INSERT INTO {table} ({','.join(columns)}) VALUES ({placeholders})", values)
+        except Exception as e:
+            print(f"Full restore error on {table}: {e}")
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys = ON")
     conn.close()
     return True
 
@@ -3527,23 +4197,146 @@ def get_backup_list():
             backups.append({"file": f, "path": path, "date": datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y-%m-%d %H:%M:%S"), "size": f"{os.path.getsize(path)/1024:.1f} KB"})
     return sorted(backups, key=lambda x: x["date"], reverse=True)
 
+def upload_backup():
+    """Upload and restore a backup file"""
+    st.markdown("### 📤 Upload Backup to Restore")
+    uploaded_file = st.file_uploader("Choose backup JSON file", type=['json'], key="upload_backup_file")
+    
+    if uploaded_file is not None:
+        try:
+            backup_data = json.load(uploaded_file)
+            
+            is_personal = (
+                backup_data.get('data')
+                and backup_data.get('user_id') is not None
+                and backup_data.get('company_id') is not None
+            )
+            is_full_system = backup_data.get('data') and not is_personal
+            
+            if not is_personal and not is_full_system:
+                st.error("Invalid backup file format. Expected a personal or full system backup JSON.")
+                return
+            
+            if is_personal:
+                st.warning(
+                    "⚠️ This will replace your personal data (clients, estimates, jobs, etc.) "
+                    "for the company in this backup. Other users are not affected."
+                )
+            else:
+                role = st.session_state.user.get('role')
+                if role not in ('super_admin', 'admin'):
+                    st.error("Only administrators can restore full system backups.")
+                    return
+                st.warning(
+                    "⚠️ This will REPLACE ALL data in the database with this backup. "
+                    "This cannot be undone!"
+                )
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("✅ Confirm Restore", use_container_width=True, key="upload_confirm_restore"):
+                    if is_personal:
+                        ok = restore_personal_backup_data(backup_data)
+                    else:
+                        ok = restore_full_system_backup_data(backup_data)
+                    if ok:
+                        st.success("✅ Backup restored successfully! Refresh the page.")
+                        st.rerun()
+                    else:
+                        st.error("Restore failed. Check the console for details.")
+            with col2:
+                if st.button("❌ Cancel", use_container_width=True, key="upload_cancel_restore"):
+                    st.rerun()
+        except Exception as e:
+            st.error(f"Error reading backup file: {e}")
+
+def list_all_backups():
+    """List all available backups across all users"""
+    ensure_backup_dir()
+    all_backups = []
+    for f in os.listdir(BACKUP_DIR):
+        if f.endswith(".json"):
+            path = os.path.join(BACKUP_DIR, f)
+            all_backups.append({
+                "file": f, 
+                "path": path, 
+                "date": datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y-%m-%d %H:%M:%S"), 
+                "size": f"{os.path.getsize(path)/1024:.1f} KB"
+            })
+    return sorted(all_backups, key=lambda x: x["date"], reverse=True)
+
 def backup_page():
     if st.button("← Back"):
         st.session_state.page = "dashboard"
         st.rerun()
+    
+    if 'user' not in st.session_state or not st.session_state.user:
+        st.warning("Please log in to use backup and restore.")
+        st.session_state.page = "login"
+        st.rerun()
+        return
+    
     st.markdown("### 💾 Backup & Restore")
-    if st.button("Create Backup"):
-        f = create_backup()
-        with open(f, 'rb') as fp:
-            st.download_button("Download Backup", fp, os.path.basename(f))
-    backups = get_backup_list()
-    if backups:
-        st.dataframe(backups)
-        sel = st.selectbox("Select backup", [b['file'] for b in backups])
-        if st.button("Restore"):
-            path = os.path.join(BACKUP_DIR, sel)
+    
+    tab1, tab2, tab3 = st.tabs(["📦 My Backups", "📤 Upload & Restore", "🏢 System Backups"])
+    
+    with tab1:
+        if st.session_state.get("restore_file"):
+            path = os.path.join(BACKUP_DIR, st.session_state.restore_file)
             if restore_from_backup(path):
-                st.success("Restored! Refresh page.")
+                st.success("✅ Restored successfully!")
+            del st.session_state.restore_file
+        
+        st.markdown("#### Your Personal Backups")
+        if st.button("Create New Backup", use_container_width=True, key="create_personal_backup"):
+            st.session_state.last_personal_backup_file = create_backup()
+        
+        if st.session_state.get("last_personal_backup_file") and os.path.exists(st.session_state.last_personal_backup_file):
+            with open(st.session_state.last_personal_backup_file, 'rb') as fp:
+                st.download_button(
+                    "Download Latest Backup",
+                    fp,
+                    os.path.basename(st.session_state.last_personal_backup_file),
+                    "application/json",
+                    key="download_personal_backup",
+                )
+        
+        backups = get_backup_list()
+        if backups:
+            st.dataframe(backups)
+            sel = st.selectbox("Select backup to restore", [b['file'] for b in backups])
+            if st.button("Restore Selected", use_container_width=True):
+                st.session_state.restore_file = sel
+                st.rerun()
+        else:
+            st.info("No backups found. Create your first backup above.")
+    
+    with tab2:
+        upload_backup()
+    
+    with tab3:
+        st.markdown("#### Full System Backups (All Companies)")
+        role = st.session_state.user.get('role')
+        if role not in ('super_admin', 'admin'):
+            st.info("Only administrators can create full system backups.")
+        elif st.button("Create Full System Backup", use_container_width=True, key="create_system_backup"):
+            st.session_state.last_system_backup_file = create_full_system_backup()
+        
+        if st.session_state.get("last_system_backup_file") and os.path.exists(st.session_state.last_system_backup_file):
+            with open(st.session_state.last_system_backup_file, 'rb') as f:
+                st.download_button(
+                    "Download System Backup",
+                    f,
+                    os.path.basename(st.session_state.last_system_backup_file),
+                    "application/json",
+                    key="download_system_backup",
+                )
+        
+        all_backups = list_all_backups()
+        if all_backups:
+            st.dataframe(all_backups[:20])
+        else:
+            st.info("No system backups found.")
 
 def create_support_ticket(issue_type, description, steps, screenshot=None):
     user_id = st.session_state.user['user_id']
@@ -4592,6 +5385,7 @@ def main():
                 "schedule": schedule_page,
                 "job_templates": job_templates_page,
                 "inspections": inspections_page,
+                "pre_inspection": pre_inspection_page,
                 "profit": profit_page,
                 "history": history_page,
                 "chat": chat_page,
