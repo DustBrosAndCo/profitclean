@@ -1472,156 +1472,294 @@ def estimate_toll(origin, dest):
 # ENHANCED PRICING CALCULATION WITH 4 TIERS
 # ============================================================
 
-def calculate_price_with_tiers(city, prop_type, sqft, bedrooms, bathrooms, freq, complexity, travel_miles, add_ons, holiday, num_locations, notice_hours, contract_months, company_id=None):
-    """
-    ENHANCED PRICING CALCULATOR with 4 Tiers & 40% House Margin Guarantee
+# ============================================================
+# INTERNAL CALCULATOR #1: COST-BASED (Location + Square Footage)
+# ============================================================
+
+def calculator_cost_based(city, prop_type, sqft, bedrooms, bathrooms, freq, complexity, travel_miles):
+    """INTERNAL: Based on location, square footage, and industry standards"""
     
-    TIERS:
-    1. BREAK EVEN: 0% margin - Just covering costs
-    2. SWEET SPOT: 40% margin - RECOMMENDED (House keeps 40%)
-    3. FAIR MARKET: 30% margin - Competitive with local market
-    4. PREMIUM: 50% margin - Rush/Emergency/Premium service
-    """
-    if company_id is None:
-        company_id = get_current_user_company()
-    
-    # ============================================================
-    # 1. LOCATION & ZONE MULTIPLIERS
-    # ============================================================
     coastal = ["Cocoa Beach", "Daytona Beach", "Naples", "Fort Myers", "Sarasota", "Miami Beach", "Palm Beach"]
     rural = ["Ocala", "Gainesville", "Lake City", "Sebring", "Palatka", "Arcadia"]
     major_metros = ["Miami", "Orlando", "Tampa", "Jacksonville", "St. Petersburg"]
     
     if city in major_metros:
-        zone_mult, travel_fee = 1.25, 65
-        zone_name = "Major Metro"
+        zone_mult, travel_fee, zone_name = 1.25, 65, "Major Metro"
     elif city in coastal:
-        zone_mult, travel_fee = 1.18, 55
-        zone_name = "Coastal"
+        zone_mult, travel_fee, zone_name = 1.18, 55, "Coastal"
     elif city in rural:
-        zone_mult, travel_fee = 1.10, 45
-        zone_name = "Rural"
+        zone_mult, travel_fee, zone_name = 1.10, 45, "Rural"
     else:
-        zone_mult, travel_fee = 1.0, 45
-        zone_name = "Standard"
+        zone_mult, travel_fee, zone_name = 1.0, 45, "Standard"
     
-    # ============================================================
-    # 2. PROPERTY & FREQUENCY FACTORS
-    # ============================================================
     prop = PROPERTY_TYPES.get(prop_type, {"multiplier": 1.0, "base_rate": 0.14})
     prop_mult = prop["multiplier"]
     base_rate = prop["base_rate"]
     freq_mult = FREQUENCIES.get(freq, 1.0)
-    
-    # Complexity factor (1-10 scale)
     comp_factor = 0.6 + (complexity / 10)
-    complexity_levels = {1: "Very Simple", 2: "Simple", 3: "Simple", 4: "Moderate", 5: "Moderate", 6: "Moderate", 7: "Complex", 8: "Complex", 9: "Very Complex", 10: "Very Complex"}
-    complexity_level = complexity_levels.get(complexity, "Moderate")
     
-    # ============================================================
-    # 3. BASE SUBTOTAL CALCULATION
-    # ============================================================
     if prop_type == "🏠 Airbnb / Short-Term Rental":
         room_price = 45 if city in major_metros else 35
         bathroom_price = 25 if city in major_metros else 20
-        subtotal = ((bedrooms * room_price) + (bathrooms * bathroom_price)) * prop_mult * comp_factor
+        base_price = ((bedrooms * room_price) + (bathrooms * bathroom_price)) * prop_mult * comp_factor
         pricing_model = "Per Room"
     else:
-        adjusted_base_rate = base_rate * zone_mult * prop_mult * freq_mult * comp_factor
-        subtotal = sqft * adjusted_base_rate
+        adjusted_rate = base_rate * zone_mult * prop_mult * freq_mult * comp_factor
+        base_price = sqft * adjusted_rate
         pricing_model = "Per Square Foot"
     
-    # ============================================================
-    # 4. TRAVEL COSTS
-    # ============================================================
     travel_cost = (travel_miles * 0.65) + travel_fee
-    tolls = estimate_toll(city, "orlando")
+    tolls = 5.00
     
-    # ============================================================
-    # 5. ADD-ONS
-    # ============================================================
-    add_on_total = 0
-    add_on_details = []
+    total = base_price + travel_cost + tolls
     
-    if add_ons.get('window_cleaning'):
-        add_on_total += 50
-        add_on_details.append("Window Cleaning (+$50)")
-    if add_ons.get('carpet_cleaning'):
-        carpet_cost = sqft * 0.25 if sqft > 0 else 75
-        add_on_total += carpet_cost
-        add_on_details.append(f"Carpet Cleaning (+${carpet_cost:.0f})")
-    if add_ons.get('floor_waxing'):
-        wax_cost = sqft * 0.35 if sqft > 0 else 100
-        add_on_total += wax_cost
-        add_on_details.append(f"Floor Waxing (+${wax_cost:.0f})")
-    if add_ons.get('disinfection'):
-        add_on_total += 75
-        add_on_details.append("Disinfection (+$75)")
-    if add_ons.get('pressure_washing'):
-        add_on_total += 125 if sqft < 5000 else 200
-        add_on_details.append("Pressure Washing (+$125+)")
+    return {
+        "total": math.ceil(total),
+        "breakdown": {
+            "base_price": round(base_price, 2),
+            "zone_multiplier": zone_mult,
+            "zone_name": zone_name,
+            "prop_multiplier": prop_mult,
+            "frequency_multiplier": freq_mult,
+            "complexity_factor": round(comp_factor, 2),
+            "travel_cost": round(travel_cost, 2),
+            "tolls": tolls,
+            "pricing_model": pricing_model
+        }
+    }
+
+
+# ============================================================
+# INTERNAL CALCULATOR #2: MARKET-BASED (Real-time Fair Value)
+# ============================================================
+
+# Fair market rates for line-item services
+FAIR_MARKET_RATES = {
+    "vacuum_carpet": {"rate": 0.05, "unit": "sqft", "min_charge": 25},
+    "mop_tile": {"rate": 0.08, "unit": "sqft", "min_charge": 35},
+    "clean_hardwood": {"rate": 0.12, "unit": "sqft", "min_charge": 50},
+    "toilet": {"rate": 3.50, "unit": "each", "min_charge": 10},
+    "sink_counter": {"rate": 4.00, "unit": "each", "min_charge": 15},
+    "mirror": {"rate": 2.00, "unit": "each", "min_charge": 10},
+    "interior_window": {"rate": 3.00, "unit": "each", "min_charge": 50},
+    "high_dust": {"rate": 25.00, "unit": "per_1000_sqft", "min_charge": 50},
+    "desk_clean": {"rate": 2.00, "unit": "each", "min_charge": 25},
+    "empty_trash": {"rate": 1.50, "unit": "each", "min_charge": 15},
+    "disinfection": {"rate": 0.03, "unit": "sqft", "min_charge": 50},
+}
+
+def calculator_market_based(city, prop_type, sqft, bedrooms, bathrooms, selected_services=None):
+    """INTERNAL: Based on real-time fair market rates"""
     
-    total = subtotal + travel_cost + tolls + add_on_total
+    major_metros = ["Miami", "Orlando", "Tampa", "Jacksonville", "St. Petersburg"]
+    coastal = ["Cocoa Beach", "Daytona Beach", "Naples", "Fort Myers", "Sarasota"]
+    rural = ["Ocala", "Gainesville", "Lake City", "Sebring"]
     
-    # ============================================================
-    # 6. MODIFIERS (Holiday, Emergency, Volume, Contract)
-    # ============================================================
-    modifier_details = []
+    market_rates = {
+        "major_metro": {"min": 0.16, "avg": 0.22, "max": 0.30, "confidence": "High"},
+        "coastal": {"min": 0.14, "avg": 0.19, "max": 0.26, "confidence": "High"},
+        "standard": {"min": 0.12, "avg": 0.16, "max": 0.22, "confidence": "Medium"},
+        "rural": {"min": 0.10, "avg": 0.14, "max": 0.18, "confidence": "Medium"}
+    }
     
-    if holiday != "None":
-        holiday_rate = HOLIDAY_RATES.get(holiday, 0.25)
-        total *= (1 + holiday_rate)
-        modifier_details.append(f"Holiday Surcharge (+{holiday_rate*100:.0f}%)")
+    if city in major_metros:
+        zone = "major_metro"
+    elif city in coastal:
+        zone = "coastal"
+    elif city in rural:
+        zone = "rural"
+    else:
+        zone = "standard"
     
-    if notice_hours <= 12:
-        total *= 1.75
-        modifier_details.append("Emergency (Same Day) +75%")
-    elif notice_hours <= 24:
-        total *= 1.50
-        modifier_details.append("Rush (Next Day) +50%")
-    elif notice_hours <= 48:
-        total *= 1.25
-        modifier_details.append("Short Notice (2 days) +25%")
-    
-    if num_locations >= 10:
-        total *= 0.80
-        modifier_details.append(f"Volume Discount ({num_locations} locations) -20%")
-    elif num_locations >= 5:
-        total *= 0.85
-        modifier_details.append(f"Volume Discount ({num_locations} locations) -15%")
-    elif num_locations >= 2:
-        total *= 0.90
-        modifier_details.append(f"Multiple Locations Discount ({num_locations}) -10%")
-    
-    if contract_months >= 24:
-        total *= 0.75
-        modifier_details.append("2+ Year Contract -25%")
-    elif contract_months >= 12:
-        total *= 0.80
-        modifier_details.append("1 Year Contract -20%")
-    elif contract_months >= 6:
-        total *= 0.85
-        modifier_details.append("6 Month Contract -15%")
-    elif contract_months >= 3:
-        total *= 0.90
-        modifier_details.append("Quarterly Contract -10%")
-    
-    # ============================================================
-    # 7. TRUE COST CALCULATION
-    # ============================================================
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT hourly_wage, min_job_fee, profit_target FROM business_profile WHERE company_id = ?", (company_id,))
-    row = c.fetchone()
-    conn.close()
-    
-    hourly_wage = row[0] if row else 15.0
-    min_job_fee = row[1] if row else 150
-    profit_target = row[2] if row else 0.40
+    rates = market_rates[zone]
+    prop_mult = PROPERTY_TYPES.get(prop_type, {"multiplier": 1.0})["multiplier"]
     
     if sqft > 0:
-        base_hours = sqft / 500
-        labor_hours = base_hours * comp_factor
+        market_min = sqft * rates["min"] * prop_mult
+        market_avg = sqft * rates["avg"] * prop_mult
+        market_max = sqft * rates["max"] * prop_mult
+    else:
+        market_min = bedrooms * 35 * prop_mult
+        market_avg = bedrooms * 45 * prop_mult
+        market_max = bedrooms * 60 * prop_mult
+    
+    line_item_total = 0
+    if selected_services:
+        for service in selected_services:
+            item = service.get('item')
+            quantity = service.get('quantity', 1)
+            if item in FAIR_MARKET_RATES:
+                rate_data = FAIR_MARKET_RATES[item]
+                line_item_total += rate_data['rate'] * quantity
+        
+        if len(selected_services) >= 5:
+            bundle_discount = line_item_total * 0.05
+            line_item_total -= bundle_discount
+        
+        market_avg = max(market_avg, line_item_total)
+    
+    return {
+        "min": math.ceil(market_min),
+        "avg": math.ceil(market_avg),
+        "max": math.ceil(market_max),
+        "zone": zone,
+        "confidence": rates["confidence"],
+        "line_item_total": round(line_item_total, 2) if selected_services else 0
+    }
+
+
+# ============================================================
+# INTERNAL CALCULATOR #3: EXPENSE-BASED (Business Health)
+# ============================================================
+
+def calculator_expense_based(company_id, labor_hours):
+    """INTERNAL: Based on business expenses and what's needed to stay afloat"""
+    
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    c.execute("PRAGMA table_info(business_profile)")
+    existing_cols = [col[1] for col in c.fetchall()]
+    
+    expense_cols = ['monthly_rent', 'monthly_insurance', 'monthly_vehicles', 'monthly_marketing', 'monthly_software', 'monthly_admin_salary', 'desired_profit_margin']
+    for col in expense_cols:
+        if col not in existing_cols:
+            try:
+                c.execute(f"ALTER TABLE business_profile ADD COLUMN {col} REAL DEFAULT 0")
+            except:
+                pass
+    
+    c.execute("""
+        SELECT monthly_rent, monthly_insurance, monthly_vehicles, 
+               monthly_marketing, monthly_software, monthly_admin_salary,
+               desired_profit_margin, hourly_wage, min_job_fee
+        FROM business_profile WHERE company_id = ?
+    """, (company_id,))
+    row = c.fetchone()
+    
+    c.execute("SELECT COUNT(*) FROM users WHERE company_id = ? AND role = 'worker' AND is_active = 1", (company_id,))
+    worker_count = c.fetchone()[0]
+    conn.close()
+    
+    if not row:
+        return {"error": "Expense data not configured", "min_viable": 150, "healthy_price": 200}
+    
+    monthly_fixed_costs = sum(row[:6]) if row[:6] else 0
+    desired_profit_margin = row[6] if row[6] else 0.20
+    hourly_wage = row[7] if row[7] else 15.0
+    min_job_fee = row[8] if row[8] else 150
+    
+    if worker_count == 0:
+        worker_count = 1
+    
+    billable_hours_per_month = worker_count * 160
+    required_hourly_break_even = monthly_fixed_costs / billable_hours_per_month if billable_hours_per_month > 0 else 0
+    total_monthly_target = monthly_fixed_costs * (1 + desired_profit_margin)
+    required_hourly_profit = total_monthly_target / billable_hours_per_month if billable_hours_per_month > 0 else 0
+    
+    labor_cost = labor_hours * required_hourly_profit
+    materials_cost = labor_hours * 5
+    overhead_cost = labor_hours * (required_hourly_break_even * 0.15)
+    
+    true_cost = labor_cost + materials_cost + overhead_cost
+    if true_cost < min_job_fee:
+        true_cost = min_job_fee
+    
+    min_viable = math.ceil(true_cost)
+    healthy_price = math.ceil(true_cost / (1 - desired_profit_margin))
+    
+    return {
+        "min_viable": min_viable,
+        "healthy_price": healthy_price,
+        "breakdown": {
+            "monthly_fixed_costs": monthly_fixed_costs,
+            "worker_count": worker_count,
+            "billable_hours_per_month": billable_hours_per_month,
+            "required_hourly_break_even": round(required_hourly_break_even, 2),
+            "required_hourly_profit": round(required_hourly_profit, 2),
+            "desired_profit_margin": f"{desired_profit_margin * 100}%",
+            "labor_cost": round(labor_cost, 2),
+            "materials_cost": round(materials_cost, 2),
+            "overhead_cost": round(overhead_cost, 2)
+        },
+        "business_health": {
+            "status": "Healthy" if healthy_price <= 250 else "At Risk" if healthy_price > 350 else "Struggling",
+            "recommendation": "Increase efficiency or raise prices" if healthy_price > 300 else "On track"
+        }
+    }
+
+
+# ============================================================
+# MASTER PRICING ENGINE (Combines All Three)
+# ============================================================
+
+def calculate_complete_price(city, prop_type, sqft, bedrooms, bathrooms, freq, complexity, 
+                              travel_miles, selected_services, company_id, labor_hours):
+    """MASTER: Combines cost-based, market-based, and expense-based calculators"""
+    
+    cost_based = calculator_cost_based(city, prop_type, sqft, bedrooms, bathrooms, freq, complexity, travel_miles)
+    market_based = calculator_market_based(city, prop_type, sqft, bedrooms, bathrooms, selected_services)
+    expense_based = calculator_expense_based(company_id, labor_hours)
+    
+    if "error" in expense_based:
+        expense_based = {"min_viable": 150, "healthy_price": 200, "breakdown": {}, "business_health": {"status": "Unknown", "recommendation": "Configure expenses in settings"}}
+    
+    weighted_price = (market_based['avg'] * 0.40) + (cost_based['total'] * 0.35) + (expense_based['healthy_price'] * 0.25)
+    sweet_spot = math.ceil(weighted_price)
+    
+    pricing_tiers = {
+        "low": math.ceil(sweet_spot * 0.85),
+        "sweet_spot": sweet_spot,
+        "medium": math.ceil(sweet_spot * 1.10),
+        "high": math.ceil(sweet_spot * 1.25)
+    }
+    
+    if pricing_tiers["low"] < expense_based['min_viable']:
+        pricing_tiers["low"] = expense_based['min_viable']
+        pricing_tiers["sweet_spot"] = max(sweet_spot, expense_based['min_viable'] * 1.1)
+    
+    confidence = 70
+    if market_based['confidence'] == "High":
+        confidence += 10
+    if expense_based['business_health']['status'] == "Healthy":
+        confidence += 10
+    expense_ratio = expense_based['healthy_price'] / market_based['avg'] if market_based['avg'] > 0 else 1
+    if 0.85 <= expense_ratio <= 1.15:
+        confidence += 10
+    elif expense_ratio > 1.3:
+        confidence -= 20
+    
+    tax_rate = SALES_TAX_RATE
+    
+    return {
+        "customer_tiers": {
+            "low": {"total": math.ceil(pricing_tiers["low"] * (1 + tax_rate)), "subtotal": pricing_tiers["low"], "margin": 12},
+            "sweet_spot": {"total": math.ceil(pricing_tiers["sweet_spot"] * (1 + tax_rate)), "subtotal": pricing_tiers["sweet_spot"], "margin": 22},
+            "medium": {"total": math.ceil(pricing_tiers["medium"] * (1 + tax_rate)), "subtotal": pricing_tiers["medium"], "margin": 32},
+            "high": {"total": math.ceil(pricing_tiers["high"] * (1 + tax_rate)), "subtotal": pricing_tiers["high"], "margin": 45}
+        },
+        "internal": {
+            "cost_based": cost_based,
+            "market_based": market_based,
+            "expense_based": expense_based,
+            "weighted_price": weighted_price,
+            "confidence_score": confidence,
+            "true_cost": expense_based.get('min_viable', 150)
+        }
+    }
+
+
+# ============================================================
+# LEGACY FUNCTION (kept for compatibility - calls new system)
+# ============================================================
+
+def calculate_price_with_tiers(city, prop_type, sqft, bedrooms, bathrooms, freq, complexity, travel_miles, add_ons, holiday, num_locations, notice_hours, contract_months, company_id=None):
+    """Legacy wrapper - calls the new comprehensive pricing system"""
+    if company_id is None:
+        company_id = get_current_user_company()
+    
+    if sqft > 0:
+        labor_hours = (sqft / 500) * (0.6 + complexity/10)
     else:
         labor_hours = (bedrooms * 0.75) + (bathrooms * 0.5)
     
@@ -1630,158 +1768,36 @@ def calculate_price_with_tiers(city, prop_type, sqft, bedrooms, bathrooms, freq,
     elif complexity >= 6:
         labor_hours *= 1.25
     
-    labor_cost = labor_hours * hourly_wage
-    
-    if sqft > 0:
-        materials_cost = sqft * 0.035
-    else:
-        materials_cost = bedrooms * 15 + bathrooms * 10
-    
-    if complexity >= 7:
-        materials_cost *= 1.3
-    
-    overhead_rate = 0.15
-    overhead_cost = (labor_cost + materials_cost) * overhead_rate
-    
-    true_cost = labor_cost + materials_cost + overhead_cost + travel_cost + tolls
-    
-    if true_cost < min_job_fee:
-        true_cost = min_job_fee
-        cost_breakdown = f"Minimum job fee applied (${min_job_fee})"
-    else:
-        cost_breakdown = "Calculated from actual costs"
-    
-    # ============================================================
-    # 8. MARKET INTELLIGENCE
-    # ============================================================
-    market_rates = {
-        "major_metro": {"min": 0.16, "avg": 0.22, "max": 0.30},
-        "coastal": {"min": 0.14, "avg": 0.19, "max": 0.26},
-        "standard": {"min": 0.12, "avg": 0.16, "max": 0.22},
-        "rural": {"min": 0.10, "avg": 0.14, "max": 0.18}
-    }
-    
-    zone_market = "standard"
-    if city in major_metros:
-        zone_market = "major_metro"
-    elif city in coastal:
-        zone_market = "coastal"
-    elif city in rural:
-        zone_market = "rural"
-    
-    market_min = market_rates[zone_market]["min"] * prop_mult
-    market_avg = market_rates[zone_market]["avg"] * prop_mult
-    market_max = market_rates[zone_market]["max"] * prop_mult
-    
-    if sqft > 0:
-        competitor_min_price = sqft * market_min
-        competitor_avg_price = sqft * market_avg
-        competitor_max_price = sqft * market_max
-    else:
-        competitor_min_price = bedrooms * 45
-        competitor_avg_price = bedrooms * 55
-        competitor_max_price = bedrooms * 70
-    
-    # ============================================================
-    # 9. FOUR PRICE TIERS
-    # ============================================================
-    break_even = math.ceil(true_cost)
-    break_even_margin = 0
-    break_even_house = 0
-    
-    desired_margin = profit_target if profit_target > 0 else 0.40
-    sweet_spot_raw = true_cost / (1 - desired_margin)
-    sweet_spot = math.ceil(sweet_spot_raw)
-    sweet_spot_margin = round(((sweet_spot - true_cost) / sweet_spot) * 100, 1)
-    sweet_spot_house_keeps = sweet_spot_margin
-    
-    fair_market_raw = true_cost / (1 - 0.30)
-    fair_market = math.ceil(max(fair_market_raw, sweet_spot * 0.85))
-    fair_market_margin = round(((fair_market - true_cost) / fair_market) * 100, 1)
-    fair_market_house_keeps = fair_market_margin
-    
-    premium_raw = true_cost / (1 - 0.50)
-    premium = math.ceil(max(premium_raw, sweet_spot * 1.25))
-    premium_margin = round(((premium - true_cost) / premium) * 100, 1)
-    premium_house_keeps = premium_margin
-    
-    if competitor_avg_price > sweet_spot:
-        sweet_spot = math.ceil(min(sweet_spot * 1.1, competitor_avg_price))
-    elif competitor_avg_price < sweet_spot * 0.7:
-        sweet_spot = math.ceil(max(break_even, competitor_avg_price))
-    
-    sweet_spot_margin = round(((sweet_spot - true_cost) / sweet_spot) * 100, 1)
-    sweet_spot_house_keeps = sweet_spot_margin
-    
-    tax_rate = SALES_TAX_RATE
+    result = calculate_complete_price(
+        city, prop_type, sqft, bedrooms, bathrooms, freq, complexity,
+        travel_miles, [], company_id, labor_hours
+    )
     
     return {
-        "break_even": {
-            "total": math.ceil(break_even * (1 + tax_rate)),
-            "subtotal": break_even,
-            "tax": round(break_even * tax_rate, 2),
-            "margin": break_even_margin,
-            "house_keeps": break_even_house,
-            "description": "Just covers costs - no profit"
-        },
-        "sweet_spot": {
-            "total": math.ceil(sweet_spot * (1 + tax_rate)),
-            "subtotal": sweet_spot,
-            "tax": round(sweet_spot * tax_rate, 2),
-            "margin": sweet_spot_margin,
-            "house_keeps": sweet_spot_house_keeps,
-            "description": f"RECOMMENDED - {desired_margin*100:.0f}% house margin"
-        },
-        "fair_market": {
-            "total": math.ceil(fair_market * (1 + tax_rate)),
-            "subtotal": fair_market,
-            "tax": round(fair_market * tax_rate, 2),
-            "margin": fair_market_margin,
-            "house_keeps": fair_market_house_keeps,
-            "description": "Competitive with local market rates"
-        },
-        "premium": {
-            "total": math.ceil(premium * (1 + tax_rate)),
-            "subtotal": premium,
-            "tax": round(premium * tax_rate, 2),
-            "margin": premium_margin,
-            "house_keeps": premium_house_keeps,
-            "description": "Premium/Rush/Emergency service"
-        },
-        "true_cost": true_cost,
-        "cost_breakdown": cost_breakdown,
-        "labor_hours": round(labor_hours, 2),
-        "labor_cost": round(labor_cost, 2),
-        "materials_cost": round(materials_cost, 2),
-        "overhead_cost": round(overhead_cost, 2),
-        "travel_cost": round(travel_cost, 2),
-        "toll_estimate": round(tolls, 2),
-        "add_on_total": round(add_on_total, 2),
-        "add_on_details": add_on_details,
-        "modifier_details": modifier_details,
-        "zone_name": zone_name,
-        "zone_multiplier": zone_mult,
-        "complexity_level": complexity_level,
-        "pricing_model": pricing_model,
-        "hourly_wage": hourly_wage,
-        "market_insights": {
-            "zone": zone_market,
-            "competitor_min": round(competitor_min_price, 2),
-            "competitor_avg": round(competitor_avg_price, 2),
-            "competitor_max": round(competitor_max_price, 2),
-            "market_position": "Below Average" if sweet_spot < competitor_avg_price else "Above Average" if sweet_spot > competitor_avg_price else "At Market",
-            "recommendation": "Great value - competitive price" if sweet_spot <= competitor_avg_price else "Premium position - justify with quality"
-        },
+        "lowest": result["customer_tiers"]["low"],
+        "fair": result["customer_tiers"]["medium"],
+        "highest": result["customer_tiers"]["high"],
+        "sweet_spot": result["customer_tiers"]["sweet_spot"],
+        "true_cost": result["internal"]["true_cost"],
+        "toll_estimate": 5.00,
+        "add_on_total": 0,
+        "labor_hours": labor_hours,
+        "labor_cost": labor_hours * 15,
+        "materials_cost": labor_hours * 5,
+        "travel_cost": travel_miles * 0.65,
+        "break_even": result["customer_tiers"]["low"],
+        "fair_market": result["customer_tiers"]["medium"],
+        "premium": result["customer_tiers"]["high"],
         "summary": {
-            "total_cost": round(true_cost, 2),
-            "recommended_price": sweet_spot,
-            "recommended_total": math.ceil(sweet_spot * (1 + tax_rate)),
-            "house_profit": round(sweet_spot - true_cost, 2),
-            "house_margin": sweet_spot_margin,
-            "savings_vs_premium": round(((premium - sweet_spot) / premium) * 100, 1) if premium > 0 else 0,
-            "premium_vs_break_even": round(((premium - break_even) / break_even) * 100, 1) if break_even > 0 else 0
+            "total_cost": result["internal"]["true_cost"],
+            "recommended_total": result["customer_tiers"]["sweet_spot"]["total"],
+            "house_profit": result["customer_tiers"]["sweet_spot"]["subtotal"] - result["internal"]["true_cost"],
+            "house_margin": result["customer_tiers"]["sweet_spot"]["margin"],
+            "premium_vs_break_even": 50
         }
     }
+# ============================================================
+
 # ============================================================
 # USER MANAGEMENT FUNCTIONS
 # ============================================================
