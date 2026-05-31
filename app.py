@@ -426,6 +426,13 @@ def init_db():
         home_city TEXT,
         per_mile_rate REAL,
         sales_tax_rate REAL DEFAULT 0.06,
+        monthly_rent REAL DEFAULT 0,
+        monthly_insurance REAL DEFAULT 0,
+        monthly_vehicles REAL DEFAULT 0,
+        monthly_marketing REAL DEFAULT 0,
+        monthly_software REAL DEFAULT 0,
+        monthly_admin_salary REAL DEFAULT 0,
+        desired_profit_margin REAL DEFAULT 0.20,
         smtp_email TEXT,
         smtp_password TEXT,
         smtp_server TEXT,
@@ -2664,6 +2671,8 @@ def dashboard():
         ]
         if user['role'] in ['super_admin', 'support_staff']:
             menu_items.append(("🔧 Admin Tools", "admin_companies"))
+        if user['role'] in ['super_admin', 'admin']:
+            menu_items.append(("📊 Internal Pricing", "internal_pricing"))
         for label, page in menu_items:
             if st.button(label, use_container_width=True, key=f"nav_{page}"):
                 st.session_state.page = page
@@ -3603,7 +3612,12 @@ def settings_page():
     c.execute("PRAGMA table_info(business_profile)")
     existing_columns = [col[1] for col in c.fetchall()]
     
-    select_columns = ["business_name", "phone", "email", "hourly_wage", "min_job_fee", "home_city", "smtp_email", "smtp_password"]
+    select_columns = [
+        "business_name", "phone", "email", "hourly_wage", "min_job_fee", "home_city",
+        "monthly_rent", "monthly_insurance", "monthly_vehicles", "monthly_marketing",
+        "monthly_software", "monthly_admin_salary", "desired_profit_margin",
+        "smtp_email", "smtp_password"
+    ]
     
     if 'smtp_server' in existing_columns:
         select_columns.append("smtp_server")
@@ -3647,6 +3661,22 @@ def settings_page():
             smtp_password = st.text_input("SMTP Password", type="password", value=row_dict.get('smtp_password', '') if row_dict.get('smtp_password') else "")
             smtp_server = st.text_input("SMTP Server", value=row_dict.get('smtp_server', 'smtp.gmail.com'))
             smtp_port = st.number_input("SMTP Port", value=int(row_dict.get('smtp_port', 587)))
+
+            st.markdown("---")
+            st.markdown("### 💰 Business Expenses (For Internal Pricing)")
+            st.caption("These help calculate what you need to charge to stay profitable")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                monthly_rent = st.number_input("Monthly Rent/Lease", min_value=0, value=int(row_dict.get('monthly_rent', 0)), step=100)
+                monthly_insurance = st.number_input("Monthly Insurance", min_value=0, value=int(row_dict.get('monthly_insurance', 0)), step=100)
+                monthly_vehicles = st.number_input("Monthly Vehicle Expenses", min_value=0, value=int(row_dict.get('monthly_vehicles', 0)), step=100)
+            with col2:
+                monthly_marketing = st.number_input("Monthly Marketing", min_value=0, value=int(row_dict.get('monthly_marketing', 0)), step=50)
+                monthly_software = st.number_input("Monthly Software/Subscriptions", min_value=0, value=int(row_dict.get('monthly_software', 0)), step=50)
+                monthly_admin_salary = st.number_input("Monthly Admin Salary", min_value=0, value=int(row_dict.get('monthly_admin_salary', 0)), step=500)
+            
+            desired_profit_margin = st.slider("Desired Profit Margin", min_value=0.05, max_value=0.50, value=float(row_dict.get('desired_profit_margin', 0.20)), step=0.05, format="%.0f%%")
             
             if st.form_submit_button("Save"):
                 conn = sqlite3.connect(DB_PATH)
@@ -3668,13 +3698,51 @@ def settings_page():
                         print("Added smtp_port column")
                     except:
                         pass
+                if 'monthly_rent' not in current_columns:
+                    try:
+                        c.execute("ALTER TABLE business_profile ADD COLUMN monthly_rent REAL DEFAULT 0")
+                    except:
+                        pass
+                if 'monthly_insurance' not in current_columns:
+                    try:
+                        c.execute("ALTER TABLE business_profile ADD COLUMN monthly_insurance REAL DEFAULT 0")
+                    except:
+                        pass
+                if 'monthly_vehicles' not in current_columns:
+                    try:
+                        c.execute("ALTER TABLE business_profile ADD COLUMN monthly_vehicles REAL DEFAULT 0")
+                    except:
+                        pass
+                if 'monthly_marketing' not in current_columns:
+                    try:
+                        c.execute("ALTER TABLE business_profile ADD COLUMN monthly_marketing REAL DEFAULT 0")
+                    except:
+                        pass
+                if 'monthly_software' not in current_columns:
+                    try:
+                        c.execute("ALTER TABLE business_profile ADD COLUMN monthly_software REAL DEFAULT 0")
+                    except:
+                        pass
+                if 'monthly_admin_salary' not in current_columns:
+                    try:
+                        c.execute("ALTER TABLE business_profile ADD COLUMN monthly_admin_salary REAL DEFAULT 0")
+                    except:
+                        pass
+                if 'desired_profit_margin' not in current_columns:
+                    try:
+                        c.execute("ALTER TABLE business_profile ADD COLUMN desired_profit_margin REAL DEFAULT 0.20")
+                    except:
+                        pass
                 
                 c.execute("""
                     UPDATE business_profile 
                     SET business_name=?, phone=?, email=?, hourly_wage=?, min_job_fee=?, home_city=?, 
-                        smtp_email=?, smtp_password=?, smtp_server=?, smtp_port=? 
+                        smtp_email=?, smtp_password=?, smtp_server=?, smtp_port=?,
+                        monthly_rent=?, monthly_insurance=?, monthly_vehicles=?, monthly_marketing=?,
+                        monthly_software=?, monthly_admin_salary=?, desired_profit_margin=?
                     WHERE company_id=?
-                """, (bname, phone, email, wage, min_fee, home, smtp_email, smtp_password, smtp_server, smtp_port, company_id))
+                """, (bname, phone, email, wage, min_fee, home, smtp_email, smtp_password, smtp_server, smtp_port,
+                      monthly_rent, monthly_insurance, monthly_vehicles, monthly_marketing, monthly_software, monthly_admin_salary, desired_profit_margin, company_id))
                 
                 conn.commit()
                 conn.close()
@@ -3682,6 +3750,100 @@ def settings_page():
                 st.rerun()
     else:
         st.warning("Business profile not found. Please contact support.")
+
+def internal_pricing_dashboard():
+    """Internal dashboard showing all three calculators"""
+    if st.button("← Back to Dashboard"):
+        st.session_state.page = "dashboard"
+        st.rerun()
+    
+    st.markdown("### 📊 Internal Pricing Intelligence Dashboard")
+    st.caption("Confidential - Internal use only. View all three pricing calculators.")
+    
+    company_id = get_current_user_company()
+    
+    # Demo inputs for testing the calculators
+    st.markdown("#### Test Calculator Inputs")
+    col1, col2 = st.columns(2)
+    with col1:
+        test_city = st.selectbox("Test City", FLORIDA_CITIES, key="test_city")
+        test_prop = st.selectbox("Property Type", list(PROPERTY_TYPES.keys()), key="test_prop")
+        test_sqft = st.number_input("Square Feet", min_value=500, value=5000, key="test_sqft")
+    with col2:
+        test_complexity = st.slider("Complexity (1-10)", 1, 10, 3, key="test_complexity")
+        test_travel = st.number_input("Travel Miles", min_value=0, value=10, key="test_travel")
+        labor_hours = (test_sqft / 500) * (0.6 + test_complexity/10)
+    
+    if st.button("Run All Calculators", key="run_calculators"):
+        # Run all three internal calculators
+        cost_result = calculator_cost_based(test_city, test_prop, test_sqft, 2, 1, "Weekly", test_complexity, test_travel)
+        market_result = calculator_market_based(test_city, test_prop, test_sqft, 2, 1, None)
+        expense_result = calculator_expense_based(company_id, labor_hours)
+        
+        # Display results in three columns
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.markdown("#### 🏢 Cost-Based Calculator")
+            st.markdown(f"**Recommended Price:** ${cost_result['total']}")
+            with st.expander("Breakdown"):
+                for k, v in cost_result['breakdown'].items():
+                    st.markdown(f"- {k.replace('_', ' ').title()}: {v}")
+        
+        with col2:
+            st.markdown("#### 📊 Market-Based Calculator")
+            st.markdown(f"**Min:** ${market_result['min']} | **Avg:** ${market_result['avg']} | **Max:** ${market_result['max']}")
+            st.markdown(f"**Zone:** {market_result['zone']} (Confidence: {market_result['confidence']})")
+        
+        with col3:
+            st.markdown("#### 💰 Expense-Based Calculator")
+            if "error" in expense_result:
+                st.warning(expense_result['error'])
+            else:
+                st.markdown(f"**Min Viable:** ${expense_result['min_viable']}")
+                st.markdown(f"**Healthy Price:** ${expense_result['healthy_price']}")
+                st.markdown(f"**Business Health:** {expense_result['business_health']['status']}")
+                if expense_result['business_health']['recommendation'] != "On track":
+                    st.warning(expense_result['business_health']['recommendation'])
+        
+        # Combined result
+        st.markdown("---")
+        st.markdown("#### 🎯 Combined Recommendation")
+        
+        weighted = (market_result['avg'] * 0.40) + (cost_result['total'] * 0.35) + (expense_result['healthy_price'] * 0.25)
+        
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Low", f"${math.ceil(weighted * 0.85)}")
+        col2.metric("Sweet Spot", f"${math.ceil(weighted)}", delta="RECOMMENDED")
+        col3.metric("Medium", f"${math.ceil(weighted * 1.10)}")
+        col4.metric("High", f"${math.ceil(weighted * 1.25)}")
+    
+    # Business expense summary
+    st.markdown("---")
+    st.markdown("#### 💼 Business Expense Summary")
+    
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""
+        SELECT monthly_rent, monthly_insurance, monthly_vehicles, monthly_marketing, 
+               monthly_software, monthly_admin_salary, desired_profit_margin, hourly_wage
+        FROM business_profile WHERE company_id = ?
+    """, (company_id,))
+    expenses = c.fetchone()
+    conn.close()
+    
+    if expenses:
+        total_monthly = sum(expenses[:6])
+        st.metric("Total Monthly Fixed Costs", f"${total_monthly:,.2f}")
+        st.metric("Desired Profit Margin", f"{expenses[6]*100:.0f}%")
+        st.metric("Hourly Wage Base", f"${expenses[7]:.2f}/hr")
+        
+        # Annual projection
+        annual_cost = total_monthly * 12
+        annual_profit_target = annual_cost * expenses[6]
+        st.info(f"**Annual Revenue Target:** ${(annual_cost + annual_profit_target):,.2f} to achieve {expenses[6]*100:.0f}% profit")
+    else:
+        st.warning("No expense data configured. Go to Settings > Business Expenses to add.")
 
 def my_performance_page():
     if st.button("← Back"):
@@ -4458,6 +4620,7 @@ def main():
                 "support": support_page,
                 "settings": settings_page,
                 "terms": terms_page,
+                "internal_pricing": internal_pricing_dashboard,
                 "admin_companies": admin_companies_page,
             }
             current = st.session_state.page
