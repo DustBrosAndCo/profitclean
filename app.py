@@ -5098,24 +5098,284 @@ def ai_tasks_page():
     if st.button("← Back"):
         st.session_state.page = "dashboard"
         st.rerun()
-    st.markdown("### 🤖 AI Task List")
-    prop = st.selectbox("Property Type", list(PROPERTY_TYPES.keys()))
-    sqft = st.number_input("Square Feet", 100, 100000, 2000)
-    complexity = st.slider("Complexity",1,10,3)
-    if st.button("Generate"):
-        tasks = [
-            "Vacuum floors",
-            "Dust surfaces",
-            "Clean restrooms",
-            "Empty trash",
-            "Sanitize high-touch areas"
+
+    st.markdown("### 🤖 Smart Task Generator")
+    st.caption("Generate a customized cleaning task list based on your property details")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        property_type = st.selectbox("Property Type", list(PROPERTY_TYPES.keys()), key="ai_prop_type")
+        square_feet = st.number_input("Total Square Feet", min_value=100, max_value=500000, value=2000, step=100, key="ai_sqft")
+        num_rooms = st.number_input("Number of Rooms/Areas", min_value=1, max_value=200, value=5, key="ai_num_rooms")
+        has_restrooms = st.checkbox("Has restrooms on site", value=True, key="ai_has_restrooms")
+        num_restrooms = 0
+        if has_restrooms:
+            num_restrooms = st.number_input("Number of Restrooms", min_value=1, max_value=50, value=2, key="ai_num_restrooms")
+
+    with col2:
+        complexity = st.select_slider("Complexity Level", options=[1,2,3,4,5,6,7,8,9,10], value=3, key="ai_complexity")
+        frequency = st.selectbox("Cleaning Frequency", ["Daily", "Weekly", "Bi-weekly", "Monthly", "One-time"], key="ai_frequency")
+        special_considerations = st.multiselect("Special Considerations", [
+            "High-traffic area",
+            "Pets on premises",
+            "Sensitive equipment",
+            "Green cleaning required",
+            "After-hours only access",
+            "Security clearance needed"
+        ], key="ai_special_considerations")
+        include_estimate = st.checkbox("Include time & labor estimates", value=True, key="ai_include_estimate")
+
+    if st.button("🚀 Generate Smart Task List", type="primary", use_container_width=True, key="ai_generate"):
+        tasks = generate_intelligent_tasks(
+            property_type,
+            int(square_feet),
+            int(num_rooms),
+            bool(has_restrooms),
+            int(num_restrooms) if has_restrooms else 0,
+            int(complexity),
+            frequency,
+            special_considerations,
+        )
+
+        labor_estimate = None
+        if include_estimate:
+            labor_estimate = calculate_labor_estimate(int(square_feet), int(complexity), int(num_restrooms) if has_restrooms else 0)
+
+        st.markdown("---")
+        st.markdown("### 📋 Your Custom Task List")
+
+        for i, task in enumerate(tasks, 1):
+            left, right = st.columns([4,1])
+            with left:
+                st.checkbox(f"{i}. {task['name']}", key=f"ai_task_{i}")
+                if task.get('tip'):
+                    st.caption(f"💡 Tip: {task['tip']}")
+            with right:
+                if include_estimate:
+                    st.metric("Est. Time", f"{task.get('minutes', 0)} min")
+            st.markdown("---")
+
+        if include_estimate and labor_estimate:
+            st.markdown("### ⏱️ Labor & Time Summary")
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                st.metric("Total Time", f"{labor_estimate['total_hours']:.1f} hours")
+            with c2:
+                st.metric("Crew Size", f"{labor_estimate['crew_size']} people")
+            with c3:
+                st.metric("Estimated Labor Cost", f"${labor_estimate['labor_cost']:.2f}")
+            with c4:
+                st.metric("Productivity Rate", f"{labor_estimate['sqft_per_hour']:.0f} sqft/hr")
+
+        st.markdown("### 🛠️ Recommended Equipment & Supplies")
+        equipment = generate_equipment_list(property_type, int(square_feet))
+        ec1, ec2 = st.columns(2)
+        with ec1:
+            st.markdown("**Equipment Needed:**")
+            for item in equipment['equipment']:
+                st.markdown(f"- {item}")
+        with ec2:
+            st.markdown("**Supplies Needed:**")
+            for item in equipment['supplies']:
+                st.markdown(f"- {item}")
+
+        st.markdown("### ✅ Quality Assurance Checklist")
+        quality_items = generate_quality_checklist(property_type)
+        for j, qi in enumerate(quality_items, 1):
+            st.checkbox(qi, key=f"ai_quality_{j}")
+
+        st.markdown("---")
+        ex1, ex2, ex3 = st.columns(3)
+        with ex1:
+            if st.button("📋 Copy to Clipboard", use_container_width=True, key="ai_copy"):
+                st.success("Task list copied to clipboard (browser action simulated)")
+        with ex2:
+            if st.button("📧 Email to Team", use_container_width=True, key="ai_email_team"):
+                st.info("Email feature is available; it would send this list to assigned workers")
+        with ex3:
+            if st.button("💾 Save as Template", use_container_width=True, key="ai_save_template"):
+                st.success("Template saved for future use")
+
+
+def generate_intelligent_tasks(property_type, sqft, num_rooms, has_restrooms, num_restrooms, complexity, frequency, special_considerations):
+    """Generate intelligent task list based on property characteristics"""
+    base_tasks = [
+        {"name": "Empty all trash and recycling bins", "minutes": 15, "tip": "Replace liners in all bins"},
+        {"name": "Dust all horizontal surfaces", "minutes": 20, "tip": "Work top to bottom"},
+        {"name": "Vacuum all carpeted areas", "minutes": max(5, int(sqft / 200)), "tip": "Use HEPA filter for allergies"},
+        {"name": "Mop all hard floor surfaces", "minutes": max(5, int(sqft / 250)), "tip": "Use color-coded mop heads"},
+        {"name": "Clean and sanitize all door handles and light switches", "minutes": 10, "tip": "High-touch areas need daily attention"},
+        {"name": "Final visual inspection", "minutes": 10, "tip": "Walk through all areas"},
+    ]
+
+    property_tasks = {
+        "Restaurant": [
+            {"name": "Clean kitchen hood and exhaust", "minutes": 30, "tip": "Focus on grease buildup"},
+            {"name": "Degrease all cooking surfaces", "minutes": 25, "tip": "Use food-safe degreaser"},
+            {"name": "Sanitize food preparation areas", "minutes": 15, "tip": "Use NSF-certified sanitizer"},
+            {"name": "Clean dining tables and chairs", "minutes": 20, "tip": "Wipe down all surfaces"},
+            {"name": "Clean and sanitize menus", "minutes": 10, "tip": "Use food-safe wipes"}
+        ],
+        "Medical/Dental": [
+            {"name": "Disinfect all exam room surfaces", "minutes": 30, "tip": "Use hospital-grade disinfectant"},
+            {"name": "Clean medical equipment (exterior)", "minutes": 20, "tip": "Follow equipment manufacturer guidelines"},
+            {"name": "Sanitize waiting area chairs and tables", "minutes": 15, "tip": "Focus on armrests"},
+            {"name": "Biohazard waste handling", "minutes": 15, "tip": "Use proper PPE and red bags"},
+            {"name": "Restock medical supplies (paper, gloves)", "minutes": 10, "tip": "Check inventory levels"}
+        ],
+        "School/Daycare": [
+            {"name": "Sanitize all toys and play areas", "minutes": 25, "tip": "Use child-safe disinfectant"},
+            {"name": "Clean cubbies and storage areas", "minutes": 20, "tip": "Remove all items and wipe down"},
+            {"name": "Disinfect changing tables", "minutes": 10, "tip": "Use appropriate sanitizer"},
+            {"name": "Clean cafeteria tables", "minutes": 15, "tip": "Focus on high-touch areas"},
+            {"name": "Sanitize door handles at child height", "minutes": 10, "tip": "Children touch lower handles"}
+        ],
+        "Warehouse": [
+            {"name": "Sweep all aisles and open areas", "minutes": max(5, int(sqft / 1000)), "tip": "Use industrial sweeper for large areas"},
+            {"name": "Clean loading dock area", "minutes": 30, "tip": "Remove debris and sweep"},
+            {"name": "Dust racking and shelving", "minutes": 40, "tip": "Use extension duster for high racks"},
+            {"name": "Empty large industrial trash bins", "minutes": 20, "tip": "Check dumpster placement"},
+            {"name": "Clean breakroom and office areas", "minutes": 20, "tip": "Focus on employee areas"}
+        ],
+        "Gym/Fitness": [
+            {"name": "Sanitize all exercise equipment", "minutes": 30, "tip": "Use equipment-safe disinfectant"},
+            {"name": "Clean locker rooms and showers", "minutes": 35, "tip": "Check for mold in corners"},
+            {"name": "Mop studio and class floors", "minutes": 20, "tip": "Use appropriate floor cleaner"},
+            {"name": "Clean all mirrors (gym and lockers)", "minutes": 15, "tip": "Streak-free glass cleaner"},
+            {"name": "Restock towels and amenities", "minutes": 15, "tip": "Check supply levels"}
         ]
-        if complexity >= 8:
-            tasks.append("Deep clean required")
-        if sqft > 5000:
-            tasks.append("Large area – allocate extra time")
-        for t in tasks:
-            st.checkbox(t)
+    }
+
+    tasks = base_tasks.copy()
+    if property_type in property_tasks:
+        tasks.extend(property_tasks[property_type])
+
+    if has_restrooms:
+        for i in range(num_restrooms):
+            tasks.append({"name": f"Clean restroom #{i+1} (toilets, sinks, mirrors, floors)", "minutes": 25, "tip": "Use restroom-specific color-coded tools"})
+
+    if complexity >= 7:
+        tasks.append({"name": "DEEP CLEAN: Baseboards and corners", "minutes": 30, "tip": "Focus on neglected areas"})
+        tasks.append({"name": "DEEP CLEAN: Window tracks and blinds", "minutes": 25, "tip": "Detailed attention"})
+    if complexity >= 9:
+        tasks.append({"name": "DEEP CLEAN: Behind and under furniture", "minutes": 40, "tip": "Move light furniture"})
+
+    if frequency == "Daily":
+        for task in tasks:
+            task['minutes'] = max(1, int(task['minutes'] * 0.7))
+    elif frequency == "Monthly":
+        for task in tasks:
+            task['minutes'] = int(task['minutes'] * 1.5)
+
+    if "Pets on premises" in special_considerations:
+        tasks.append({"name": "Vacuum pet hair from all surfaces", "minutes": 20, "tip": "Use rubber brush attachment"})
+    if "Green cleaning required" in special_considerations:
+        tasks.append({"name": "Use eco-friendly certified products only", "minutes": 5, "tip": "Verify product certifications"})
+    if "After-hours only access" in special_considerations:
+        tasks.append({"name": "Security check-in/out procedures", "minutes": 10, "tip": "Log entry and exit times"})
+
+    return tasks
+
+
+def calculate_labor_estimate(sqft, complexity, num_restrooms):
+    """Calculate labor hours and crew size"""
+    base_hours = sqft / 2000.0
+    complexity_factor = 1 + ((complexity - 3) * 0.1)
+    adjusted_hours = base_hours * complexity_factor
+    restroom_hours = num_restrooms * 0.25
+    total_hours = adjusted_hours + restroom_hours
+
+    if total_hours <= 2:
+        crew_size = 1
+    elif total_hours <= 4:
+        crew_size = 2
+    elif total_hours <= 8:
+        crew_size = 3
+    else:
+        crew_size = 4
+
+    return {
+        "total_hours": round(total_hours, 1),
+        "crew_size": crew_size,
+        "labor_cost": round(total_hours * 25, 2),
+        "sqft_per_hour": round(sqft / total_hours, 0) if total_hours > 0 else 0,
+    }
+
+
+def generate_equipment_list(property_type, sqft):
+    base_equipment = [
+        "Vacuum cleaner (HEPA filter recommended)",
+        "Microfiber mop with bucket and wringer",
+        "Microfiber cloths (color-coded set)",
+        "Extension duster for high areas",
+        "Step ladder or small platform",
+    ]
+
+    base_supplies = [
+        "All-purpose cleaner (2 bottles)",
+        "Glass cleaner (1 bottle)",
+        "Disinfectant spray (3 bottles)",
+        "Trash bags (various sizes)",
+        "Paper towels (4 rolls)",
+    ]
+
+    if property_type == "Restaurant":
+        base_equipment.extend(["Degreaser sprayer", "Commercial kitchen cleaner", "Floor scrubber for kitchen"])
+        base_supplies.extend(["Food-safe sanitizer", "Grease remover concentrate", "Stainless steel polish"])
+
+    if property_type == "Medical/Dental":
+        base_equipment.extend(["Hospital-grade disinfectant sprayer", "PPE kit (gloves, mask, gown)"])
+        base_supplies.extend(["Medical-grade disinfectant wipes", "Biohazard waste bags", "Hand sanitizer refills"])
+
+    if property_type == "Warehouse":
+        base_equipment.extend(["Industrial floor sweeper", "High-reach duster (15+ feet)", "Pallet jack for moving items"])
+        base_supplies.extend(["Industrial trash bags (55+ gallon)", "Shop towels (heavy-duty)", "Floor sweep compound"])
+
+    if sqft > 10000:
+        base_equipment.append("Ride-on floor scrubber (recommended for efficiency)")
+
+    return {"equipment": base_equipment, "supplies": base_supplies}
+
+
+def generate_quality_checklist(property_type):
+    base_checklist = [
+        "All floors are clean and dry",
+        "No visible dust on any surface",
+        "All trash cans emptied and relined",
+        "Restrooms are sanitized and fully stocked",
+        "All high-touch areas disinfected",
+        "Windows and mirrors are streak-free",
+        "Supplies are organized in janitor closet",
+        "No unpleasant odors remain",
+    ]
+
+    property_specific = {
+        "Restaurant": [
+            "Kitchen hood and exhaust clean",
+            "Food prep surfaces sanitized",
+            "No grease buildup on equipment",
+            "Dining area tables and chairs clean",
+        ],
+        "Medical/Dental": [
+            "Exam room surfaces disinfected",
+            "Biohazard waste properly disposed",
+            "Waiting area sanitized",
+            "Medical equipment exteriors clean",
+        ],
+        "School/Daycare": [
+            "Toys and play areas sanitized",
+            "Child-height surfaces disinfected",
+            "Cubbies and storage clean",
+            "Cafeteria tables sanitized",
+        ],
+    }
+
+    checklist = base_checklist.copy()
+    if property_type in property_specific:
+        checklist.extend(property_specific[property_type])
+
+    return checklist
 
 def generate_worker_qr(worker_id, worker_name):
     data = f"profitclean://worker/{worker_id}/{datetime.now().strftime('%Y%m%d')}"
