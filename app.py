@@ -33,6 +33,8 @@ from typing import Dict, Any, Optional, List, Tuple
 from dataclasses import dataclass, asdict
 from enum import Enum
 
+LAST_EMAIL_ERROR = None
+
 # ============================================================
 # SECURITY CONFIGURATION
 # ============================================================
@@ -969,8 +971,15 @@ def get_unread_notification_count(user_id: int) -> int:
 # EMAIL SYSTEM
 # ============================================================
 
+def get_last_email_error() -> Optional[str]:
+    return LAST_EMAIL_ERROR
+
+
 def send_email(company_id: int, to_email: str, subject: str, body: str, html_body: str = None) -> bool:
     """Send email using company's SMTP settings"""
+    global LAST_EMAIL_ERROR
+    LAST_EMAIL_ERROR = None
+
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT smtp_email, smtp_password, smtp_server, smtp_port FROM business_profile WHERE company_id = ?", (company_id,))
@@ -978,13 +987,14 @@ def send_email(company_id: int, to_email: str, subject: str, body: str, html_bod
     conn.close()
     
     if not row or not row[0] or not row[1]:
-        print(f"No SMTP configured for company {company_id}")
+        LAST_EMAIL_ERROR = f"SMTP configuration missing for company {company_id}. Please configure SMTP settings in Business Settings."
+        print(LAST_EMAIL_ERROR)
         return False
     
     smtp_email, smtp_password, smtp_server, smtp_port = row
     smtp_server = smtp_server or 'smtp.gmail.com'
-    smtp_port = smtp_port or 587
-    
+    smtp_port = int(smtp_port or 587)
+
     try:
         msg = MIMEMultipart('alternative')
         msg['From'] = smtp_email
@@ -995,14 +1005,22 @@ def send_email(company_id: int, to_email: str, subject: str, body: str, html_bod
         
         if html_body:
             msg.attach(MIMEText(html_body, 'html'))
-        
-        server = smtplib.SMTP(smtp_server, smtp_port)
-        server.starttls()
+
+        if smtp_port == 465:
+            server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=10)
+        else:
+            server = smtplib.SMTP(smtp_server, smtp_port, timeout=10)
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+
         server.login(smtp_email, smtp_password)
         server.send_message(msg)
         server.quit()
+        LAST_EMAIL_ERROR = None
         return True
     except Exception as e:
+        LAST_EMAIL_ERROR = str(e)
         print(f"Email error: {e}")
         return False
 
@@ -3194,7 +3212,8 @@ def estimate_page():
                     conn.commit()
                     conn.close()
                 else:
-                    st.warning("⚠️ Email not sent. Please configure SMTP settings in Business Settings.")
+                    error_message = get_last_email_error() or "Please configure SMTP settings in Business Settings."
+                    st.warning(f"⚠️ Email not sent. {error_message}")
         else:
             st.error("❌ Please enter both client name and email before saving")
 
