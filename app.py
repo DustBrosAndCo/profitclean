@@ -3494,8 +3494,8 @@ def generate_customer_proposal():
     with st.expander("📋 Client Information", expanded=True):
         col1, col2 = st.columns(2)
         with col1:
-            client_name = st.text_input("Client Name", value=st.session_state.proposal_data.get("client_name", ""))
-            client_email = st.text_input("Client Email", value=st.session_state.proposal_data.get("client_email", ""))
+            client_name = st.text_input("Client Name", value=st.session_state.proposal_data.get("client_name", ""), key="proposal_client_name")
+            client_email = st.text_input("Client Email", value=st.session_state.proposal_data.get("client_email", ""), key="proposal_client_email")
         with col2:
             property_address = st.text_area("Property Address", value=st.session_state.proposal_data.get("property_address", ""), height=68)
             property_type = st.selectbox(
@@ -3902,7 +3902,7 @@ def generate_customer_proposal():
 
         with tab2:
             st.markdown("#### Send Proposal via Email")
-            email_to = st.text_input("Client Email", value=client_email)
+            email_to = st.text_input("Client Email", value=client_email, key="proposal_email_to")
             email_subject = st.text_input("Subject", value=f"Cleaning Proposal from {business_name}")
             email_message = st.text_area(
                 "Personal Message (optional)",
