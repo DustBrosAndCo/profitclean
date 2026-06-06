@@ -1991,6 +1991,46 @@ def get_global_setting(name, default=None):
     return settings.get(name, default)
 
 
+def ensure_business_profile_schema(company_id=None):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("PRAGMA table_info(business_profile)")
+    existing_columns = [col[1] for col in c.fetchall()]
+
+    required_columns = [
+        ("smtp_server", "TEXT"),
+        ("smtp_port", "INTEGER DEFAULT 587"),
+        ("monthly_rent", "REAL DEFAULT 0"),
+        ("monthly_insurance", "REAL DEFAULT 0"),
+        ("monthly_vehicles", "REAL DEFAULT 0"),
+        ("monthly_marketing", "REAL DEFAULT 0"),
+        ("monthly_software", "REAL DEFAULT 0"),
+        ("monthly_admin_salary", "REAL DEFAULT 0"),
+        ("desired_profit_margin", "REAL DEFAULT 0.20"),
+    ]
+
+    for col_name, col_def in required_columns:
+        if col_name not in existing_columns:
+            try:
+                c.execute(f"ALTER TABLE business_profile ADD COLUMN {col_name} {col_def}")
+            except sqlite3.OperationalError:
+                pass
+
+    if company_id:
+        c.execute("SELECT COUNT(*) FROM business_profile WHERE company_id = ?", (company_id,))
+        if c.fetchone()[0] == 0:
+            c.execute("SELECT name FROM companies WHERE id = ?", (company_id,))
+            company_row = c.fetchone()
+            company_name = company_row[0] if company_row else f"Company {company_id}"
+            c.execute(
+                "INSERT INTO business_profile (company_id, business_name, phone, email, hourly_wage, profit_target, min_job_fee, home_city, per_mile_rate, sales_tax_rate, setup_complete) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (company_id, company_name, "(555) 000-0000", "", 15.0, 0.30, 150, "Orlando", 0.65, SALES_TAX_RATE, 0)
+            )
+
+    conn.commit()
+    conn.close()
+
+
 def load_global_market_rate_overrides():
     settings = get_global_settings()
     zone_rates = {
@@ -4590,6 +4630,7 @@ def settings_page():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
+    ensure_business_profile_schema(company_id)
     c.execute("PRAGMA table_info(business_profile)")
     existing_columns = [col[1] for col in c.fetchall()]
     
@@ -4803,6 +4844,7 @@ def internal_pricing_dashboard():
     st.markdown("---")
     st.markdown("#### 💼 Business Expense Summary")
     
+    ensure_business_profile_schema(company_id)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("""
