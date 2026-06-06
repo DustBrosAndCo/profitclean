@@ -971,6 +971,29 @@ def get_unread_notification_count(user_id: int) -> int:
 # EMAIL SYSTEM
 # ============================================================
 
+def get_smtp_settings(company_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT smtp_email, smtp_password, smtp_server, smtp_port FROM business_profile WHERE company_id = ?", (company_id,))
+    row = c.fetchone()
+    conn.close()
+
+    if not row:
+        return {
+            "smtp_email": "",
+            "smtp_password": "",
+            "smtp_server": "smtp.gmail.com",
+            "smtp_port": 587,
+        }
+
+    return {
+        "smtp_email": row[0] or "",
+        "smtp_password": row[1] or "",
+        "smtp_server": row[2] or "smtp.gmail.com",
+        "smtp_port": int(row[3]) if row[3] else 587,
+    }
+
+
 def get_last_email_error() -> Optional[str]:
     return LAST_EMAIL_ERROR
 
@@ -980,29 +1003,28 @@ def send_email(company_id: int, to_email: str, subject: str, body: str, html_bod
     global LAST_EMAIL_ERROR
     LAST_EMAIL_ERROR = None
 
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT smtp_email, smtp_password, smtp_server, smtp_port FROM business_profile WHERE company_id = ?", (company_id,))
-    row = c.fetchone()
-    conn.close()
-    
-    if not row or not row[0] or not row[1]:
-        LAST_EMAIL_ERROR = f"SMTP configuration missing for company {company_id}. Please configure SMTP settings in Business Settings."
+    smtp_settings = get_smtp_settings(company_id)
+    smtp_email = smtp_settings["smtp_email"]
+    smtp_password = smtp_settings["smtp_password"]
+    smtp_server = smtp_settings["smtp_server"]
+    smtp_port = smtp_settings["smtp_port"]
+
+    if not smtp_email or not smtp_password:
+        LAST_EMAIL_ERROR = (
+            "SMTP is not fully configured. Enter SMTP Email and SMTP Password in Business Settings, "
+            "then save and retry."
+        )
         print(LAST_EMAIL_ERROR)
         return False
-    
-    smtp_email, smtp_password, smtp_server, smtp_port = row
-    smtp_server = smtp_server or 'smtp.gmail.com'
-    smtp_port = int(smtp_port or 587)
 
     try:
         msg = MIMEMultipart('alternative')
         msg['From'] = smtp_email
         msg['To'] = to_email
         msg['Subject'] = subject
-        
+
         msg.attach(MIMEText(body, 'plain'))
-        
+
         if html_body:
             msg.attach(MIMEText(html_body, 'html'))
 
@@ -1020,8 +1042,11 @@ def send_email(company_id: int, to_email: str, subject: str, body: str, html_bod
         LAST_EMAIL_ERROR = None
         return True
     except Exception as e:
-        LAST_EMAIL_ERROR = str(e)
-        print(f"Email error: {e}")
+        LAST_EMAIL_ERROR = (
+            f"SMTP send failed using {smtp_server}:{smtp_port} from {smtp_email}. "
+            f"Error: {e}"
+        )
+        print(LAST_EMAIL_ERROR)
         return False
 
 def send_estimate_email(company_id: int, estimate_id: int, client_email: str, client_name: str, 
@@ -4749,6 +4774,29 @@ def settings_page():
             smtp_password = st.text_input("SMTP Password", type="password", value=row_dict.get('smtp_password', '') if row_dict.get('smtp_password') else "")
             smtp_server = st.text_input("SMTP Server", value=row_dict.get('smtp_server', 'smtp.gmail.com'))
             smtp_port = st.number_input("SMTP Port", value=int(row_dict.get('smtp_port', 587)))
+
+            if not smtp_email or not smtp_password:
+                st.warning("SMTP is not fully configured. Estimate emails will not send until SMTP Email and SMTP Password are entered.")
+            else:
+                st.success("SMTP settings are configured. Use Send Test Email to verify delivery.")
+
+            with st.expander("SMTP Setup Help"):
+                st.markdown("""
+                - Gmail: `smtp.gmail.com`, port `587` (STARTTLS) or `465` (SSL). Use an App Password, not your Google login password.
+                - Outlook/Office 365: `smtp.office365.com`, port `587`.
+                - Yahoo: `smtp.mail.yahoo.com`, port `465`.
+                - Enter the SMTP provider credentials you normally use for email clients.
+                - Save the settings and then click **Send Test Email** to verify that the account is working.
+                """)
+
+            st.markdown("**Current SMTP configuration loaded from your account:**")
+            st.write(f"- From: {smtp_email or 'Not configured'}")
+            st.write(f"- Server: {smtp_server or 'smtp.gmail.com'}")
+            st.write(f"- Port: {smtp_port}")
+            if smtp_password:
+                st.write("- Password: configured")
+            else:
+                st.write("- Password: not configured")
 
             # Test Email section: allow sending a one-off test email without saving settings
             test_recipient = st.text_input("Test Recipient Email", value=row_dict.get('smtp_email', '') if row_dict.get('smtp_email') else "")
