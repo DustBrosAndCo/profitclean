@@ -3465,505 +3465,502 @@ def save_estimate_to_database(
 
 
 def generate_customer_proposal():
-    """Generate a professional customer proposal with pick-and-choose options"""
+    """Generate a professional customer proposal with pick-and-choose options and profit calculator"""
     if st.button("← Back"):
         st.session_state.page = "dashboard"
         st.rerun()
-
+    
     st.markdown("### 📄 Customer Proposal Generator")
     st.caption("Create a professional proposal for your client with pick-and-choose service tiers")
-
-    company_id = get_current_user_company()
-    business_name = get_business_name()
-    property_type_default = next(iter(PROPERTY_TYPES), "")
-
+    
     if 'proposal_data' not in st.session_state:
         st.session_state.proposal_data = {
             "client_name": "",
             "client_email": "",
             "property_address": "",
-            "property_type": property_type_default,
-            "selected_tier": "sweet_spot",
-            "custom_price": None,
-            "included_services": [],
-            "excluded_services": [],
-            "special_notes": "",
-            "valid_until": (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
+            "property_type": "Grocery Store",
+            "square_feet": 2320,
+            "num_checkout_lanes": 3,
+            "has_soda_machine": True,
+            "crew_size": 3,
+            "estimated_hours": 6,
+            "shift_type": "Night Shift",
+            "total_price": 500,
+            "travel_miles": 90,
+            "supplies_cost": 100,
+            "hourly_wage": 25,
+            "key_pickup": "We will pick up the keys 45 minutes before closing and drop them off in the U-Haul drop box when cleaning is complete.",
+            "commitment_statement": "We aim to provide you with a comprehensive understanding of our services, ensuring you feel confident in the value you receive for the price. Our goal is to deliver a variety of services that meet your needs and expectations.",
+            "additional_notes": "This is a break-even rate covering direct costs, labor, supplies, and long-distance travel.",
+            "is_deep_clean": True,
+            "scope_items": [
+                "Remove all items from shelves, wipe down and sanitize shelving, reorganize and restock neatly",
+                "Wipe down AC vents",
+                "Clean multiple stains in the ceiling",
+                "Full floor cleaning and detailing",
+                "Restroom deep cleaning and sanitation",
+                "Interior window cleaning",
+                "Surface wipe-downs and high dusting",
+                "Debris removal",
+                "Sanitize soda machine nozzles",
+                "Clean refrigerator glass",
+                "Steam clean stains if needed",
+                "Clean checkout lanes"
+            ]
         }
-
+    
+    # ============================================================
+    # SECTION 1: CLIENT INFORMATION
+    # ============================================================
     with st.expander("📋 Client Information", expanded=True):
         col1, col2 = st.columns(2)
         with col1:
-            client_name = st.text_input("Client Name", value=st.session_state.proposal_data.get("client_name", ""), key="proposal_client_name")
-            client_email = st.text_input("Client Email", value=st.session_state.proposal_data.get("client_email", ""), key="proposal_client_email")
-        with col2:
+            client_name = st.text_input("Client Name", value=st.session_state.proposal_data.get("client_name", ""))
+            client_email = st.text_input("Client Email", value=st.session_state.proposal_data.get("client_email", ""))
             property_address = st.text_area("Property Address", value=st.session_state.proposal_data.get("property_address", ""), height=68)
-            property_type = st.selectbox(
-                "Property Type",
-                list(PROPERTY_TYPES.keys()),
-                index=list(PROPERTY_TYPES.keys()).index(
-                    st.session_state.proposal_data.get("property_type", property_type_default)
-                ) if st.session_state.proposal_data.get("property_type") in PROPERTY_TYPES else 0,
-            )
-
+        with col2:
+            property_type = st.selectbox("Property Type", ["Grocery Store", "Retail Store", "Office", "Restaurant", "Medical/Dental", "Warehouse", "Other"], 
+                                        index=["Grocery Store", "Retail Store", "Office", "Restaurant", "Medical/Dental", "Warehouse", "Other"].index(
+                                            st.session_state.proposal_data.get("property_type", "Grocery Store")))
+            square_feet = st.number_input("Square Footage", min_value=100, value=st.session_state.proposal_data.get("square_feet", 2320), step=100)
+            num_checkout_lanes = st.number_input("Number of Checkout Lanes", min_value=0, value=st.session_state.proposal_data.get("num_checkout_lanes", 3))
+            has_soda_machine = st.checkbox("Has Soda Machine", value=st.session_state.proposal_data.get("has_soda_machine", True))
+        
         st.session_state.proposal_data["client_name"] = client_name
         st.session_state.proposal_data["client_email"] = client_email
         st.session_state.proposal_data["property_address"] = property_address
         st.session_state.proposal_data["property_type"] = property_type
-
+        st.session_state.proposal_data["square_feet"] = square_feet
+        st.session_state.proposal_data["num_checkout_lanes"] = num_checkout_lanes
+        st.session_state.proposal_data["has_soda_machine"] = has_soda_machine
+    
+    # ============================================================
+    # SECTION 2: PRICE & COSTS (With Profit Calculator)
+    # ============================================================
     st.markdown("---")
-    st.markdown("### 💰 Choose Your Service Package")
-    st.caption("Select the tier that best fits your needs. All prices are estimates and can be adjusted.")
-
-    default_prices = {
-        "break_even": {"price": 507, "margin": 12, "description": "Basic cleaning - covers our costs only"},
-        "sweet_spot": {"price": 596, "margin": 22, "description": "Standard cleaning - best value, recommended"},
-        "fair_market": {"price": 657, "margin": 32, "description": "Premium cleaning - extra attention to detail"},
-        "premium": {"price": 746, "margin": 45, "description": "Deluxe cleaning - rush service, highest priority"},
-    }
-
-    col1, col2, col3, col4 = st.columns(4)
-
+    st.markdown("### 💰 Pricing & Profit Calculator")
+    st.caption("Adjust the numbers below to see your estimated profit margin in real-time")
+    
+    col1, col2 = st.columns(2)
+    
     with col1:
-        st.markdown("#### 📉 BREAK EVEN")
-        break_even_price = st.number_input("Price", min_value=0, value=default_prices["break_even"]["price"], step=10, key="be_price")
-        st.caption(f"{default_prices['break_even']['margin']}% margin")
-        st.caption("⚠️ No profit - just costs")
-
+        st.markdown("#### 📊 Revenue")
+        total_price = st.number_input("Proposed Price ($)", min_value=0, value=st.session_state.proposal_data.get("total_price", 500), step=25, help="What you will charge the client")
+        
+        st.markdown("#### 👥 Labor Costs")
+        crew_size = st.number_input("Number of Cleaners", min_value=1, max_value=10, value=st.session_state.proposal_data.get("crew_size", 3))
+        estimated_hours = st.number_input("Estimated Hours", min_value=1, max_value=24, value=st.session_state.proposal_data.get("estimated_hours", 6), step=1)
+        hourly_wage = st.number_input("Hourly Wage per Cleaner ($)", min_value=10, max_value=50, value=st.session_state.proposal_data.get("hourly_wage", 25), step=1)
+    
     with col2:
-        st.markdown("#### 🎯 SWEET SPOT")
-        sweet_spot_price = st.number_input("Price", min_value=0, value=default_prices["sweet_spot"]["price"], step=10, key="ss_price")
-        st.caption(f"{default_prices['sweet_spot']['margin']}% margin")
-        st.caption("✅ RECOMMENDED")
-
+        st.markdown("#### 🧴 Supply & Equipment Costs")
+        supplies_cost = st.number_input("Supplies & Equipment ($)", min_value=0, value=st.session_state.proposal_data.get("supplies_cost", 100), step=25, 
+                                        help="Cleaning products, tools, equipment rental")
+        
+        st.markdown("#### 🚗 Travel Costs")
+        travel_miles = st.number_input("Round Trip Miles", min_value=0, value=st.session_state.proposal_data.get("travel_miles", 90), step=10)
+        mileage_rate = st.number_input("Mileage Rate ($/mile)", min_value=0.40, max_value=1.00, value=0.65, step=0.05)
+        
+        is_deep_clean = st.checkbox("Deep Clean (First-time / Heavy soil)", value=st.session_state.proposal_data.get("is_deep_clean", True),
+                                    help="Deep cleaning takes 50-100% longer than regular maintenance")
+    
+    st.markdown("#### 🔧 Additional Costs")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        equipment_rental = st.number_input("Equipment Rental ($)", min_value=0, value=0, step=50, help="Steam cleaner, floor scrubber, etc.")
+    with col2:
+        waste_disposal = st.number_input("Waste Disposal ($)", min_value=0, value=0, step=25, help="Special waste removal fees")
     with col3:
-        st.markdown("#### 💰 FAIR MARKET")
-        fair_market_price = st.number_input("Price", min_value=0, value=default_prices["fair_market"]["price"], step=10, key="fm_price")
-        st.caption(f"{default_prices['fair_market']['margin']}% margin")
-        st.caption("📊 Competitive")
-
-    with col4:
-        st.markdown("#### ⭐ PREMIUM")
-        premium_price = st.number_input("Price", min_value=0, value=default_prices["premium"]["price"], step=10, key="pr_price")
-        st.caption(f"{default_prices['premium']['margin']}% margin")
-        st.caption("⚡ Rush/Emergency")
-
-    price_tiers = {
-        "break_even": break_even_price,
-        "sweet_spot": sweet_spot_price,
-        "fair_market": fair_market_price,
-        "premium": premium_price,
-    }
-
-    tier_map = {
-        "📉 Break Even - Just covering costs": "break_even",
-        "🎯 Sweet Spot - Best value (RECOMMENDED)": "sweet_spot",
-        "💰 Fair Market - Premium service": "fair_market",
-        "⭐ Premium - Deluxe/Rush service": "premium",
-    }
-
-    selected_tier_display = st.radio(
-        "**Select your preferred package:**",
-        options=list(tier_map.keys()),
-        index=list(tier_map.keys()).index(
-            next((label for label, key in tier_map.items() if key == st.session_state.proposal_data.get("selected_tier", "sweet_spot")),
-                 "🎯 Sweet Spot - Best value (RECOMMENDED)")
-        ),
-        horizontal=True,
-    )
-
-    selected_tier = tier_map[selected_tier_display]
-    st.session_state.proposal_data["selected_tier"] = selected_tier
-
+        parking_tolls = st.number_input("Parking/Tolls ($)", min_value=0, value=0, step=10)
+    
+    st.session_state.proposal_data["total_price"] = total_price
+    st.session_state.proposal_data["crew_size"] = crew_size
+    st.session_state.proposal_data["estimated_hours"] = estimated_hours
+    st.session_state.proposal_data["hourly_wage"] = hourly_wage
+    st.session_state.proposal_data["supplies_cost"] = supplies_cost
+    st.session_state.proposal_data["travel_miles"] = travel_miles
+    st.session_state.proposal_data["is_deep_clean"] = is_deep_clean
+    
+    labor_hours = crew_size * estimated_hours
+    if is_deep_clean:
+        labor_hours = labor_hours * 1.5  # Deep clean takes 50% longer
+    labor_cost = labor_hours * hourly_wage
+    
+    travel_cost = travel_miles * mileage_rate
+    
+    total_costs = labor_cost + supplies_cost + travel_cost + equipment_rental + waste_disposal + parking_tolls
+    
+    overhead_rate = 0.15  # 15%
+    overhead_cost = total_costs * overhead_rate
+    total_costs_with_overhead = total_costs + overhead_cost
+    
+    profit = total_price - total_costs_with_overhead
+    profit_margin = (profit / total_price * 100) if total_price > 0 else 0
+    
+    if profit_margin <= 0:
+        margin_status = "🔴 LOSING MONEY"
+        margin_color = "red"
+        recommendation = "Increase price or reduce costs immediately"
+    elif profit_margin < 15:
+        margin_status = "🟡 LOW PROFIT"
+        margin_color = "orange"
+        recommendation = "Consider raising price by 10-20%"
+    elif profit_margin < 30:
+        margin_status = "🟢 GOOD PROFIT"
+        margin_color = "green"
+        recommendation = "Healthy margin - competitive pricing"
+    elif profit_margin < 45:
+        margin_status = "⭐ GREAT PROFIT"
+        margin_color = "blue"
+        recommendation = "Excellent margin - premium positioning"
+    else:
+        margin_status = "💰 EXCELLENT PROFIT"
+        margin_color = "gold"
+        recommendation = "Very profitable - consider if client will accept"
+    
     st.markdown("---")
-    st.info(f"""
-    **You selected: {selected_tier_display}**
-    - **Price:** ${price_tiers[selected_tier]:,}
-    - **Margin:** {default_prices[selected_tier]['margin']}%
-    - **Includes:** {default_prices[selected_tier]['description']}
-    """)
-
-    with st.expander("💰 Custom Price Adjustment (Optional)"):
-        st.markdown("Need a different price? You can set a custom amount below.")
-        custom_price = st.number_input("Custom Price ($)", min_value=0, value=price_tiers[selected_tier], step=25, key="custom_price")
-        use_custom = st.checkbox("Use this custom price instead of the tier price")
-
-        if use_custom:
-            final_price = custom_price
-            st.success(f"✅ Using custom price: ${custom_price:,}")
-        else:
-            final_price = price_tiers[selected_tier]
-            st.info(f"Using standard tier price: ${final_price:,}")
-
-        st.session_state.proposal_data["custom_price"] = custom_price if use_custom else None
-
-    with st.expander("📋 Services to Include / Exclude", expanded=True):
-        st.markdown("#### ✅ Included Services (check what's included)")
-        col1, col2 = st.columns(2)
-
-        with col1:
-            include_vacuum = st.checkbox("Vacuum all carpets and rugs", value=True)
-            include_mop = st.checkbox("Mop all hard floors", value=True)
-            include_dust = st.checkbox("Dust all surfaces", value=True)
-            include_trash = st.checkbox("Empty all trash and recycling", value=True)
-            include_restrooms = st.checkbox("Clean and sanitize restrooms", value=True)
-            include_breakroom = st.checkbox("Clean breakroom/kitchen", value=True)
-
-        with col2:
-            include_windows = st.checkbox("Interior window cleaning", value=False)
-            include_carpet_clean = st.checkbox("Deep carpet cleaning", value=False)
-            include_disinfection = st.checkbox("Disinfection services", value=False)
-            include_outside = st.checkbox("Outside entry cleaning", value=False)
-            include_supplies = st.checkbox("Supplies included", value=True)
-            include_training = st.checkbox("Eco-friendly products", value=False)
-
-        st.markdown("#### ❌ Excluded Services (items NOT included)")
-        exclude_windows = st.checkbox("Exterior window cleaning")
-        exclude_high_dust = st.checkbox("High dusting (ceilings, fans)")
-        exclude_pressure = st.checkbox("Pressure washing")
-        exclude_special = st.checkbox("Special event cleanup")
-
-        included_services = []
-        if include_vacuum: included_services.append("Vacuum all carpets and rugs")
-        if include_mop: included_services.append("Mop all hard floors")
-        if include_dust: included_services.append("Dust all surfaces")
-        if include_trash: included_services.append("Empty all trash and recycling")
-        if include_restrooms: included_services.append("Clean and sanitize restrooms")
-        if include_breakroom: included_services.append("Clean breakroom/kitchen")
-        if include_windows: included_services.append("Interior window cleaning")
-        if include_carpet_clean: included_services.append("Deep carpet cleaning")
-        if include_disinfection: included_services.append("Disinfection services")
-        if include_outside: included_services.append("Outside entry cleaning")
-        if include_supplies: included_services.append("All cleaning supplies provided")
-        if include_training: included_services.append("Eco-friendly cleaning products")
-
-        excluded_services = []
-        if exclude_windows: excluded_services.append("Exterior window cleaning")
-        if exclude_high_dust: excluded_services.append("High dusting (ceilings, fans)")
-        if exclude_pressure: excluded_services.append("Pressure washing")
-        if exclude_special: excluded_services.append("Special event cleanup")
-
-        st.session_state.proposal_data["included_services"] = included_services
-        st.session_state.proposal_data["excluded_services"] = excluded_services
-
-    with st.expander("📝 Special Instructions & Validity"):
-        special_notes = st.text_area(
-            "Special notes or instructions for the client",
-            value=st.session_state.proposal_data.get("special_notes", ""),
-            height=100,
-            placeholder="e.g., Price valid for 30 days, after-hours access required, etc.",
-        )
-
-        col1, col2 = st.columns(2)
-        with col1:
-            valid_until = st.date_input(
-                "Proposal Valid Until",
-                value=datetime.strptime(st.session_state.proposal_data.get("valid_until", (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")), "%Y-%m-%d"),
-            )
-        with col2:
-            payment_terms = st.selectbox("Payment Terms", ["Due upon receipt", "Net 15", "Net 30", "Net 60"])
-
-        st.session_state.proposal_data["special_notes"] = special_notes
-        st.session_state.proposal_data["valid_until"] = valid_until.strftime("%Y-%m-%d")
-
-    st.markdown("---")
-    col1, col2, col3 = st.columns([1, 2, 1])
+    st.markdown("### 📊 Profit Analysis")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("💰 Proposed Price", f"${total_price:,.2f}")
     with col2:
-        generate_btn = st.button("📄 Generate Professional Proposal", use_container_width=True, type="primary")
-
+        st.metric("💸 Total Costs", f"${total_costs_with_overhead:,.2f}", delta=f"-${total_costs_with_overhead:,.2f}")
+    with col3:
+        st.metric("📈 Profit", f"${profit:,.2f}", delta=f"{profit_margin:.1f}% margin")
+    with col4:
+        st.markdown(f"""
+        <div style="text-align: center; padding: 10px; border-radius: 10px; background: {margin_color}20;">
+            <strong>Status</strong><br>
+            <span style="color: {margin_color}; font-weight: bold;">{margin_status}</span>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with st.expander("🔍 Detailed Cost Breakdown", expanded=False):
+        st.markdown(f"""
+        **Labor Costs:**
+        - Base hours: {crew_size} cleaners × {estimated_hours} hours = {crew_size * estimated_hours} hours
+        - Deep clean multiplier: {'1.5x' if is_deep_clean else '1.0x'}
+        - Adjusted hours: {labor_hours:.1f} hours
+        - Hourly wage: ${hourly_wage}/hr
+        - **Labor subtotal: ${labor_cost:,.2f}**
+        
+        **Supply & Equipment:**
+        - Cleaning supplies: ${supplies_cost:,.2f}
+        - Equipment rental: ${equipment_rental:,.2f}
+        - Waste disposal: ${waste_disposal:,.2f}
+        - **Supplies subtotal: ${supplies_cost + equipment_rental + waste_disposal:,.2f}**
+        
+        **Travel & Logistics:**
+        - Round trip miles: {travel_miles} miles × ${mileage_rate}/mile = ${travel_cost:,.2f}
+        - Parking/Tolls: ${parking_tolls:,.2f}
+        - **Travel subtotal: ${travel_cost + parking_tolls:,.2f}**
+        
+        **Overhead (15%):** ${overhead_cost:,.2f}
+        
+        ---
+        **TOTAL COSTS: ${total_costs_with_overhead:,.2f}**
+        **PROPOSED PRICE: ${total_price:,.2f}**
+        **PROFIT: ${profit:,.2f} ({profit_margin:.1f}%)**
+        """)
+    
+    if profit_margin < 20 and total_price > 0:
+        st.warning(f"⚠️ **{recommendation}**")
+        fair_price = total_costs_with_overhead / 0.70  # 30% margin
+        sweet_spot_price = total_costs_with_overhead / 0.60  # 40% margin
+        premium_price = total_costs_with_overhead / 0.50  # 50% margin
+        
+        st.markdown(f"""
+        **Suggested Pricing Options:**
+        - 🟢 **Fair Market** (30% margin): **${math.ceil(fair_price):,}**
+        - ⭐ **Sweet Spot** (40% margin): **${math.ceil(sweet_spot_price):,}** (Recommended)
+        - 💎 **Premium** (50% margin): **${math.ceil(premium_price):,}**
+        """)
+    
+    shift_type = st.selectbox("Shift Type", ["Night Shift", "Day Shift", "Weekend", "After Hours"],
+                             index=["Night Shift", "Day Shift", "Weekend", "After Hours"].index(
+                                 st.session_state.proposal_data.get("shift_type", "Night Shift")))
+    st.session_state.proposal_data["shift_type"] = shift_type
+    
+    # ============================================================
+    # SECTION 3: SCOPE OF WORK (Checkboxes)
+    # ============================================================
+    with st.expander("📋 Scope of Work (Select all that apply)", expanded=True):
+        st.markdown("#### Select tasks to include:")
+        
+        current_scope = st.session_state.proposal_data.get("scope_items", [])
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            scope_shelves = st.checkbox("Remove items from shelves, wipe/sanitize, reorganize and restock", 
+                                       value="Remove all items from shelves, wipe down and sanitize shelving, reorganize and restock neatly" in current_scope)
+            scope_vents = st.checkbox("Wipe down AC vents", value="Wipe down AC vents" in current_scope)
+            scope_ceiling = st.checkbox("Clean ceiling stains", value="Clean multiple stains in the ceiling" in current_scope)
+            scope_floors = st.checkbox("Full floor cleaning and detailing", value="Full floor cleaning and detailing" in current_scope)
+            scope_restrooms = st.checkbox("Restroom deep cleaning and sanitation", value="Restroom deep cleaning and sanitation" in current_scope)
+            scope_windows = st.checkbox("Interior window cleaning", value="Interior window cleaning" in current_scope)
+        
+        with col2:
+            scope_surfaces = st.checkbox("Surface wipe-downs and high dusting", value="Surface wipe-downs and high dusting" in current_scope)
+            scope_debris = st.checkbox("Debris removal", value="Debris removal" in current_scope)
+            scope_soda = st.checkbox("Sanitize soda machine nozzles", value="Sanitize soda machine nozzles" in current_scope)
+            scope_fridge = st.checkbox("Clean refrigerator glass", value="Clean refrigerator glass" in current_scope)
+            scope_steam = st.checkbox("Steam clean stains if needed", value="Steam clean stains if needed" in current_scope)
+            scope_exterior = st.checkbox("Clean checkout lanes", value="Clean checkout lanes" in current_scope)
+        
+        additional_scope = st.text_area(
+            "Additional scope items (one per line)",
+            placeholder="Clean exterior windows\nPressure wash entryway\nRemove gum from floors",
+            height=100)
+        
+        scope_items = []
+        if scope_shelves: scope_items.append("Remove all items from shelves, wipe down and sanitize shelving, reorganize and restock neatly")
+        if scope_vents: scope_items.append("Wipe down AC vents")
+        if scope_ceiling: scope_items.append("Clean multiple stains in the ceiling")
+        if scope_floors: scope_items.append("Full floor cleaning and detailing")
+        if scope_restrooms: scope_items.append("Restroom deep cleaning and sanitation")
+        if scope_windows: scope_items.append("Interior window cleaning")
+        if scope_surfaces: scope_items.append("Surface wipe-downs and high dusting")
+        if scope_debris: scope_items.append("Debris removal")
+        if scope_soda: scope_items.append("Sanitize soda machine nozzles")
+        if scope_fridge: scope_items.append("Clean refrigerator glass")
+        if scope_steam: scope_items.append("Steam clean stains if needed")
+        if scope_exterior: scope_items.append("Clean checkout lanes")
+        
+        if additional_scope:
+            for line in additional_scope.split('\n'):
+                if line.strip():
+                    scope_items.append(line.strip())
+        
+        st.session_state.proposal_data["scope_items"] = scope_items
+    
+    # ============================================================
+    # SECTION 4: LOGISTICS & COMMITMENT
+    # ============================================================
+    with st.expander("🔑 Logistics & Commitment Statement", expanded=True):
+        key_pickup = st.text_area("Key Pickup Instructions", 
+                                   value=st.session_state.proposal_data.get("key_pickup", ""),
+                                   height=68)
+        
+        commitment_statement = st.text_area("Our Commitment Statement", 
+                                            value=st.session_state.proposal_data.get("commitment_statement", ""),
+                                            height=100)
+        
+        additional_notes = st.text_area("Additional Notes (optional)", 
+                                        value=st.session_state.proposal_data.get("additional_notes", ""),
+                                        height=68)
+        
+        st.session_state.proposal_data["key_pickup"] = key_pickup
+        st.session_state.proposal_data["commitment_statement"] = commitment_statement
+        st.session_state.proposal_data["additional_notes"] = additional_notes
+    
+    # ============================================================
+    # SECTION 5: Generate Professional Email
+    # ============================================================
+    st.markdown("---")
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    
+    with col2:
+        generate_btn = st.button("📧 Generate Professional Email", use_container_width=True, type="primary")
+    
     if generate_btn:
         if not client_name:
-            st.error("Please enter client name")
+            st.error("❌ Please enter client name")
+        elif not property_address:
+            st.error("❌ Please enter property address")
         else:
-            proposal_date = datetime.now().strftime("%B %d, %Y")
-            valid_date = valid_until.strftime("%B %d, %Y")
-            proposal_html = f"""
+            current_date = datetime.now().strftime("%B %d, %Y")
+            scope_text = "\n".join([f"- {item}" for item in scope_items])
+            effective_hours = estimated_hours * (1.5 if is_deep_clean else 1)
+            per_person_rate = total_price / crew_size / effective_hours if crew_size > 0 and effective_hours > 0 else 0
+            
+            email_html = f"""
             <!DOCTYPE html>
             <html>
             <head>
                 <meta charset="UTF-8">
                 <title>Cleaning Proposal for {client_name}</title>
                 <style>
-                    body {{
-                        font-family: Arial, sans-serif;
-                        line-height: 1.6;
-                        color: #333;
-                        max-width: 800px;
-                        margin: 0 auto;
-                        padding: 20px;
-                    }}
-                    .header {{
-                        text-align: center;
-                        border-bottom: 3px solid #10b981;
-                        padding-bottom: 20px;
-                        margin-bottom: 30px;
-                    }}
-                    .header h1 {{
-                        color: #1e3a5f;
-                        margin: 0;
-                    }}
-                    .price-box {{
-                        text-align: center;
-                        background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-                        color: white;
-                        padding: 30px;
-                        border-radius: 16px;
-                        margin: 20px 0;
-                    }}
-                    .price-box h2 {{
-                        font-size: 48px;
-                        margin: 0;
-                    }}
-                    .price-box p {{
-                        margin: 5px 0;
-                    }}
-                    .section {{
-                        background: #f8f9fa;
-                        padding: 20px;
-                        border-radius: 12px;
-                        margin: 20px 0;
-                    }}
-                    .section h3 {{
-                        color: #1e3a5f;
-                        margin-top: 0;
-                        border-left: 4px solid #10b981;
-                        padding-left: 15px;
-                    }}
-                    .service-list {{
-                        list-style: none;
-                        padding: 0;
-                    }}
-                    .service-list li {{
-                        padding: 8px 0;
-                        border-bottom: 1px solid #e2e8f0;
-                    }}
-                    .service-list li:before {{
-                        content: "✅ ";
-                        color: #10b981;
-                    }}
-                    .excluded-list li:before {{
-                        content: "❌ ";
-                        color: #ef4444;
-                    }}
-                    .footer {{
-                        text-align: center;
-                        font-size: 12px;
-                        color: #666;
-                        margin-top: 40px;
-                        padding-top: 20px;
-                        border-top: 1px solid #e2e8f0;
-                    }}
-                    .tier-badge {{
-                        display: inline-block;
-                        background: #1e3a5f;
-                        color: white;
-                        padding: 5px 15px;
-                        border-radius: 20px;
-                        font-size: 14px;
-                        margin-bottom: 15px;
-                    }}
-                    .signature-line {{
-                        margin-top: 40px;
-                        display: flex;
-                        justify-content: space-between;
-                    }}
-                    .signature {{
-                        border-top: 1px solid #333;
-                        width: 250px;
-                        padding-top: 10px;
-                        text-align: center;
-                    }}
+                    body {{ font-family: Arial, Helvetica, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; }}
+                    .header {{ text-align: center; padding-bottom: 20px; border-bottom: 2px solid #10b981; margin-bottom: 20px; }}
+                    .business-name {{ font-size: 24px; font-weight: bold; color: #1e3a5f; }}
+                    .price-box {{ text-align: center; background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; padding: 25px; border-radius: 16px; margin: 20px 0; }}
+                    .price {{ font-size: 42px; font-weight: bold; margin: 10px 0; }}
+                    .section {{ margin: 20px 0; padding: 15px; background: #f8f9fa; border-radius: 8px; }}
+                    .section-title {{ font-size: 18px; font-weight: bold; color: #1e3a5f; margin-bottom: 10px; border-left: 4px solid #10b981; padding-left: 10px; }}
+                    .checklist {{ list-style: none; padding: 0; }}
+                    .checklist li {{ padding: 5px 0; padding-left: 25px; position: relative; }}
+                    .checklist li:before {{ content: "✓"; color: #10b981; font-weight: bold; position: absolute; left: 0; }}
+                    .commitment {{ background: #e8f5e9; border-left: 4px solid #10b981; padding: 15px; margin: 20px 0; border-radius: 8px; }}
+                    .footer {{ margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd; font-size: 12px; color: #666; text-align: center; }}
+                    .signature {{ margin-top: 20px; padding-top: 10px; }}
                 </style>
             </head>
             <body>
                 <div class="header">
-                    <h1>Commercial Cleaning Proposal</h1>
-                    <p>Prepared for: <strong>{client_name}</strong></p>
-                    <p>Date: {proposal_date}</p>
+                    <div class="business-name">Dust Bros and Co.</div>
+                    <div>Professional Commercial Cleaning | Orlando, FL 32829</div>
                 </div>
+                
+                <p><strong>Date:</strong> {current_date}</p>
+                <p><strong>Dear {client_name},</strong></p>
+                
+                <p>Thank you for the opportunity to quote on the first-time deep cleaning of your <strong>{property_type.lower()}</strong> at <strong>{property_address}</strong>.</p>
+                
+                <p>I completed a walkthrough today and took detailed photos. The store has <strong>{num_checkout_lanes} checkout lane(s)</strong>{' and a soda machine' if has_soda_machine else ''}.</p>
                 
                 <div class="price-box">
-                    <div class="tier-badge">{selected_tier_display}</div>
-                    <h2>${final_price:,}</h2>
-                    <p>per visit | plus applicable taxes</p>
-                    <p><small>Price valid until {valid_date}</small></p>
+                    <div class="price">${total_price:,.2f}</div>
+                    <div>all-inclusive with tax • no hidden fees</div>
+                    <div style="font-size: 12px; opacity: 0.9;">💵 ${per_person_rate:.2f} per person per hour</div>
                 </div>
                 
                 <div class="section">
-                    <h3>🏢 Property Information</h3>
-                    <p><strong>Property Type:</strong> {property_type}</p>
-                    <p><strong>Address:</strong><br>{property_address if property_address else "To be confirmed"}</p>
-                </div>
-                
-                <div class="section">
-                    <h3>✅ Included Services</h3>
-                    <ul class="service-list">
-                        {"".join([f"<li>{service}</li>" for service in included_services])}
+                    <div class="section-title">📋 Scope of Work:</div>
+                    <ul class="checklist">
+                        {''.join([f"<li>{item}</li>" for item in scope_items])}
                     </ul>
                 </div>
                 
                 <div class="section">
-                    <h3>❌ Not Included (Available for additional fee)</h3>
-                    <ul class="service-list excluded-list">
-                        {"".join([f"<li>{service}</li>" for service in excluded_services]) if excluded_services else "<li>No exclusions specified - all standard services included</li>"}
-                    </ul>
+                    <div class="section-title">👥 Crew & Schedule:</div>
+                    <p><strong>Team:</strong> {crew_size} trained professional(s)</p>
+                    <p><strong>Shift:</strong> {shift_type} ({estimated_hours} hours estimated)</p>
                 </div>
                 
                 <div class="section">
-                    <h3>📋 Terms & Conditions</h3>
-                    <ul>
-                        <li><strong>Payment Terms:</strong> {payment_terms}</li>
-                        <li><strong>Valid Until:</strong> {valid_date}</li>
-                        <li><strong>Cancellation Policy:</strong> 24 hours notice required</li>
-                        <li><strong>Access Requirements:</strong> Keys or access code must be provided</li>
-                    </ul>
-                    {f"<p><strong>Special Notes:</strong><br>{special_notes}</p>" if special_notes else ""}
+                    <div class="section-title">🔑 Logistics:</div>
+                    <p>{key_pickup}</p>
                 </div>
                 
-                <div class="signature-line">
-                    <div>
-                        <p><strong>Client Signature:</strong></p>
-                        <div class="signature">_________________________</div>
-                        <p>Date: _________</p>
-                    </div>
-                    <div>
-                        <p><strong>Provider Signature:</strong></p>
-                        <div class="signature">_________________________</div>
-                        <p>Date: _________</p>
-                    </div>
+                <div class="commitment">
+                    <strong>🤝 Our Commitment to You</strong><br>
+                    {commitment_statement}
+                </div>
+                
+                <div class="section">
+                    <div class="section-title">💰 Payment Options:</div>
+                    <p>Venmo, Zelle, cash, wire, credit card, or pay-by-link. No checks.</p>
+                </div>
+                
+                <div class="signature">
+                    <p>Best regards,<br><strong>Elvis</strong><br>Dust Bros and Co.<br>📧 dustbrosco@gmail.com</p>
                 </div>
                 
                 <div class="footer">
-                    <p>{business_name} | Professional Commercial Cleaning</p>
-                    <p>This proposal is an estimate and may be adjusted after a formal on-site inspection.</p>
+                    <p><em>{additional_notes}</em></p>
+                    <p>This proposal is valid for 30 days from {current_date}.</p>
                 </div>
             </body>
             </html>
             """
+            
+            email_text = f"""
+Dust Bros and Co.
+Professional Commercial Cleaning
+Orlando, FL 32829
 
-            proposal_text = f"""
-            COMMERCIAL CLEANING PROPOSAL
-            ================================
-            
-            Client: {client_name}
-            Date: {proposal_date}
-            
-            SELECTED PACKAGE: {selected_tier_display}
-            TOTAL PRICE: ${final_price:,} per visit (plus tax)
-            
-            INCLUDED SERVICES:
-            {chr(10).join([f"✓ {service}" for service in included_services])}
-            
-            NOT INCLUDED:
-            {chr(10).join([f"✗ {service}" for service in excluded_services]) if excluded_services else "All standard services included"}
-            
-            TERMS:
-            - Payment Terms: {payment_terms}
-            - Valid Until: {valid_date}
-            - 24 hours cancellation notice required
-            
-            {f"SPECIAL NOTES: {special_notes}" if special_notes else ""}
-            
-            To accept this proposal, please reply to this email or sign the attached document.
-            
-            {business_name}
-            """
+Date: {current_date}
 
-            st.session_state.generated_proposal_html = proposal_html
-            st.session_state.generated_proposal_text = proposal_text
-            st.session_state.generated_proposal_price = final_price
-            st.session_state.generated_proposal_tier = selected_tier_display
+Dear {client_name},
 
-    if 'generated_proposal_html' in st.session_state:
+Thank you for the opportunity to quote on the first-time deep cleaning of your {property_type.lower()} at {property_address}.
+
+I completed a walkthrough today and took detailed photos. The store has {num_checkout_lanes} checkout lane(s){' and a soda machine' if has_soda_machine else ''}.
+
+Total Price: ${total_price:,.2f} (all-inclusive with tax)
+
+Scope of Work:
+{scope_text}
+
+Crew & Schedule:
+Team of {crew_size} cleaner(s) during {shift_type.lower()} ({estimated_hours} hours estimated).
+
+Logistics:
+{key_pickup}
+
+🤝 Our Commitment to You:
+{commitment_statement}
+
+Payment Options:
+Venmo, Zelle, cash, wire, credit card, or pay-by-link. No checks.
+
+{additional_notes}
+
+Best regards,
+Elvis
+Dust Bros and Co.
+dustbrosco@gmail.com
+
+---
+This proposal is valid for 30 days from {current_date}.
+"""
+            
+            st.session_state.generated_email_html = email_html
+            st.session_state.generated_email_text = email_text
+            st.session_state.generated_email_price = total_price
+            st.session_state.generated_email_client = client_name
+            st.session_state.generated_email_address = property_address
+    
+    if 'generated_email_html' in st.session_state:
         st.markdown("---")
-        st.markdown("### 📄 Your Proposal is Ready")
-
-        tab1, tab2, tab3 = st.tabs(["📋 Preview", "📧 Email to Client", "💾 Save/Export"])
-
+        st.markdown("### 📧 Your Professional Email is Ready")
+        
+        st.info(f"""
+        **📊 Final Profit Summary:**
+        - 💰 Proposed Price: **${total_price:,.2f}**
+        - 💸 Total Costs: **${total_costs_with_overhead:,.2f}**
+        - 📈 Profit: **${profit:,.2f}** ({profit_margin:.1f}% margin)
+        - 🎯 Status: **{margin_status}**
+        """)
+        
+        tab1, tab2, tab3 = st.tabs(["📧 Email Preview", "📋 Plain Text Version", "💾 Save/Send"])
+        
         with tab1:
-            st.components.v1.html(st.session_state.generated_proposal_html, height=800, scrolling=True)
+            st.components.v1.html(st.session_state.generated_email_html, height=600, scrolling=True)
+            
             col1, col2 = st.columns(2)
             with col1:
-                st.download_button(
-                    label="📥 Download as HTML",
-                    data=st.session_state.generated_proposal_html,
-                    file_name=f"Proposal_{client_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.html",
-                    mime="text/html",
-                    use_container_width=True,
-                )
+                st.download_button("📥 Download HTML", st.session_state.generated_email_html, 
+                                   f"Proposal_{st.session_state.generated_email_client.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.html", 
+                                   "text/html", use_container_width=True)
             with col2:
-                st.download_button(
-                    label="📥 Download as Text",
-                    data=st.session_state.generated_proposal_text,
-                    file_name=f"Proposal_{client_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.txt",
-                    mime="text/plain",
-                    use_container_width=True,
-                )
-
+                st.download_button("📥 Download Text", st.session_state.generated_email_text,
+                                   f"Proposal_{st.session_state.generated_email_client.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.txt",
+                                   "text/plain", use_container_width=True)
+        
         with tab2:
-            st.markdown("#### Send Proposal via Email")
-            email_to = st.text_input("Client Email", value=client_email, key="proposal_email_to")
-            email_subject = st.text_input("Subject", value=f"Cleaning Proposal from {business_name}")
-            email_message = st.text_area(
-                "Personal Message (optional)",
-                value=(
-                    f"Dear {client_name},\n\nPlease find attached your cleaning proposal. "
-                    f"The selected package is {st.session_state.generated_proposal_tier} at ${st.session_state.generated_proposal_price:,} per visit.\n\n"
-                    f"Let me know if you have any questions!\n\nBest regards,\n{business_name}"
-                ),
-            )
-
-            if st.button("📧 Send Proposal to Client", use_container_width=True):
+            st.text_area("Plain Text Version", st.session_state.generated_email_text, height=400)
+        
+        with tab3:
+            email_to = st.text_input("Recipient Email", value=st.session_state.proposal_data.get("client_email", ""))
+            email_subject = st.text_input("Subject", value=f"Cleaning Proposal for {st.session_state.generated_email_client}")
+            cc_me = st.checkbox("Send a copy to myself", value=True)
+            
+            if st.button("📧 Send Email to Client", use_container_width=True, type="primary"):
                 if email_to:
-                    success = send_email(
-                        company_id,
-                        email_to,
-                        email_subject,
-                        email_message + "\n\n" + st.session_state.generated_proposal_text,
-                        st.session_state.generated_proposal_html,
-                    )
-
+                    company_id = get_current_user_company()
+                    success = send_email(company_id, email_to, email_subject, 
+                                        st.session_state.generated_email_text,
+                                        st.session_state.generated_email_html)
+                    
+                    if success and cc_me:
+                        user_email = st.session_state.user.get('email', '')
+                        if user_email:
+                            send_email(company_id, user_email, f"COPY: {email_subject}", 
+                                      st.session_state.generated_email_text,
+                                      st.session_state.generated_email_html)
+                    
                     if success:
                         st.success(f"✅ Proposal sent to {email_to}")
+                        st.balloons()
                     else:
                         st.error("❌ Failed to send. Check SMTP settings.")
                 else:
-                    st.warning("Please enter client email address")
-
-        with tab3:
-            st.markdown("#### Save to Records")
-            if st.button("💾 Save Proposal to Database", use_container_width=True):
-                conn = sqlite3.connect(DB_PATH)
-                c = conn.cursor()
-                c.execute('''CREATE TABLE IF NOT EXISTS proposals (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    company_id INTEGER,
-                    client_name TEXT,
-                    client_email TEXT,
-                    selected_tier TEXT,
-                    price REAL,
-                    proposal_html TEXT,
-                    created_at DATETIME,
-                    status TEXT DEFAULT 'sent',
-                    FOREIGN KEY (company_id) REFERENCES companies(id)
-                )''')
-                c.execute("""
-                    INSERT INTO proposals (company_id, client_name, client_email, selected_tier, price, proposal_html, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    company_id,
-                    client_name,
-                    client_email,
-                    selected_tier_display,
-                    final_price,
-                    st.session_state.generated_proposal_html,
-                    datetime.now().isoformat(),
-                ))
-                conn.commit()
-                conn.close()
-                st.success("✅ Proposal saved to your records!")
-
-
+                    st.warning("Please enter recipient email address")
 def quick_job_page():
     if st.button("← Back"):
         st.session_state.page = "dashboard"
