@@ -3129,12 +3129,16 @@ def estimate_page():
     if st.button("← Back"):
         st.session_state.page = "dashboard"
         st.rerun()
+
     st.markdown("### 📝 New Estimate")
     company_id = get_current_user_company()
+    business_name = get_business_name()
+
     city = st.selectbox("City", FLORIDA_CITIES)
     prop = st.selectbox("Property Type", list(PROPERTY_TYPES.keys()))
     freq = st.selectbox("Frequency", list(FREQUENCIES.keys()))
     complexity = st.slider("Complexity (1-10)", 1, 10, 3)
+
     is_airbnb = prop == "🏠 Airbnb / Short-Term Rental"
     if is_airbnb:
         bedrooms = st.number_input("Bedrooms", 0, 10, 2)
@@ -3143,18 +3147,19 @@ def estimate_page():
     else:
         sqft = st.number_input("Square Feet", 100, 100000, 2000)
         bedrooms = bathrooms = 0
+
     travel_miles = st.number_input("Travel Miles", 0, 200, 25)
-    
+
     client_name = st.text_input("Client Name *")
     client_email = st.text_input("Client Email *")
-    
+
     if not client_name or not client_email:
         st.warning("⚠️ Please enter client name and email before saving")
-    
+
     with st.expander("Internal Costs (Staff Only)"):
         hours_est = st.number_input("Est. Hours", 0.5, 20.0, 3.0)
         materials_est = st.number_input("Materials $", 0, 500, 35)
-    
+
     st.markdown("### Add‑Ons")
     col1, col2, col3 = st.columns(3)
     add_window = col1.checkbox("Window Cleaning (+$50)")
@@ -3162,37 +3167,70 @@ def estimate_page():
     add_floor = col3.checkbox("Floor Waxing (+$0.30/sq ft)")
     add_disinfection = col1.checkbox("Disinfection (+$75)")
     add_pressure = col2.checkbox("Pressure Washing (+$125)")
-    add_ons = {'window_cleaning':add_window, 'carpet_cleaning':add_carpet, 'floor_waxing':add_floor, 'disinfection':add_disinfection, 'pressure_washing':add_pressure}
-    
+    add_ons = {
+        'window_cleaning': add_window,
+        'carpet_cleaning': add_carpet,
+        'floor_waxing': add_floor,
+        'disinfection': add_disinfection,
+        'pressure_washing': add_pressure,
+    }
+
     st.markdown("### Modifiers")
     col1, col2 = st.columns(2)
-    holiday = col1.selectbox("Holiday", ["None"]+list(HOLIDAY_RATES.keys()))
-    emergency = col1.selectbox("Emergency", ["Standard (3+ days)","2 days (+25%)","Next day (+50%)","Same day (+75%)"])
-    emap = {"Standard (3+ days)":72, "2 days (+25%)":48, "Next day (+50%)":24, "Same day (+75%)":12}
+    holiday = col1.selectbox("Holiday", ["None"] + list(HOLIDAY_RATES.keys()))
+    emergency = col1.selectbox("Emergency", ["Standard (3+ days)", "2 days (+25%)", "Next day (+50%)", "Same day (+75%)"])
+    emap = {
+        "Standard (3+ days)": 72,
+        "2 days (+25%)": 48,
+        "Next day (+50%)": 24,
+        "Same day (+75%)": 12,
+    }
     notice = emap[emergency]
     num_locations = col2.number_input("Number of Locations", 1, 20, 1)
-    contract = col2.selectbox("Contract", ["No contract","3 months (-5%)","6 months (-10%)","12 months (-15%)","24+ months (-20%)"])
-    cmap = {"No contract":0,"3 months (-5%)":3,"6 months (-10%)":6,"12 months (-15%)":12,"24+ months (-20%)":24}
+    contract = col2.selectbox(
+        "Contract",
+        ["No contract", "3 months (-5%)", "6 months (-10%)", "12 months (-15%)", "24+ months (-20%)"],
+    )
+    cmap = {
+        "No contract": 0,
+        "3 months (-5%)": 3,
+        "6 months (-10%)": 6,
+        "12 months (-15%)": 12,
+        "24+ months (-20%)": 24,
+    }
     contract_months = cmap[contract]
-    
-    result = calculate_price_with_tiers(city, prop, sqft, bedrooms, bathrooms, freq, complexity, travel_miles, add_ons, holiday, num_locations, notice, contract_months, company_id)
-    
+
+    result = calculate_price_with_tiers(
+        city,
+        prop,
+        sqft,
+        bedrooms,
+        bathrooms,
+        freq,
+        complexity,
+        travel_miles,
+        add_ons,
+        holiday,
+        num_locations,
+        notice,
+        contract_months,
+        company_id,
+    )
+
     st.markdown("### 💰 Four Pricing Tiers")
-    
-    # Market intelligence summary (simplified - no missing keys)
+
     with st.expander("📊 Market Intelligence & Competitor Analysis", expanded=False):
-        # Get zone info from cost calculator directly
         cost_calc = calculator_cost_based(city, prop, sqft, bedrooms, bathrooms, freq, complexity, travel_miles)
         st.markdown(f"""
         **Location Analysis:** {cost_calc['breakdown']['zone_name']} area (Multiplier: {cost_calc['breakdown']['zone_multiplier']}x)
         **Complexity Level:** {complexity}/10
         **Pricing Model:** {cost_calc['breakdown']['pricing_model']}
-        
+
         **Recommended Price:** ${result['sweet_spot']['total']:,}
         """)
-    
+
     col1, col2, col3, col4 = st.columns(4)
-    
+
     with col1:
         st.markdown(f"""
         <div style="text-align: center; padding: 15px; border-radius: 12px; background: #fef3c7; border: 2px solid #f59e0b;">
@@ -3202,7 +3240,7 @@ def estimate_page():
             <p style="font-size: 12px; margin-top: 10px;">⚠️ No profit - just covering costs</p>
         </div>
         """, unsafe_allow_html=True)
-    
+
     with col2:
         st.markdown(f"""
         <div style="text-align: center; padding: 15px; border-radius: 12px; background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; border: 2px solid #10b981;">
@@ -3212,7 +3250,7 @@ def estimate_page():
             <p style="font-size: 12px; margin-top: 10px;">✅ RECOMMENDED - Best value</p>
         </div>
         """, unsafe_allow_html=True)
-    
+
     with col3:
         st.markdown(f"""
         <div style="text-align: center; padding: 15px; border-radius: 12px; background: #d1fae5; border: 2px solid #10b981;">
@@ -3222,7 +3260,7 @@ def estimate_page():
             <p style="font-size: 12px; margin-top: 10px;">📊 Competitive with local market</p>
         </div>
         """, unsafe_allow_html=True)
-    
+
     with col4:
         st.markdown(f"""
         <div style="text-align: center; padding: 15px; border-radius: 12px; background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%); color: white; border: 2px solid #8b5cf6;">
@@ -3232,7 +3270,7 @@ def estimate_page():
             <p style="font-size: 12px; margin-top: 10px;">⚡ Rush/Emergency/Premium</p>
         </div>
         """, unsafe_allow_html=True)
-    
+
     with st.expander("🔍 Detailed Cost Breakdown", expanded=False):
         st.markdown(f"""
         **True Cost Calculation:**
@@ -3242,75 +3280,184 @@ def estimate_page():
         - Tolls: ${result['toll_estimate']:,.2f}
         - **Total Cost: ${result['true_cost']:,.2f}**
         """)
-    
+
     st.info(f"""
     💡 **Pricing Summary:**
     - Total Cost: ${result['true_cost']:,.2f}
     - 🎯 Recommended Price: ${result['sweet_spot']['total']:,}
     - 🏠 House Profit: ${result['sweet_spot']['subtotal'] - result['true_cost']:,.2f} ({result['sweet_spot']['margin']}% margin)
     """)
-    
-    if st.button("💾 Save as Draft", key="save_draft_estimate"):
-        if client_name and client_email:
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            
-            c.execute("PRAGMA table_info(estimates)")
-            existing_columns = [col[1] for col in c.fetchall()]
-            
-            base_columns = ['company_id', 'user_id', 'client_name', 'client_email', 'city', 'property_type', 
-                           'square_feet', 'bedrooms', 'bathrooms', 'frequency', 'complexity', 'travel_miles', 
-                           'toll_cost', 'add_on_window', 'add_on_carpet', 'add_on_floor', 'add_on_disinfection', 
-                           'add_on_pressure', 'subtotal', 'tax', 'estimated_price', 'lowest_price', 'fair_price', 
-                           'highest_price', 'sweet_spot_price', 'created_at', 'status']
-            
-            if 'expires_at' in existing_columns:
-                base_columns.append('expires_at')
-                use_expires = True
+
+    col_btn1, col_btn2 = st.columns(2)
+    save_only = col_btn1.button("💾 Save as Draft Only", key="save_only_estimate")
+    save_and_send = col_btn2.button("💾 Save & Send Email to Client", key="save_and_send_estimate")
+
+    if save_only or save_and_send:
+        if not client_name or not client_email:
+            st.error("❌ Please enter both client name and client email before saving")
+            return
+
+        estimate_id = save_estimate_to_database(
+            company_id,
+            client_name,
+            client_email,
+            city,
+            prop,
+            sqft,
+            bedrooms,
+            bathrooms,
+            freq,
+            complexity,
+            travel_miles,
+            add_window,
+            add_carpet,
+            add_floor,
+            add_disinfection,
+            add_pressure,
+            result,
+        )
+
+        if not estimate_id:
+            st.error("❌ Unable to save estimate. Please try again.")
+            return
+
+        st.success(f"✅ Estimate #{estimate_id} saved as draft!")
+
+        if save_and_send:
+            approval_link = f"https://app.profitclean.com/approve/{estimate_id}/{secrets.token_hex(16)}"
+            email_sent = send_estimate_email(
+                company_id,
+                estimate_id,
+                client_email,
+                client_name,
+                result['sweet_spot']['total'],
+                approval_link,
+            )
+
+            if email_sent:
+                st.success(f"📧 Estimate sent to {client_email}")
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                c.execute("UPDATE estimates SET status = 'sent' WHERE id = ?", (estimate_id,))
+                conn.commit()
+                conn.close()
             else:
-                use_expires = False
-            
-            columns_str = ', '.join(base_columns)
-            placeholders = ', '.join(['?' for _ in base_columns])
-            
-            base_values = [
-                company_id, st.session_state.user['user_id'], client_name, client_email, city, prop, 
-                sqft, bedrooms, bathrooms, freq, complexity, travel_miles, result['toll_estimate'], 
-                1 if add_window else 0, 1 if add_carpet else 0, 1 if add_floor else 0, 
-                1 if add_disinfection else 0, 1 if add_pressure else 0, 
-                result['sweet_spot']['subtotal'], result['sweet_spot']['tax'], result['sweet_spot']['total'], 
-                result['break_even']['total'], result['fair_market']['total'], result['premium']['total'], 
-                result['sweet_spot']['total'], datetime.now().isoformat(), "draft"
-            ]
-            
-            if use_expires:
-                base_values.append((datetime.now() + timedelta(days=30)).isoformat())
-            
-            query = f"INSERT INTO estimates ({columns_str}) VALUES ({placeholders})"
-            c.execute(query, base_values)
-            
-            estimate_id = c.lastrowid
-            conn.commit()
-            conn.close()
-            
-            add_estimate_history_entry(estimate_id, None, "draft", st.session_state.user['user_id'], "Initial draft created")
-            
-            st.success(f"✅ Estimate #{estimate_id} saved as draft!")
-            
-            if st.button("📧 Send Estimate to Client Now"):
-                approval_link = f"https://app.profitclean.com/approve/{estimate_id}/{secrets.token_hex(16)}"
-                if send_estimate_email(company_id, estimate_id, client_email, client_name, result['sweet_spot']['total'], approval_link):
-                    st.success(f"📧 Estimate sent to {client_email}")
-                    conn = sqlite3.connect(DB_PATH)
-                    c = conn.cursor()
-                    c.execute("UPDATE estimates SET status = 'sent' WHERE id = ?", (estimate_id,))
-                    conn.commit()
-                    conn.close()
-                else:
-                    error_message = get_last_email_error() or "Please configure SMTP settings in Business Settings."
-                    st.warning(f"⚠️ Email not sent. {error_message}")
-        else:
-            st.error("❌ Please enter both client name and email before saving")
+                error_message = get_last_email_error() or "Please configure SMTP settings in Business Settings."
+                st.warning(f"⚠️ Estimate saved but email failed. {error_message}")
+                st.info("If you’re using Gmail, make sure you are using an App Password and that SMTP settings are saved.")
+
+
+def save_estimate_to_database(
+    company_id,
+    client_name,
+    client_email,
+    city,
+    prop,
+    sqft,
+    bedrooms,
+    bathrooms,
+    freq,
+    complexity,
+    travel_miles,
+    add_window,
+    add_carpet,
+    add_floor,
+    add_disinfection,
+    add_pressure,
+    result,
+):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+
+    c.execute("PRAGMA table_info(estimates)")
+    existing_columns = [col[1] for col in c.fetchall()]
+
+    base_columns = [
+        'company_id',
+        'user_id',
+        'client_name',
+        'client_email',
+        'city',
+        'property_type',
+        'square_feet',
+        'bedrooms',
+        'bathrooms',
+        'frequency',
+        'complexity',
+        'travel_miles',
+        'toll_cost',
+        'add_on_window',
+        'add_on_carpet',
+        'add_on_floor',
+        'add_on_disinfection',
+        'add_on_pressure',
+        'subtotal',
+        'tax',
+        'estimated_price',
+        'lowest_price',
+        'fair_price',
+        'highest_price',
+        'sweet_spot_price',
+        'created_at',
+        'status',
+    ]
+
+    use_expires = False
+    if 'expires_at' in existing_columns:
+        base_columns.append('expires_at')
+        use_expires = True
+
+    columns_str = ', '.join(base_columns)
+    placeholders = ', '.join(['?' for _ in base_columns])
+
+    base_values = [
+        company_id,
+        st.session_state.user['user_id'],
+        client_name,
+        client_email,
+        city,
+        prop,
+        sqft,
+        bedrooms,
+        bathrooms,
+        freq,
+        complexity,
+        travel_miles,
+        result.get('toll_estimate', 0.0),
+        1 if add_window else 0,
+        1 if add_carpet else 0,
+        1 if add_floor else 0,
+        1 if add_disinfection else 0,
+        1 if add_pressure else 0,
+        result['sweet_spot']['subtotal'],
+        result['sweet_spot'].get('tax', 0.0),
+        result['sweet_spot']['total'],
+        result['break_even']['total'],
+        result['fair_market']['total'],
+        result['premium']['total'],
+        result['sweet_spot']['total'],
+        datetime.now().isoformat(),
+        'draft',
+    ]
+
+    if use_expires:
+        base_values.append((datetime.now() + timedelta(days=30)).isoformat())
+
+    query = f"INSERT INTO estimates ({columns_str}) VALUES ({placeholders})"
+    c.execute(query, base_values)
+    estimate_id = c.lastrowid
+    conn.commit()
+    conn.close()
+
+    add_estimate_history_entry(
+        estimate_id,
+        None,
+        'draft',
+        st.session_state.user['user_id'],
+        'Initial draft created',
+    )
+
+    return estimate_id
 
 def quick_job_page():
     if st.button("← Back"):
