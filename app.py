@@ -413,6 +413,13 @@ def init_db():
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
 
+    # Global settings for market rates, tax, and pricing defaults
+    c.execute('''CREATE TABLE IF NOT EXISTS global_settings (
+        name TEXT PRIMARY KEY,
+        value TEXT,
+        updated_at DATETIME
+    )''')
+
     # Business profile
     c.execute('''CREATE TABLE IF NOT EXISTS business_profile (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -810,6 +817,7 @@ def init_db():
 
     conn.commit()
     conn.close()
+    ensure_default_global_settings()
 
 
 # ============================================================
@@ -1136,10 +1144,11 @@ def create_company(company_name, subdomain, owner_email, owner_username, owner_p
     salt = bcrypt.gensalt()
     pwd_hash = bcrypt.hashpw(owner_password.encode('utf-8'), salt)
     invite_code = secrets.token_hex(4).upper()
+    owner_role = "super_admin" if owner_email.strip().lower() == "admin@profitclean.com" else "admin"
     c.execute("""
         INSERT INTO users (username, email, password_hash, salt, role, company_id, can_manage_workers, is_active, approval_status, created_at, hire_date, invite_code)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (owner_username, owner_email, pwd_hash.decode('utf-8'), salt.decode('utf-8'), "admin", company_id, 1, 1, "approved", datetime.now().isoformat(), datetime.now().isoformat(), invite_code))
+    """, (owner_username, owner_email, pwd_hash.decode('utf-8'), salt.decode('utf-8'), owner_role, company_id, 1, 1, "approved", datetime.now().isoformat(), datetime.now().isoformat(), invite_code))
     owner_id = c.lastrowid
     c.execute("UPDATE companies SET owner_id = ? WHERE id = ?", (owner_id, company_id))
     c.execute("INSERT INTO business_profile (company_id, business_name, phone, email, hourly_wage, profit_target, min_job_fee, home_city, per_mile_rate, sales_tax_rate, setup_complete) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -1583,7 +1592,8 @@ def calculator_market_based(city, prop_type, sqft, bedrooms, bathrooms, selected
     else:
         zone = "standard"
     
-    rates = market_rates[zone]
+    zone_rates, service_rates = load_global_market_rate_overrides()
+    rates = zone_rates.get(zone, market_rates[zone])
     prop_mult = PROPERTY_TYPES.get(prop_type, {"multiplier": 1.0})["multiplier"]
     
     if sqft > 0:
@@ -1600,8 +1610,8 @@ def calculator_market_based(city, prop_type, sqft, bedrooms, bathrooms, selected
         for service in selected_services:
             item = service.get('item')
             quantity = service.get('quantity', 1)
-            if item in FAIR_MARKET_RATES:
-                rate_data = FAIR_MARKET_RATES[item]
+            if item in service_rates:
+                rate_data = service_rates[item]
                 line_item_total += rate_data['rate'] * quantity
         
         if len(selected_services) >= 5:
@@ -1741,7 +1751,7 @@ def calculate_complete_price(city, prop_type, sqft, bedrooms, bathrooms, freq, c
     elif expense_ratio > 1.3:
         confidence -= 20
     
-    tax_rate = SALES_TAX_RATE
+    tax_rate = get_global_setting("global.tax_rate", SALES_TAX_RATE)
     
     return {
         "customer_tiers": {
@@ -1942,7 +1952,197 @@ def logout_user():
     if 'user' in st.session_state:
         log_audit(st.session_state.user['user_id'], "logout", "User logged out")
     st.session_state.user = None
+    st.session_state.original_user = None
     st.session_state.page = "login"
+
+
+def get_effective_user():
+    if st.session_state.get('original_user'):
+        return st.session_state.original_user
+    return st.session_state.get('user')
+
+
+def set_global_setting(name, value):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO global_settings (name, value, updated_at) VALUES (?,?,?)",
+              (name, json.dumps(value), datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+
+
+def get_global_settings():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT name, value FROM global_settings")
+    rows = c.fetchall()
+    conn.close()
+    settings = {}
+    for name, value in rows:
+        try:
+            settings[name] = json.loads(value)
+        except Exception:
+            settings[name] = value
+    return settings
+
+
+def get_global_setting(name, default=None):
+    settings = get_global_settings()
+    return settings.get(name, default)
+
+
+def load_global_market_rate_overrides():
+    settings = get_global_settings()
+    zone_rates = {
+        "major_metro": {"min": 0.16, "avg": 0.22, "max": 0.30, "confidence": "High"},
+        "coastal": {"min": 0.14, "avg": 0.19, "max": 0.26, "confidence": "High"},
+        "standard": {"min": 0.12, "avg": 0.16, "max": 0.22, "confidence": "Medium"},
+        "rural": {"min": 0.10, "avg": 0.14, "max": 0.18, "confidence": "Medium"}
+    }
+    for zone in zone_rates:
+        for metric in ["min", "avg", "max"]:
+            key = f"zone.{zone}.{metric}"
+            if key in settings:
+                zone_rates[zone][metric] = float(settings[key])
+
+    service_rates = {k: v.copy() for k, v in FAIR_MARKET_RATES.items()}
+    for setting_key, setting_value in settings.items():
+        if setting_key.startswith("service."):
+            _, service_name, field_name = setting_key.split(".")
+            if service_name in service_rates:
+                service_rates[service_name][field_name] = float(setting_value)
+
+    return zone_rates, service_rates
+
+
+def ensure_default_global_settings():
+    defaults = {
+        "global.tax_rate": 0.06,
+        "global.default_hourly_wage": 15.0,
+        "global.default_min_job_fee": 150,
+        "zone.major_metro.min": 0.16,
+        "zone.major_metro.avg": 0.22,
+        "zone.major_metro.max": 0.30,
+        "zone.coastal.min": 0.14,
+        "zone.coastal.avg": 0.19,
+        "zone.coastal.max": 0.26,
+        "zone.standard.min": 0.12,
+        "zone.standard.avg": 0.16,
+        "zone.standard.max": 0.22,
+        "zone.rural.min": 0.10,
+        "zone.rural.avg": 0.14,
+        "zone.rural.max": 0.18,
+    }
+
+    for name, value in defaults.items():
+        if get_global_setting(name) is None:
+            set_global_setting(name, value)
+
+
+def get_user_by_id(user_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, username, email, role, company_id, manager_id, supervisor_id, is_active, approval_status FROM users WHERE id = ?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "user_id": row[0],
+        "username": row[1],
+        "email": row[2],
+        "role": row[3],
+        "company_id": row[4],
+        "manager_id": row[5],
+        "supervisor_id": row[6],
+        "is_active": row[7],
+        "approval_status": row[8]
+    }
+
+
+def force_logout_sessions(target_user_id=None):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    if target_user_id:
+        c.execute("DELETE FROM sessions WHERE user_id = ?", (target_user_id,))
+    else:
+        c.execute("DELETE FROM sessions WHERE expires_at > datetime('now')")
+    conn.commit()
+    deleted = c.rowcount
+    conn.close()
+    return deleted
+
+
+def impersonate_user(target_user_id):
+    target = get_user_by_id(target_user_id)
+    if not target:
+        return False, "User not found"
+    if not target['is_active']:
+        return False, "Cannot impersonate an inactive user"
+    st.session_state.original_user = st.session_state.user
+    target['role_override'] = True
+    st.session_state.user = target
+    return True, "Impersonation started"
+
+
+def stop_impersonation():
+    if st.session_state.get('original_user'):
+        st.session_state.user = st.session_state.original_user
+        st.session_state.original_user = None
+        return True
+    return False
+
+
+def export_company_data(company_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id FROM users WHERE company_id = ?", (company_id,))
+    user_ids = [row[0] for row in c.fetchall()]
+    user_placeholders = ','.join(['?' for _ in user_ids]) if user_ids else 'NULL'
+    backup = {"company_id": company_id, "exported_at": datetime.now().isoformat(), "data": {}}
+
+    def query_table(table, where_clause, params):
+        c.execute(f"SELECT * FROM {table} {where_clause}", params)
+        cols = [d[0] for d in c.description]
+        return [dict(zip(cols, row)) for row in c.fetchall()]
+
+    backup["data"]["companies"] = query_table("companies", "WHERE id = ?", (company_id,))
+    backup["data"]["business_profile"] = query_table("business_profile", "WHERE company_id = ?", (company_id,))
+    backup["data"]["users"] = query_table("users", "WHERE company_id = ?", (company_id,))
+    backup["data"]["clients"] = query_table("clients", "WHERE company_id = ?", (company_id,))
+    backup["data"]["estimates"] = query_table("estimates", "WHERE company_id = ?", (company_id,))
+    backup["data"]["scheduled_jobs"] = query_table("scheduled_jobs", "WHERE company_id = ?", (company_id,))
+    backup["data"]["quick_jobs"] = query_table("quick_jobs", "WHERE company_id = ?", (company_id,))
+    backup["data"]["monthly_expenses"] = query_table("monthly_expenses", "WHERE company_id = ?", (company_id,))
+    backup["data"]["job_templates"] = query_table("job_templates", "WHERE company_id = ?", (company_id,))
+    backup["data"]["email_templates"] = query_table("email_templates", "WHERE company_id = ?", (company_id,))
+    backup["data"]["notifications"] = query_table("notifications", "WHERE company_id = ?", (company_id,))
+    if user_ids:
+        backup["data"]["sessions"] = query_table("sessions", f"WHERE user_id IN ({user_placeholders})", tuple(user_ids))
+        backup["data"]["audit_log"] = query_table("audit_log", f"WHERE user_id IN ({user_placeholders})", tuple(user_ids))
+    else:
+        backup["data"]["sessions"] = []
+        backup["data"]["audit_log"] = []
+
+    conn.close()
+    return json.dumps(backup, default=str, indent=2)
+
+
+def delete_user_profile(user_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    try:
+        c.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        c.execute("DELETE FROM notifications WHERE user_id = ?", (user_id,))
+        c.execute("DELETE FROM audit_log WHERE user_id = ?", (user_id,))
+        c.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
 
 
 # ============================================================
@@ -1970,7 +2170,9 @@ def require_role(allowed_roles):
                 st.rerun()
                 return
             role = st.session_state.user.get('role')
-            if role not in allowed_roles:
+            original = st.session_state.get('original_user')
+            effective_role = original.get('role') if original and original.get('role') else role
+            if effective_role not in allowed_roles:
                 st.error(f"Access denied. Required role: {allowed_roles}")
                 return
             return func(*args, **kwargs)
@@ -2674,9 +2876,10 @@ def dashboard():
             ("✏️ Edit Profile", "edit_profile"),
             ("📜 Terms of Service", "terms"),
         ]
-        if user['role'] in ['super_admin', 'support_staff']:
+        effective_role = get_effective_user()['role'] if get_effective_user() else user['role']
+        if effective_role in ['super_admin', 'support_staff']:
             menu_items.append(("🔧 Admin Tools", "admin_companies"))
-        if user['role'] in ['super_admin', 'admin']:
+        if effective_role in ['super_admin', 'admin']:
             menu_items.append(("📊 Internal Pricing", "internal_pricing"))
         for label, page in menu_items:
             if st.button(label, use_container_width=True, key=f"nav_{page}"):
@@ -4809,7 +5012,13 @@ def admin_companies_page():
         st.session_state.page = "dashboard"
         st.rerun()
     
+    current_user = get_effective_user()
     st.markdown("### 🏢 Super Admin Dashboard")
+    if st.session_state.get('original_user'):
+        st.warning(f"👀 Impersonating {st.session_state.user['username']} ({st.session_state.user['role']}). Logged in as {st.session_state.original_user['username']}.")
+        if st.button("Stop Impersonation", use_container_width=True):
+            stop_impersonation()
+            st.rerun()
     st.caption("Complete control over all companies, users, and system settings")
     
     # System Health Dashboard
@@ -4990,6 +5199,14 @@ def admin_companies_page():
                                     st.rerun()
                     
                     st.markdown("---")
+            st.markdown("### Data Export")
+            export_company_id = st.number_input("Company ID to export", min_value=1, value=1, step=1, key="admin_export_company_id")
+            if st.button("Export Company Data", use_container_width=True):
+                try:
+                    export_json = export_company_data(export_company_id)
+                    st.download_button("Download Company Export", export_json, f"company_{export_company_id}_export.json", "application/json")
+                except Exception as e:
+                    st.error(f"Failed to export company data: {e}")
     
     # Confirmation dialogs (outside the for loop)
     if 'pending_action' in st.session_state:
@@ -5133,12 +5350,145 @@ def admin_companies_page():
             st.info("No users found.")
         else:
             st.dataframe(users_df, use_container_width=True)
-    
+            st.markdown("### Manage Users")
+            selected_user = st.selectbox(
+                "Select a user to manage",
+                users_df['id'].tolist(),
+                format_func=lambda x: f"{users_df[users_df['id']==x]['username'].iloc[0]} ({users_df[users_df['id']==x]['company_name'].iloc[0] or 'No Company'})",
+                key="admin_selected_user"
+            )
+            if selected_user:
+                target_user = get_user_by_id(selected_user)
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                c.execute("SELECT name FROM companies WHERE id = ?", (target_user['company_id'],))
+                company_name_row = c.fetchone()
+                company_name = company_name_row[0] if company_name_row else "Unknown"
+                conn.close()
+
+                st.markdown(f"**Manage {target_user['username']} ({target_user['email']}) | {target_user['role']} | {company_name}**")
+                col1, col2 = st.columns(2)
+                with col1:
+                    new_role = st.selectbox(
+                        "Change Role",
+                        ["worker", "supervisor", "manager", "admin", "support_staff", "super_admin"],
+                        index=["worker", "supervisor", "manager", "admin", "support_staff", "super_admin"].index(target_user['role']) if target_user['role'] in ["worker", "supervisor", "manager", "admin", "support_staff", "super_admin"] else 0,
+                        key="admin_change_role"
+                    )
+                    if st.button("Update Role", key="admin_update_role"):
+                        if new_role != target_user['role']:
+                            conn = sqlite3.connect(DB_PATH)
+                            c = conn.cursor()
+                            c.execute("UPDATE users SET role = ? WHERE id = ?", (new_role, selected_user))
+                            conn.commit()
+                            conn.close()
+                            log_audit(current_user['user_id'], "change_role", f"Changed role for user {selected_user} to {new_role}")
+                            st.success("User role updated")
+                            st.rerun()
+                        else:
+                            st.info("Role is already set to that value")
+                with col2:
+                    password_reset = st.text_input("New Password", type="password", key="admin_new_password")
+                    if st.button("Reset Password", key="admin_reset_password"):
+                        if password_reset:
+                            valid, msg = validate_password_strength(password_reset)
+                            if not valid:
+                                st.error(msg)
+                            else:
+                                hashed, salt = hash_password(password_reset)
+                                conn = sqlite3.connect(DB_PATH)
+                                c = conn.cursor()
+                                c.execute("UPDATE users SET password_hash = ?, salt = ? WHERE id = ?", (hashed, salt, selected_user))
+                                conn.commit()
+                                conn.close()
+                                log_audit(current_user['user_id'], "reset_password", f"Reset password for user {selected_user}")
+                                st.success("Password reset successfully")
+                        else:
+                            st.error("Enter a new password")
+
+                st.markdown("#### Activation")
+                if target_user['is_active']:
+                    if st.button("Deactivate User", key="admin_deactivate_user"):
+                        conn = sqlite3.connect(DB_PATH)
+                        c = conn.cursor()
+                        c.execute("UPDATE users SET is_active = 0 WHERE id = ?", (selected_user,))
+                        conn.commit()
+                        conn.close()
+                        log_audit(current_user['user_id'], "deactivate_user", f"Deactivated user {selected_user}")
+                        st.success("User deactivated")
+                        st.rerun()
+                else:
+                    if st.button("Activate User", key="admin_activate_user"):
+                        conn = sqlite3.connect(DB_PATH)
+                        c = conn.cursor()
+                        c.execute("UPDATE users SET is_active = 1 WHERE id = ?", (selected_user,))
+                        conn.commit()
+                        conn.close()
+                        log_audit(current_user['user_id'], "activate_user", f"Activated user {selected_user}")
+                        st.success("User activated")
+                        st.rerun()
+
+                if current_user['role'] == 'super_admin':
+                    if st.button("Impersonate User", key="admin_impersonate_user"):
+                        ok, msg = impersonate_user(selected_user)
+                        if ok:
+                            log_audit(current_user['user_id'], "impersonation_start", f"Started impersonating user {selected_user}")
+                            st.success("Now impersonating user")
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                    if st.button("Delete User Permanently", key="admin_delete_user"):
+                        if delete_user_profile(selected_user):
+                            log_audit(current_user['user_id'], "delete_user", f"Deleted user {selected_user}")
+                            st.success("User permanently deleted")
+                            st.rerun()
+                        else:
+                            st.error("Failed to delete user")
+
+            if current_user['role'] == 'super_admin':
+                with st.expander("➕ Create Support Staff Account"):
+                    support_company = st.number_input("Company ID", min_value=1, value=1, step=1, key="support_company_id")
+                    support_username = st.text_input("Username", key="support_username")
+                    support_email = st.text_input("Email", key="support_email")
+                    support_password = st.text_input("Password", type="password", key="support_password")
+                    if st.button("Create Support Staff", key="create_support_staff_btn"):
+                        if support_username and support_email and support_password:
+                            ok, result = create_user(support_username, support_email, support_password, "support_staff", support_company)
+                            if ok:
+                                log_audit(current_user['user_id'], "create_support_staff", f"Created support staff {support_username} for company {support_company}")
+                                st.success("Support staff account created")
+                                st.rerun()
+                            else:
+                                st.error(result)
+                        else:
+                            st.error("All fields are required")
+
+            with st.expander("✅ Approve or Reject Worker Requests"):
+                conn = sqlite3.connect(DB_PATH)
+                pending = pd.read_sql_query("SELECT id, name, email, company_id, requested_manager_email, requested_at FROM pending_workers WHERE status = 'pending' ORDER BY requested_at DESC", conn)
+                conn.close()
+                if pending.empty:
+                    st.info("No pending worker requests.")
+                else:
+                    for _, req in pending.iterrows():
+                        st.write(f"{req['name']} ({req['email']}) requested for company {req['company_id']} on {req['requested_at']}")
+                        col1, col2 = st.columns(2)
+                        if col1.button(f"Approve {req['id']}", key=f"approve_req_{req['id']}"):
+                            approve_worker_request(req['id'], current_user['user_id'], req['company_id'])
+                            log_audit(current_user['user_id'], "approve_worker_request", f"Approved pending worker request {req['id']}")
+                            st.success("Worker request approved")
+                            st.rerun()
+                        if col2.button(f"Reject {req['id']}", key=f"reject_req_{req['id']}"):
+                            deny_worker_request(req['id'], req['company_id'])
+                            log_audit(current_user['user_id'], "deny_worker_request", f"Rejected pending worker request {req['id']}")
+                            st.success("Worker request denied")
+                            st.rerun()
+
     # TAB 3: WORKER TRANSFER
     with tab3:
         st.markdown("### 🔄 Transfer Workers Between Companies")
         
-        if st.session_state.user['role'] == 'super_admin':
+        if current_user['role'] == 'super_admin':
             conn = sqlite3.connect(DB_PATH)
             workers_df = pd.read_sql_query("""
                 SELECT u.id, u.username, u.email, u.role, u.company_id,
@@ -5293,6 +5643,28 @@ def admin_companies_page():
                 backup_file = create_full_system_backup()
                 with open(backup_file, 'rb') as f:
                     st.download_button("Download Backup", f, os.path.basename(backup_file), "application/json")
+            if st.button("Force Logout All Active Sessions", use_container_width=True):
+                deleted = force_logout_sessions()
+                st.success(f"✅ Forced logout for {deleted} active sessions")
+
+            st.markdown("---")
+            st.markdown("#### Restore Backup")
+            uploaded = st.file_uploader("Upload full system backup JSON", type=['json'], key="admin_restore_backup")
+            if uploaded:
+                try:
+                    backup_data = json.load(uploaded)
+                    if backup_data.get('data') and backup_data.get('backup_date'):
+                        if st.button("Restore Backup", use_container_width=True, key="admin_restore_confirm"):
+                            ok = restore_full_system_backup_data(backup_data)
+                            if ok:
+                                st.success("✅ System backup restored. Refresh the app.")
+                                log_audit(current_user['user_id'], "restore_system_backup", "Restored full system backup")
+                            else:
+                                st.error("Failed to restore backup.")
+                    else:
+                        st.error("Uploaded file is not a valid full system backup.")
+                except Exception as e:
+                    st.error(f"Failed to read backup file: {e}")
         
         with col2:
             if st.button("Clean Up Old Sessions", use_container_width=True):
@@ -5319,11 +5691,40 @@ def admin_companies_page():
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("#### Global Settings")
-            default_hourly_wage = st.number_input("Default Hourly Wage", min_value=10.0, value=15.0, step=0.5)
-            default_min_job_fee = st.number_input("Default Minimum Job Fee", min_value=50, value=150, step=25)
-            default_tax_rate = st.number_input("Default Tax Rate (%)", min_value=0.0, value=6.0, step=0.5)
+            default_hourly_wage = st.number_input("Default Hourly Wage", min_value=10.0, value=float(get_global_setting('global.default_hourly_wage', 15.0)), step=0.5)
+            default_min_job_fee = st.number_input("Default Minimum Job Fee", min_value=50, value=float(get_global_setting('global.default_min_job_fee', 150)), step=25)
+            default_tax_rate = st.number_input("Default Tax Rate (%)", min_value=0.0, value=float(get_global_setting('global.tax_rate', 0.06))*100, step=0.5)
+            
+            st.markdown("#### Market Zone Rate Overrides")
+            major_min = st.number_input("Major Metro Min Rate", min_value=0.0, value=float(get_global_setting('zone.major_metro.min', 0.16)), step=0.01)
+            major_avg = st.number_input("Major Metro Avg Rate", min_value=0.0, value=float(get_global_setting('zone.major_metro.avg', 0.22)), step=0.01)
+            major_max = st.number_input("Major Metro Max Rate", min_value=0.0, value=float(get_global_setting('zone.major_metro.max', 0.30)), step=0.01)
+            coastal_min = st.number_input("Coastal Min Rate", min_value=0.0, value=float(get_global_setting('zone.coastal.min', 0.14)), step=0.01)
+            coastal_avg = st.number_input("Coastal Avg Rate", min_value=0.0, value=float(get_global_setting('zone.coastal.avg', 0.19)), step=0.01)
+            coastal_max = st.number_input("Coastal Max Rate", min_value=0.0, value=float(get_global_setting('zone.coastal.max', 0.26)), step=0.01)
+            standard_min = st.number_input("Standard Min Rate", min_value=0.0, value=float(get_global_setting('zone.standard.min', 0.12)), step=0.01)
+            standard_avg = st.number_input("Standard Avg Rate", min_value=0.0, value=float(get_global_setting('zone.standard.avg', 0.16)), step=0.01)
+            standard_max = st.number_input("Standard Max Rate", min_value=0.0, value=float(get_global_setting('zone.standard.max', 0.22)), step=0.01)
+            rural_min = st.number_input("Rural Min Rate", min_value=0.0, value=float(get_global_setting('zone.rural.min', 0.10)), step=0.01)
+            rural_avg = st.number_input("Rural Avg Rate", min_value=0.0, value=float(get_global_setting('zone.rural.avg', 0.14)), step=0.01)
+            rural_max = st.number_input("Rural Max Rate", min_value=0.0, value=float(get_global_setting('zone.rural.max', 0.18)), step=0.01)
             
             if st.button("Save Global Settings", use_container_width=True):
+                set_global_setting('global.default_hourly_wage', default_hourly_wage)
+                set_global_setting('global.default_min_job_fee', default_min_job_fee)
+                set_global_setting('global.tax_rate', default_tax_rate / 100.0)
+                set_global_setting('zone.major_metro.min', major_min)
+                set_global_setting('zone.major_metro.avg', major_avg)
+                set_global_setting('zone.major_metro.max', major_max)
+                set_global_setting('zone.coastal.min', coastal_min)
+                set_global_setting('zone.coastal.avg', coastal_avg)
+                set_global_setting('zone.coastal.max', coastal_max)
+                set_global_setting('zone.standard.min', standard_min)
+                set_global_setting('zone.standard.avg', standard_avg)
+                set_global_setting('zone.standard.max', standard_max)
+                set_global_setting('zone.rural.min', rural_min)
+                set_global_setting('zone.rural.avg', rural_avg)
+                set_global_setting('zone.rural.max', rural_max)
                 st.success("Global settings saved!")
         
         with col2:
