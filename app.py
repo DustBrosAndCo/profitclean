@@ -4713,7 +4713,7 @@ def settings_page():
 
             # Test Email section: allow sending a one-off test email without saving settings
             test_recipient = st.text_input("Test Recipient Email", value=row_dict.get('smtp_email', '') if row_dict.get('smtp_email') else "")
-            if st.button("Send Test Email", key="send_test_email"):
+            if st.form_submit_button("Send Test Email", key="send_test_email"):
                 # Attempt to send using current form values
                 to_addr = test_recipient.strip()
                 if not to_addr:
