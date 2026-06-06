@@ -5692,7 +5692,7 @@ def admin_companies_page():
         with col1:
             st.markdown("#### Global Settings")
             default_hourly_wage = st.number_input("Default Hourly Wage", min_value=10.0, value=float(get_global_setting('global.default_hourly_wage', 15.0)), step=0.5)
-            default_min_job_fee = st.number_input("Default Minimum Job Fee", min_value=50, value=float(get_global_setting('global.default_min_job_fee', 150)), step=25)
+            default_min_job_fee = st.number_input("Default Minimum Job Fee", min_value=50, value=int(float(get_global_setting('global.default_min_job_fee', 150))), step=25)
             default_tax_rate = st.number_input("Default Tax Rate (%)", min_value=0.0, value=float(get_global_setting('global.tax_rate', 0.06))*100, step=0.5)
             
             st.markdown("#### Market Zone Rate Overrides")
