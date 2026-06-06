@@ -1018,6 +1018,7 @@ def send_email(company_id: int, to_email: str, subject: str, body: str, html_bod
         return False
 
     try:
+        print(f"EMAIL DEBUG: Sending via {smtp_server}:{smtp_port} from {smtp_email} to {to_email}")
         msg = MIMEMultipart('alternative')
         msg['From'] = smtp_email
         msg['To'] = to_email
@@ -1032,6 +1033,7 @@ def send_email(company_id: int, to_email: str, subject: str, body: str, html_bod
             server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=10)
         else:
             server = smtplib.SMTP(smtp_server, smtp_port, timeout=10)
+            server.set_debuglevel(1)
             server.ehlo()
             server.starttls()
             server.ehlo()
@@ -1048,6 +1050,74 @@ def send_email(company_id: int, to_email: str, subject: str, body: str, html_bod
         )
         print(LAST_EMAIL_ERROR)
         return False
+
+def test_smtp_connection(company_id: int, test_email: str) -> tuple[bool, str]:
+    smtp_settings = get_smtp_settings(company_id)
+    smtp_email = smtp_settings["smtp_email"]
+    smtp_password = smtp_settings["smtp_password"]
+    smtp_server = smtp_settings["smtp_server"]
+    smtp_port = smtp_settings["smtp_port"]
+
+    if not smtp_email or not smtp_password:
+        return False, "SMTP credentials not configured. Please enter your SMTP Email and Password in Business Settings."
+
+    try:
+        msg = MIMEMultipart('alternative')
+        msg['From'] = smtp_email
+        msg['To'] = test_email
+        msg['Subject'] = "ProfitClean SMTP Test - Successful!"
+
+        body = f"""
+Hello!
+
+This is a test email from your ProfitClean application.
+
+SMTP Configuration:
+- Server: {smtp_server}:{smtp_port}
+- From: {smtp_email}
+- To: {test_email}
+
+✅ Your email settings are working correctly!
+
+You can now send estimates, approvals, and reminders to your clients.
+
+- ProfitClean System
+"""
+        html_body = f"""
+<html>
+<body>
+    <h2>✅ SMTP Test Successful!</h2>
+    <p>This is a test email from your ProfitClean application.</p>
+    <hr>
+    <p><strong>SMTP Configuration:</strong><br>
+    - Server: {smtp_server}:{smtp_port}<br>
+    - From: {smtp_email}<br>
+    - To: {test_email}</p>
+    <p>Your email settings are working correctly!</p>
+    <hr>
+    <p style="color: green;">- ProfitClean System</p>
+</body>
+</html>
+"""
+
+        msg.attach(MIMEText(body, 'plain'))
+        msg.attach(MIMEText(html_body, 'html'))
+
+        if smtp_port == 465:
+            server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=10)
+        else:
+            server = smtplib.SMTP(smtp_server, smtp_port, timeout=10)
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+
+        server.login(smtp_email, smtp_password)
+        server.send_message(msg)
+        server.quit()
+        return True, f"Test email sent successfully to {test_email}!"
+    except Exception as e:
+        return False, f"Failed: {e}"
+
 
 def send_estimate_email(company_id: int, estimate_id: int, client_email: str, client_name: str, 
                         amount: float, approval_link: str) -> bool:
@@ -4776,9 +4846,9 @@ def settings_page():
             smtp_port = st.number_input("SMTP Port", value=int(row_dict.get('smtp_port', 587)))
 
             if not smtp_email or not smtp_password:
-                st.warning("SMTP is not fully configured. Estimate emails will not send until SMTP Email and SMTP Password are entered.")
+                st.warning("SMTP is not not fully configured. Estimate emails will not send until both SMTP Email and SMTP Password are entered.")
             else:
-                st.success("SMTP settings are configured. Use Send Test Email to verify delivery.")
+                st.success("SMTP settings appear configured. Save and send a test email to verify delivery.")
 
             with st.expander("SMTP Setup Help"):
                 st.markdown("""
@@ -4787,6 +4857,10 @@ def settings_page():
                 - Yahoo: `smtp.mail.yahoo.com`, port `465`.
                 - Enter the SMTP provider credentials you normally use for email clients.
                 - Save the settings and then click **Send Test Email** to verify that the account is working.
+                - For Gmail, follow these steps:
+                  1. Enable 2-Step Verification
+                  2. Create an App Password at https://myaccount.google.com/apppasswords
+                  3. Paste the 16-character App Password into SMTP Password
                 """)
 
             st.markdown("**Current SMTP configuration loaded from your account:**")
@@ -4798,19 +4872,34 @@ def settings_page():
             else:
                 st.write("- Password: not configured")
 
-            # Test Email section: allow sending a one-off test email without saving settings
-            test_recipient = st.text_input("Test Recipient Email", value=row_dict.get('smtp_email', '') if row_dict.get('smtp_email') else "")
+            st.markdown("#### 📧 Test Your SMTP Configuration")
+            test_recipient = st.text_input("Enter email address to send test", value=row_dict.get('smtp_email', '') if row_dict.get('smtp_email') else "", key="test_email_input")
             if st.form_submit_button("Send Test Email", key="send_test_email"):
-                # Attempt to send using current form values
                 to_addr = test_recipient.strip()
                 if not to_addr:
                     st.error("Please enter a valid recipient email to send a test message.")
                 else:
-                    success, err = send_test_email(smtp_server, smtp_port, smtp_email, smtp_password, to_addr)
-                    if success:
-                        st.success(f"Test email sent to {to_addr}. Check the inbox (or spam).")
-                    else:
-                        st.error(f"Failed to send test email: {err}")
+                    conn = sqlite3.connect(DB_PATH)
+                    c = conn.cursor()
+                    c.execute("PRAGMA table_info(business_profile)")
+                    existing_columns = [col[1] for col in c.fetchall()]
+                    if 'smtp_server' not in existing_columns:
+                        c.execute("ALTER TABLE business_profile ADD COLUMN smtp_server TEXT")
+                    if 'smtp_port' not in existing_columns:
+                        c.execute("ALTER TABLE business_profile ADD COLUMN smtp_port INTEGER DEFAULT 587")
+                    c.execute("UPDATE business_profile SET smtp_email=?, smtp_password=?, smtp_server=?, smtp_port=? WHERE company_id=?",
+                              (smtp_email, smtp_password, smtp_server, smtp_port, company_id))
+                    conn.commit()
+                    conn.close()
+
+                    with st.spinner("Sending test email using configured SMTP settings..."):
+                        success, err = test_smtp_connection(company_id, to_addr)
+                        if success:
+                            st.success(f"Test email sent to {to_addr}. Check the inbox (or spam).")
+                            st.balloons()
+                        else:
+                            st.error(f"Failed to send test email: {err}")
+                            st.info("If you’re using Gmail, make sure you are using an App Password. See SMTP Setup Help above.")
 
             st.markdown("---")
             st.markdown("### 💰 Business Expenses (For Internal Pricing)")
