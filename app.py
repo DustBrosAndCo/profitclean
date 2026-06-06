@@ -1755,10 +1755,30 @@ def calculate_complete_price(city, prop_type, sqft, bedrooms, bathrooms, freq, c
     
     return {
         "customer_tiers": {
-            "low": {"total": math.ceil(pricing_tiers["low"] * (1 + tax_rate)), "subtotal": pricing_tiers["low"], "margin": 12},
-            "sweet_spot": {"total": math.ceil(pricing_tiers["sweet_spot"] * (1 + tax_rate)), "subtotal": pricing_tiers["sweet_spot"], "margin": 22},
-            "medium": {"total": math.ceil(pricing_tiers["medium"] * (1 + tax_rate)), "subtotal": pricing_tiers["medium"], "margin": 32},
-            "high": {"total": math.ceil(pricing_tiers["high"] * (1 + tax_rate)), "subtotal": pricing_tiers["high"], "margin": 45}
+            "low": {
+                "total": math.ceil(pricing_tiers["low"] * (1 + tax_rate)),
+                "subtotal": pricing_tiers["low"],
+                "margin": 12,
+                "tax": math.ceil(pricing_tiers["low"] * (1 + tax_rate)) - pricing_tiers["low"]
+            },
+            "sweet_spot": {
+                "total": math.ceil(pricing_tiers["sweet_spot"] * (1 + tax_rate)),
+                "subtotal": pricing_tiers["sweet_spot"],
+                "margin": 22,
+                "tax": math.ceil(pricing_tiers["sweet_spot"] * (1 + tax_rate)) - pricing_tiers["sweet_spot"]
+            },
+            "medium": {
+                "total": math.ceil(pricing_tiers["medium"] * (1 + tax_rate)),
+                "subtotal": pricing_tiers["medium"],
+                "margin": 32,
+                "tax": math.ceil(pricing_tiers["medium"] * (1 + tax_rate)) - pricing_tiers["medium"]
+            },
+            "high": {
+                "total": math.ceil(pricing_tiers["high"] * (1 + tax_rate)),
+                "subtotal": pricing_tiers["high"],
+                "margin": 45,
+                "tax": math.ceil(pricing_tiers["high"] * (1 + tax_rate)) - pricing_tiers["high"]
+            }
         },
         "internal": {
             "cost_based": cost_based,
