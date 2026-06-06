@@ -972,6 +972,7 @@ def get_unread_notification_count(user_id: int) -> int:
 # ============================================================
 
 def get_smtp_settings(company_id: int):
+    ensure_business_profile_schema(company_id)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT smtp_email, smtp_password, smtp_server, smtp_port FROM business_profile WHERE company_id = ?", (company_id,))
@@ -2131,6 +2132,8 @@ def ensure_business_profile_schema(company_id=None):
     existing_columns = [col[1] for col in c.fetchall()]
 
     required_columns = [
+        ("smtp_email", "TEXT"),
+        ("smtp_password", "TEXT"),
         ("smtp_server", "TEXT"),
         ("smtp_port", "INTEGER DEFAULT 587"),
         ("monthly_rent", "REAL DEFAULT 0"),
