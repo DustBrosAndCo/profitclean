@@ -2031,6 +2031,33 @@ def ensure_business_profile_schema(company_id=None):
     conn.close()
 
 
+def send_test_email(smtp_server, smtp_port, smtp_email, smtp_password, to_email):
+    """Send a simple test email using provided SMTP settings. Returns (success, error_message)."""
+    try:
+        smtp_port = int(smtp_port) if smtp_port is not None else 587
+        server = smtplib.SMTP(smtp_server, smtp_port, timeout=10)
+        server.ehlo()
+        try:
+            server.starttls()
+            server.ehlo()
+        except Exception:
+            # Some SMTP servers don't support STARTTLS; continue
+            pass
+        if smtp_email and smtp_password:
+            try:
+                server.login(smtp_email, smtp_password)
+            except Exception as e:
+                server.quit()
+                return False, f"SMTP login failed: {e}"
+
+        msg = f"Subject: Test Email from ProfitClean\n\nThis is a test email sent at {datetime.now().isoformat()}"
+        server.sendmail(smtp_email or f"no-reply@{smtp_server}", [to_email], msg)
+        server.quit()
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+
 def load_global_market_rate_overrides():
     settings = get_global_settings()
     zone_rates = {
@@ -4683,6 +4710,20 @@ def settings_page():
             smtp_password = st.text_input("SMTP Password", type="password", value=row_dict.get('smtp_password', '') if row_dict.get('smtp_password') else "")
             smtp_server = st.text_input("SMTP Server", value=row_dict.get('smtp_server', 'smtp.gmail.com'))
             smtp_port = st.number_input("SMTP Port", value=int(row_dict.get('smtp_port', 587)))
+
+            # Test Email section: allow sending a one-off test email without saving settings
+            test_recipient = st.text_input("Test Recipient Email", value=row_dict.get('smtp_email', '') if row_dict.get('smtp_email') else "")
+            if st.button("Send Test Email", key="send_test_email"):
+                # Attempt to send using current form values
+                to_addr = test_recipient.strip()
+                if not to_addr:
+                    st.error("Please enter a valid recipient email to send a test message.")
+                else:
+                    success, err = send_test_email(smtp_server, smtp_port, smtp_email, smtp_password, to_addr)
+                    if success:
+                        st.success(f"Test email sent to {to_addr}. Check the inbox (or spam).")
+                    else:
+                        st.error(f"Failed to send test email: {err}")
 
             st.markdown("---")
             st.markdown("### 💰 Business Expenses (For Internal Pricing)")
