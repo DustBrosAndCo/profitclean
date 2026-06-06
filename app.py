@@ -3058,6 +3058,7 @@ def dashboard():
         menu_items = [
             ("🏠 Dashboard", "dashboard"),
             ("📝 New Estimate", "estimate"),
+            ("📄 Customer Proposal", "proposal"),
             ("⚡ Quick Job", "quick"),
             ("👥 Clients", "clients"),
             ("👷 Workers", "workers"),
@@ -3461,6 +3462,507 @@ def save_estimate_to_database(
     )
 
     return estimate_id
+
+
+def generate_customer_proposal():
+    """Generate a professional customer proposal with pick-and-choose options"""
+    if st.button("← Back"):
+        st.session_state.page = "dashboard"
+        st.rerun()
+
+    st.markdown("### 📄 Customer Proposal Generator")
+    st.caption("Create a professional proposal for your client with pick-and-choose service tiers")
+
+    company_id = get_current_user_company()
+    business_name = get_business_name()
+    property_type_default = next(iter(PROPERTY_TYPES), "")
+
+    if 'proposal_data' not in st.session_state:
+        st.session_state.proposal_data = {
+            "client_name": "",
+            "client_email": "",
+            "property_address": "",
+            "property_type": property_type_default,
+            "selected_tier": "sweet_spot",
+            "custom_price": None,
+            "included_services": [],
+            "excluded_services": [],
+            "special_notes": "",
+            "valid_until": (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
+        }
+
+    with st.expander("📋 Client Information", expanded=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            client_name = st.text_input("Client Name", value=st.session_state.proposal_data.get("client_name", ""))
+            client_email = st.text_input("Client Email", value=st.session_state.proposal_data.get("client_email", ""))
+        with col2:
+            property_address = st.text_area("Property Address", value=st.session_state.proposal_data.get("property_address", ""), height=68)
+            property_type = st.selectbox(
+                "Property Type",
+                list(PROPERTY_TYPES.keys()),
+                index=list(PROPERTY_TYPES.keys()).index(
+                    st.session_state.proposal_data.get("property_type", property_type_default)
+                ) if st.session_state.proposal_data.get("property_type") in PROPERTY_TYPES else 0,
+            )
+
+        st.session_state.proposal_data["client_name"] = client_name
+        st.session_state.proposal_data["client_email"] = client_email
+        st.session_state.proposal_data["property_address"] = property_address
+        st.session_state.proposal_data["property_type"] = property_type
+
+    st.markdown("---")
+    st.markdown("### 💰 Choose Your Service Package")
+    st.caption("Select the tier that best fits your needs. All prices are estimates and can be adjusted.")
+
+    default_prices = {
+        "break_even": {"price": 507, "margin": 12, "description": "Basic cleaning - covers our costs only"},
+        "sweet_spot": {"price": 596, "margin": 22, "description": "Standard cleaning - best value, recommended"},
+        "fair_market": {"price": 657, "margin": 32, "description": "Premium cleaning - extra attention to detail"},
+        "premium": {"price": 746, "margin": 45, "description": "Deluxe cleaning - rush service, highest priority"},
+    }
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        st.markdown("#### 📉 BREAK EVEN")
+        break_even_price = st.number_input("Price", min_value=0, value=default_prices["break_even"]["price"], step=10, key="be_price")
+        st.caption(f"{default_prices['break_even']['margin']}% margin")
+        st.caption("⚠️ No profit - just costs")
+
+    with col2:
+        st.markdown("#### 🎯 SWEET SPOT")
+        sweet_spot_price = st.number_input("Price", min_value=0, value=default_prices["sweet_spot"]["price"], step=10, key="ss_price")
+        st.caption(f"{default_prices['sweet_spot']['margin']}% margin")
+        st.caption("✅ RECOMMENDED")
+
+    with col3:
+        st.markdown("#### 💰 FAIR MARKET")
+        fair_market_price = st.number_input("Price", min_value=0, value=default_prices["fair_market"]["price"], step=10, key="fm_price")
+        st.caption(f"{default_prices['fair_market']['margin']}% margin")
+        st.caption("📊 Competitive")
+
+    with col4:
+        st.markdown("#### ⭐ PREMIUM")
+        premium_price = st.number_input("Price", min_value=0, value=default_prices["premium"]["price"], step=10, key="pr_price")
+        st.caption(f"{default_prices['premium']['margin']}% margin")
+        st.caption("⚡ Rush/Emergency")
+
+    price_tiers = {
+        "break_even": break_even_price,
+        "sweet_spot": sweet_spot_price,
+        "fair_market": fair_market_price,
+        "premium": premium_price,
+    }
+
+    tier_map = {
+        "📉 Break Even - Just covering costs": "break_even",
+        "🎯 Sweet Spot - Best value (RECOMMENDED)": "sweet_spot",
+        "💰 Fair Market - Premium service": "fair_market",
+        "⭐ Premium - Deluxe/Rush service": "premium",
+    }
+
+    selected_tier_display = st.radio(
+        "**Select your preferred package:**",
+        options=list(tier_map.keys()),
+        index=list(tier_map.keys()).index(
+            next((label for label, key in tier_map.items() if key == st.session_state.proposal_data.get("selected_tier", "sweet_spot")),
+                 "🎯 Sweet Spot - Best value (RECOMMENDED)")
+        ),
+        horizontal=True,
+    )
+
+    selected_tier = tier_map[selected_tier_display]
+    st.session_state.proposal_data["selected_tier"] = selected_tier
+
+    st.markdown("---")
+    st.info(f"""
+    **You selected: {selected_tier_display}**
+    - **Price:** ${price_tiers[selected_tier]:,}
+    - **Margin:** {default_prices[selected_tier]['margin']}%
+    - **Includes:** {default_prices[selected_tier]['description']}
+    """)
+
+    with st.expander("💰 Custom Price Adjustment (Optional)"):
+        st.markdown("Need a different price? You can set a custom amount below.")
+        custom_price = st.number_input("Custom Price ($)", min_value=0, value=price_tiers[selected_tier], step=25, key="custom_price")
+        use_custom = st.checkbox("Use this custom price instead of the tier price")
+
+        if use_custom:
+            final_price = custom_price
+            st.success(f"✅ Using custom price: ${custom_price:,}")
+        else:
+            final_price = price_tiers[selected_tier]
+            st.info(f"Using standard tier price: ${final_price:,}")
+
+        st.session_state.proposal_data["custom_price"] = custom_price if use_custom else None
+
+    with st.expander("📋 Services to Include / Exclude", expanded=True):
+        st.markdown("#### ✅ Included Services (check what's included)")
+        col1, col2 = st.columns(2)
+
+        with col1:
+            include_vacuum = st.checkbox("Vacuum all carpets and rugs", value=True)
+            include_mop = st.checkbox("Mop all hard floors", value=True)
+            include_dust = st.checkbox("Dust all surfaces", value=True)
+            include_trash = st.checkbox("Empty all trash and recycling", value=True)
+            include_restrooms = st.checkbox("Clean and sanitize restrooms", value=True)
+            include_breakroom = st.checkbox("Clean breakroom/kitchen", value=True)
+
+        with col2:
+            include_windows = st.checkbox("Interior window cleaning", value=False)
+            include_carpet_clean = st.checkbox("Deep carpet cleaning", value=False)
+            include_disinfection = st.checkbox("Disinfection services", value=False)
+            include_outside = st.checkbox("Outside entry cleaning", value=False)
+            include_supplies = st.checkbox("Supplies included", value=True)
+            include_training = st.checkbox("Eco-friendly products", value=False)
+
+        st.markdown("#### ❌ Excluded Services (items NOT included)")
+        exclude_windows = st.checkbox("Exterior window cleaning")
+        exclude_high_dust = st.checkbox("High dusting (ceilings, fans)")
+        exclude_pressure = st.checkbox("Pressure washing")
+        exclude_special = st.checkbox("Special event cleanup")
+
+        included_services = []
+        if include_vacuum: included_services.append("Vacuum all carpets and rugs")
+        if include_mop: included_services.append("Mop all hard floors")
+        if include_dust: included_services.append("Dust all surfaces")
+        if include_trash: included_services.append("Empty all trash and recycling")
+        if include_restrooms: included_services.append("Clean and sanitize restrooms")
+        if include_breakroom: included_services.append("Clean breakroom/kitchen")
+        if include_windows: included_services.append("Interior window cleaning")
+        if include_carpet_clean: included_services.append("Deep carpet cleaning")
+        if include_disinfection: included_services.append("Disinfection services")
+        if include_outside: included_services.append("Outside entry cleaning")
+        if include_supplies: included_services.append("All cleaning supplies provided")
+        if include_training: included_services.append("Eco-friendly cleaning products")
+
+        excluded_services = []
+        if exclude_windows: excluded_services.append("Exterior window cleaning")
+        if exclude_high_dust: excluded_services.append("High dusting (ceilings, fans)")
+        if exclude_pressure: excluded_services.append("Pressure washing")
+        if exclude_special: excluded_services.append("Special event cleanup")
+
+        st.session_state.proposal_data["included_services"] = included_services
+        st.session_state.proposal_data["excluded_services"] = excluded_services
+
+    with st.expander("📝 Special Instructions & Validity"):
+        special_notes = st.text_area(
+            "Special notes or instructions for the client",
+            value=st.session_state.proposal_data.get("special_notes", ""),
+            height=100,
+            placeholder="e.g., Price valid for 30 days, after-hours access required, etc.",
+        )
+
+        col1, col2 = st.columns(2)
+        with col1:
+            valid_until = st.date_input(
+                "Proposal Valid Until",
+                value=datetime.strptime(st.session_state.proposal_data.get("valid_until", (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")), "%Y-%m-%d"),
+            )
+        with col2:
+            payment_terms = st.selectbox("Payment Terms", ["Due upon receipt", "Net 15", "Net 30", "Net 60"])
+
+        st.session_state.proposal_data["special_notes"] = special_notes
+        st.session_state.proposal_data["valid_until"] = valid_until.strftime("%Y-%m-%d")
+
+    st.markdown("---")
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        generate_btn = st.button("📄 Generate Professional Proposal", use_container_width=True, type="primary")
+
+    if generate_btn:
+        if not client_name:
+            st.error("Please enter client name")
+        else:
+            proposal_date = datetime.now().strftime("%B %d, %Y")
+            valid_date = valid_until.strftime("%B %d, %Y")
+            proposal_html = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                <title>Cleaning Proposal for {client_name}</title>
+                <style>
+                    body {{
+                        font-family: Arial, sans-serif;
+                        line-height: 1.6;
+                        color: #333;
+                        max-width: 800px;
+                        margin: 0 auto;
+                        padding: 20px;
+                    }}
+                    .header {{
+                        text-align: center;
+                        border-bottom: 3px solid #10b981;
+                        padding-bottom: 20px;
+                        margin-bottom: 30px;
+                    }}
+                    .header h1 {{
+                        color: #1e3a5f;
+                        margin: 0;
+                    }}
+                    .price-box {{
+                        text-align: center;
+                        background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+                        color: white;
+                        padding: 30px;
+                        border-radius: 16px;
+                        margin: 20px 0;
+                    }}
+                    .price-box h2 {{
+                        font-size: 48px;
+                        margin: 0;
+                    }}
+                    .price-box p {{
+                        margin: 5px 0;
+                    }}
+                    .section {{
+                        background: #f8f9fa;
+                        padding: 20px;
+                        border-radius: 12px;
+                        margin: 20px 0;
+                    }}
+                    .section h3 {{
+                        color: #1e3a5f;
+                        margin-top: 0;
+                        border-left: 4px solid #10b981;
+                        padding-left: 15px;
+                    }}
+                    .service-list {{
+                        list-style: none;
+                        padding: 0;
+                    }}
+                    .service-list li {{
+                        padding: 8px 0;
+                        border-bottom: 1px solid #e2e8f0;
+                    }}
+                    .service-list li:before {{
+                        content: "✅ ";
+                        color: #10b981;
+                    }}
+                    .excluded-list li:before {{
+                        content: "❌ ";
+                        color: #ef4444;
+                    }}
+                    .footer {{
+                        text-align: center;
+                        font-size: 12px;
+                        color: #666;
+                        margin-top: 40px;
+                        padding-top: 20px;
+                        border-top: 1px solid #e2e8f0;
+                    }}
+                    .tier-badge {{
+                        display: inline-block;
+                        background: #1e3a5f;
+                        color: white;
+                        padding: 5px 15px;
+                        border-radius: 20px;
+                        font-size: 14px;
+                        margin-bottom: 15px;
+                    }}
+                    .signature-line {{
+                        margin-top: 40px;
+                        display: flex;
+                        justify-content: space-between;
+                    }}
+                    .signature {{
+                        border-top: 1px solid #333;
+                        width: 250px;
+                        padding-top: 10px;
+                        text-align: center;
+                    }}
+                </style>
+            </head>
+            <body>
+                <div class="header">
+                    <h1>Commercial Cleaning Proposal</h1>
+                    <p>Prepared for: <strong>{client_name}</strong></p>
+                    <p>Date: {proposal_date}</p>
+                </div>
+                
+                <div class="price-box">
+                    <div class="tier-badge">{selected_tier_display}</div>
+                    <h2>${final_price:,}</h2>
+                    <p>per visit | plus applicable taxes</p>
+                    <p><small>Price valid until {valid_date}</small></p>
+                </div>
+                
+                <div class="section">
+                    <h3>🏢 Property Information</h3>
+                    <p><strong>Property Type:</strong> {property_type}</p>
+                    <p><strong>Address:</strong><br>{property_address if property_address else "To be confirmed"}</p>
+                </div>
+                
+                <div class="section">
+                    <h3>✅ Included Services</h3>
+                    <ul class="service-list">
+                        {"".join([f"<li>{service}</li>" for service in included_services])}
+                    </ul>
+                </div>
+                
+                <div class="section">
+                    <h3>❌ Not Included (Available for additional fee)</h3>
+                    <ul class="service-list excluded-list">
+                        {"".join([f"<li>{service}</li>" for service in excluded_services]) if excluded_services else "<li>No exclusions specified - all standard services included</li>"}
+                    </ul>
+                </div>
+                
+                <div class="section">
+                    <h3>📋 Terms & Conditions</h3>
+                    <ul>
+                        <li><strong>Payment Terms:</strong> {payment_terms}</li>
+                        <li><strong>Valid Until:</strong> {valid_date}</li>
+                        <li><strong>Cancellation Policy:</strong> 24 hours notice required</li>
+                        <li><strong>Access Requirements:</strong> Keys or access code must be provided</li>
+                    </ul>
+                    {f"<p><strong>Special Notes:</strong><br>{special_notes}</p>" if special_notes else ""}
+                </div>
+                
+                <div class="signature-line">
+                    <div>
+                        <p><strong>Client Signature:</strong></p>
+                        <div class="signature">_________________________</div>
+                        <p>Date: _________</p>
+                    </div>
+                    <div>
+                        <p><strong>Provider Signature:</strong></p>
+                        <div class="signature">_________________________</div>
+                        <p>Date: _________</p>
+                    </div>
+                </div>
+                
+                <div class="footer">
+                    <p>{business_name} | Professional Commercial Cleaning</p>
+                    <p>This proposal is an estimate and may be adjusted after a formal on-site inspection.</p>
+                </div>
+            </body>
+            </html>
+            """
+
+            proposal_text = f"""
+            COMMERCIAL CLEANING PROPOSAL
+            ================================
+            
+            Client: {client_name}
+            Date: {proposal_date}
+            
+            SELECTED PACKAGE: {selected_tier_display}
+            TOTAL PRICE: ${final_price:,} per visit (plus tax)
+            
+            INCLUDED SERVICES:
+            {chr(10).join([f"✓ {service}" for service in included_services])}
+            
+            NOT INCLUDED:
+            {chr(10).join([f"✗ {service}" for service in excluded_services]) if excluded_services else "All standard services included"}
+            
+            TERMS:
+            - Payment Terms: {payment_terms}
+            - Valid Until: {valid_date}
+            - 24 hours cancellation notice required
+            
+            {f"SPECIAL NOTES: {special_notes}" if special_notes else ""}
+            
+            To accept this proposal, please reply to this email or sign the attached document.
+            
+            {business_name}
+            """
+
+            st.session_state.generated_proposal_html = proposal_html
+            st.session_state.generated_proposal_text = proposal_text
+            st.session_state.generated_proposal_price = final_price
+            st.session_state.generated_proposal_tier = selected_tier_display
+
+    if 'generated_proposal_html' in st.session_state:
+        st.markdown("---")
+        st.markdown("### 📄 Your Proposal is Ready")
+
+        tab1, tab2, tab3 = st.tabs(["📋 Preview", "📧 Email to Client", "💾 Save/Export"])
+
+        with tab1:
+            st.components.v1.html(st.session_state.generated_proposal_html, height=800, scrolling=True)
+            col1, col2 = st.columns(2)
+            with col1:
+                st.download_button(
+                    label="📥 Download as HTML",
+                    data=st.session_state.generated_proposal_html,
+                    file_name=f"Proposal_{client_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.html",
+                    mime="text/html",
+                    use_container_width=True,
+                )
+            with col2:
+                st.download_button(
+                    label="📥 Download as Text",
+                    data=st.session_state.generated_proposal_text,
+                    file_name=f"Proposal_{client_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.txt",
+                    mime="text/plain",
+                    use_container_width=True,
+                )
+
+        with tab2:
+            st.markdown("#### Send Proposal via Email")
+            email_to = st.text_input("Client Email", value=client_email)
+            email_subject = st.text_input("Subject", value=f"Cleaning Proposal from {business_name}")
+            email_message = st.text_area(
+                "Personal Message (optional)",
+                value=(
+                    f"Dear {client_name},\n\nPlease find attached your cleaning proposal. "
+                    f"The selected package is {st.session_state.generated_proposal_tier} at ${st.session_state.generated_proposal_price:,} per visit.\n\n"
+                    f"Let me know if you have any questions!\n\nBest regards,\n{business_name}"
+                ),
+            )
+
+            if st.button("📧 Send Proposal to Client", use_container_width=True):
+                if email_to:
+                    success = send_email(
+                        company_id,
+                        email_to,
+                        email_subject,
+                        email_message + "\n\n" + st.session_state.generated_proposal_text,
+                        st.session_state.generated_proposal_html,
+                    )
+
+                    if success:
+                        st.success(f"✅ Proposal sent to {email_to}")
+                    else:
+                        st.error("❌ Failed to send. Check SMTP settings.")
+                else:
+                    st.warning("Please enter client email address")
+
+        with tab3:
+            st.markdown("#### Save to Records")
+            if st.button("💾 Save Proposal to Database", use_container_width=True):
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                c.execute('''CREATE TABLE IF NOT EXISTS proposals (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    company_id INTEGER,
+                    client_name TEXT,
+                    client_email TEXT,
+                    selected_tier TEXT,
+                    price REAL,
+                    proposal_html TEXT,
+                    created_at DATETIME,
+                    status TEXT DEFAULT 'sent',
+                    FOREIGN KEY (company_id) REFERENCES companies(id)
+                )''')
+                c.execute("""
+                    INSERT INTO proposals (company_id, client_name, client_email, selected_tier, price, proposal_html, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    company_id,
+                    client_name,
+                    client_email,
+                    selected_tier_display,
+                    final_price,
+                    st.session_state.generated_proposal_html,
+                    datetime.now().isoformat(),
+                ))
+                conn.commit()
+                conn.close()
+                st.success("✅ Proposal saved to your records!")
+
 
 def quick_job_page():
     if st.button("← Back"):
@@ -6189,6 +6691,7 @@ def main():
                 "setup_2fa": setup_2fa_page,
                 "dashboard": dashboard,
                 "estimate": estimate_page,
+                "proposal": generate_customer_proposal,
                 "quick": quick_job_page,
                 "clients": clients_page,
                 "workers": workers_page,
