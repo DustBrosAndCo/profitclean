@@ -18,6 +18,8 @@ import secrets
 import re
 import qrcode
 import pyotp
+import urllib.request
+from urllib.error import HTTPError, URLError
 from io import BytesIO
 import base64
 from datetime import datetime, date, timedelta
@@ -3079,6 +3081,7 @@ def dashboard():
             ("⚙️ Settings", "settings"),
             ("✏️ Edit Profile", "edit_profile"),
             ("📜 Terms of Service", "terms"),
+            ("🧪 Test Approval Link", "test_approval"),
         ]
         effective_role = get_effective_user()['role'] if get_effective_user() else user['role']
         if effective_role in ['super_admin', 'support_staff']:
@@ -3128,6 +3131,78 @@ def dashboard():
         st.info("No upcoming jobs scheduled")
     
     st.info("Use sidebar to navigate.")
+
+
+def test_approval_link():
+    """TEST FUNCTION - Verify approval link generation and routing"""
+    st.markdown("### 🧪 Test Approval Link System")
+    st.caption("This is a TEST - No changes will be made to your live data")
+
+    test_estimate_id = 999
+    test_token = secrets.token_hex(16)
+
+    local_link = f"http://localhost:8501/approve?estimate_id={test_estimate_id}&token={test_token}"
+    cloud_link = f"https://profitclean.streamlit.app/approve?estimate_id={test_estimate_id}&token={test_token}"
+
+    st.markdown("### 🔗 Test Links Generated")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("#### Local Test Link")
+        st.code(local_link, language="text")
+        if st.button("📋 Copy Local Link", key="copy_local"):
+            st.success("Copied! Open in a new browser tab")
+
+    with col2:
+        st.markdown("#### Cloud Test Link (if deployed)")
+        st.code(cloud_link, language="text")
+        if st.button("📋 Copy Cloud Link", key="copy_cloud"):
+            st.success("Copied! Open in a new browser tab")
+
+    st.markdown("---")
+    st.markdown("### 📋 Instructions")
+    st.markdown("""
+    1. Copy the **Local Test Link** above
+    2. Open a **new incognito/private browser window**
+    3. Paste the link and press Enter
+    4. See what happens:
+       - ✅ **If it shows "Estimate not found"** - Good! Routing works
+       - ❌ **If it shows "Page not found"** - Need to add the approval page
+       - 🔒 **If security warning appears** - Certificate issue (normal for localhost)
+
+    **Current Behavior to Expect:**
+    - Localhost will show a security warning (normal - click "Proceed anyway")
+    - You'll likely get a "Page not found" because the /approve route doesn't exist yet
+    """)
+
+    st.markdown("---")
+    st.markdown("### 📧 Test Email Content")
+    st.markdown("**Current approval link in emails:**")
+    st.code("https://app.profitclean.com/approve/{estimate_id}/{token}", language="text")
+    st.warning("⚠️ This domain (app.profitclean.com) does NOT exist! This is why clients get errors.")
+
+    st.markdown("**Should be changed to:**")
+    st.code("http://localhost:8501/approve?estimate_id={estimate_id}&token={token}", language="text")
+    st.success("This is the fix we'll make after testing")
+
+    st.markdown("---")
+    st.markdown("### 🔍 Test Current Route")
+
+    try:
+        request = urllib.request.Request("http://localhost:8501/approve", method="GET")
+        with urllib.request.urlopen(request, timeout=2) as response:
+            status_code = response.getcode()
+            if status_code == 200:
+                st.success("✅ The /approve route EXISTS")
+            else:
+                st.error(f"❌ The /approve route returned status {status_code}")
+    except HTTPError as e:
+        st.error(f"❌ The /approve route returned status {e.code}")
+    except URLError:
+        st.warning("⚠️ Cannot test - Streamlit app not running on port 8501")
+    except Exception as e:
+        st.error(f"Error: {e}")
+
 
 def estimate_page():
     if st.button("← Back"):
@@ -6969,6 +7044,7 @@ def main():
                 "support": support_page,
                 "settings": settings_page,
                 "terms": terms_page,
+                "test_approval": test_approval_link,
                 "internal_pricing": internal_pricing_dashboard,
                 "admin_companies": admin_companies_page,
             }
