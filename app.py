@@ -1244,27 +1244,28 @@ def get_current_user_company():
     return company_id
 
 def create_company(company_name, subdomain, owner_email, owner_username, owner_password):
+    owner_email = normalize_email(owner_email)
+    owner_username = owner_username.strip()
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT id FROM companies WHERE subdomain = ?", (subdomain,))
     if c.fetchone():
         conn.close()
         return False, "Subdomain already taken"
-    c.execute("SELECT id FROM users WHERE email = ?", (owner_email,))
+    c.execute("SELECT id FROM users WHERE lower(email) = ?", (owner_email,))
     if c.fetchone():
         conn.close()
         return False, "Email already registered"
     c.execute("INSERT INTO companies (name, subdomain, created_at, is_active) VALUES (?,?,?,?)",
               (company_name, subdomain, datetime.now().isoformat(), 1))
     company_id = c.lastrowid
-    salt = bcrypt.gensalt()
-    pwd_hash = bcrypt.hashpw(owner_password.encode('utf-8'), salt)
+    hashed, salt = hash_password(owner_password)
     invite_code = secrets.token_hex(4).upper()
-    owner_role = "super_admin" if owner_email.strip().lower() == "admin@profitclean.com" else "admin"
+    owner_role = "super_admin" if owner_email == "admin@profitclean.com" else "admin"
     c.execute("""
         INSERT INTO users (username, email, password_hash, salt, role, company_id, can_manage_workers, is_active, approval_status, created_at, hire_date, invite_code)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (owner_username, owner_email, pwd_hash.decode('utf-8'), salt.decode('utf-8'), owner_role, company_id, 1, 1, "approved", datetime.now().isoformat(), datetime.now().isoformat(), invite_code))
+    """, (owner_username, owner_email, hashed, salt, owner_role, company_id, 1, 1, "approved", datetime.now().isoformat(), datetime.now().isoformat(), invite_code))
     owner_id = c.lastrowid
     c.execute("UPDATE companies SET owner_id = ? WHERE id = ?", (owner_id, company_id))
     c.execute("INSERT INTO business_profile (company_id, business_name, phone, email, hourly_wage, profit_target, min_job_fee, home_city, per_mile_rate, sales_tax_rate, setup_complete) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -1274,17 +1275,18 @@ def create_company(company_name, subdomain, owner_email, owner_username, owner_p
     return True, company_id
 
 def create_support_staff(email, username, password):
+    email = normalize_email(email)
+    username = username.strip()
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT id FROM users WHERE email = ?", (email,))
+    c.execute("SELECT id FROM users WHERE lower(email) = ?", (email,))
     if c.fetchone():
         conn.close()
         return False, "Email already exists"
-    salt = bcrypt.gensalt()
-    pwd_hash = bcrypt.hashpw(password.encode('utf-8'), salt)
+    hashed, salt = hash_password(password)
     invite_code = secrets.token_hex(4).upper()
     c.execute("INSERT INTO users (username, email, password_hash, salt, role, company_id, can_manage_workers, is_active, approval_status, created_at, hire_date, invite_code) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-              (username, email, pwd_hash.decode('utf-8'), salt.decode('utf-8'), "support_staff", 1, 0, 1, "approved", datetime.now().isoformat(), datetime.now().isoformat(), invite_code))
+              (username, email, hashed, salt, "support_staff", 1, 0, 1, "approved", datetime.now().isoformat(), datetime.now().isoformat(), invite_code))
     user_id = c.lastrowid
     conn.commit()
     conn.close()
@@ -1349,17 +1351,68 @@ def user_belongs_to_hierarchy(current_user_id, target_user_id):
     return target_user_id in get_descendant_user_ids(current_user_id)
 
 
+def normalize_email(email):
+    return email.strip().lower() if isinstance(email, str) else email
+
+
 # ============================================================
 # SECURITY FUNCTIONS
 # ============================================================
 
 def hash_password(pwd):
-    salt = bcrypt.gensalt()
+    salt = bcrypt.gensalt(rounds=12)
     hashed = bcrypt.hashpw(pwd.encode('utf-8'), salt)
     return hashed.decode('utf-8'), salt.decode('utf-8')
 
 def verify_password(pwd, hashed):
     return bcrypt.checkpw(pwd.encode('utf-8'), hashed.encode('utf-8'))
+
+def check_user_password_hash(user_id):
+    """Debug function to inspect stored password hashes."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, username, email, password_hash FROM users WHERE id = ?", (user_id,))
+    user = c.fetchone()
+    conn.close()
+
+    if user:
+        print(f"User ID: {user[0]}")
+        print(f"Username: {user[1]}")
+        print(f"Email: {user[2]}")
+        print(f"Hash length: {len(user[3]) if user[3] else 0}")
+        print(f"Hash prefix: {user[3][:30] if user[3] else 'None'}...")
+        if user[3] and user[3].startswith('$2b$'):
+            print("✅ Hash format looks valid")
+        else:
+            print("❌ Hash format is INVALID - does not start with $2b$")
+    else:
+        print("User not found")
+
+
+def reset_user_password(email, new_password, reset_code=None):
+    """Reset user password and verify new hash."""
+    valid, msg = validate_password_strength(new_password)
+    if not valid:
+        return False, msg
+
+    email = normalize_email(email)
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, username FROM users WHERE lower(email) = ?", (email,))
+    user = c.fetchone()
+
+    if not user:
+        conn.close()
+        return False, "User not found"
+
+    user_id, username = user
+    hashed, salt = hash_password(new_password)
+    c.execute("UPDATE users SET password_hash = ?, salt = ? WHERE id = ?", (hashed, salt, user_id))
+    conn.commit()
+    conn.close()
+    log_audit(user_id, "password_reset", f"Password reset for user {username}")
+    return True, "Password reset successfully"
+
 
 def generate_session_token():
     return secrets.token_urlsafe(32)
@@ -1961,6 +2014,8 @@ def calculate_price_with_tiers(city, prop_type, sqft, bedrooms, bathrooms, freq,
 # ============================================================
 
 def create_user(username, email, password, role, company_id, manager_id=None, supervisor_id=None, ip_address=None):
+    email = normalize_email(email)
+    username = username.strip()
     valid, msg = validate_password_strength(password)
     if not valid:
         return False, msg
@@ -2043,12 +2098,18 @@ def deny_worker_request(request_id, company_id):
 # ============================================================
 
 def authenticate_user(email, password, ip_address=None):
+    email = normalize_email(email)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT id, username, password_hash, role, company_id, manager_id, supervisor_id, login_attempts, locked_until, is_active, approval_status, totp_enabled FROM users WHERE email = ?", (email,))
+    # Debug: Print what we're looking for
+    print(f"DEBUG: Attempting login for email: {email}")
+    c.execute("SELECT id, username, password_hash, role, company_id, manager_id, supervisor_id, login_attempts, locked_until, is_active, approval_status, totp_enabled FROM users WHERE lower(email) = ?", (email,))
     user = c.fetchone()
     if user:
         uid, uname, hashed, role, company_id, mgr_id, sup_id, attempts, locked, active, approval, totp_enabled = user
+        print(f"DEBUG: User found - ID: {uid}, Active: {active}, Approval: {approval}")
+        print(f"DEBUG: Stored hash: {hashed[:20] if hashed else 'None'}...")
+        print("DEBUG: Attempting password verification...")
         if not active or approval != 'approved':
             conn.close()
             return False, "Account not active or not approved."
@@ -2062,7 +2123,9 @@ def authenticate_user(email, password, ip_address=None):
         if locked and datetime.fromisoformat(locked) > datetime.now():
             conn.close()
             return False, "Account locked. Try later."
-        if verify_password(password, hashed):
+        password_valid = verify_password(password, hashed)
+        print(f"DEBUG: Password valid: {password_valid}")
+        if password_valid:
             c.execute("UPDATE users SET login_attempts = 0, locked_until = NULL, last_login = ? WHERE id = ?", (datetime.now().isoformat(), uid))
             token = generate_session_token()
             expires = datetime.now() + timedelta(days=SESSION_EXPIRY_DAYS)
@@ -2080,7 +2143,10 @@ def authenticate_user(email, password, ip_address=None):
             conn.commit()
             log_audit(uid, "login_failed", f"Failed login for {uname}", ip_address)
             conn.close()
+            print(f"DEBUG: Password mismatch for user {uname}")
             return False, f"Invalid credentials. {MAX_LOGIN_ATTEMPTS - new_attempts} attempts left."
+    else:
+        print(f"DEBUG: No user found with email: {email}")
     conn.close()
     return False, "User not found"
 
@@ -2783,7 +2849,32 @@ def login_page():
             st.rerun()
     with col2:
         if st.button("🔑 Forgot Password?"):
-            st.info("Contact your company administrator.")
+            st.session_state.page = "forgot_password"
+            st.rerun()
+
+def forgot_password_page():
+    st.markdown("### 🔑 Forgot Password")
+    st.caption("Enter your email to reset your password")
+
+    with st.form("forgot_password"):
+        email = st.text_input("Email Address")
+        if st.form_submit_button("Reset Password"):
+            if not email:
+                st.warning("Please enter your email address")
+            else:
+                temp_password = secrets.token_hex(4)
+                success, message = reset_user_password(email, temp_password)
+                if success:
+                    st.success("Password reset successfully!")
+                    st.info("A temporary password has been generated below. Log in with this password and change it immediately.")
+                    st.code(temp_password)
+                else:
+                    st.error(message)
+
+    if st.button("← Back to Login"):
+        st.session_state.page = "login"
+        st.rerun()
+
 
 def two_factor_page():
     st.markdown("### 🔐 Two‑Factor Authentication")
@@ -7017,6 +7108,7 @@ def main():
         else:
             pages = {
                 "login": login_page,
+                "forgot_password": forgot_password_page,
                 "two_factor": two_factor_page,
                 "create_account": create_account_page,
                 "edit_profile": edit_profile_page,
