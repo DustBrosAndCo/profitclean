@@ -20,8 +20,10 @@ import qrcode
 import pyotp
 import urllib.request
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from io import BytesIO
 import base64
+import hashlib
 from datetime import datetime, date, timedelta
 from functools import wraps
 import smtplib
@@ -34,6 +36,7 @@ import shutil
 from typing import Dict, Any, Optional, List, Tuple
 from dataclasses import dataclass, asdict
 from enum import Enum
+from integrations.calendly import CalendlyIntegration
 
 LAST_EMAIL_ERROR = None
 
@@ -244,6 +247,37 @@ st.markdown("""
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "profitclean.db")
 
+AVAILABLE_INTEGRATIONS = {
+    "calendly": {
+        "name": "Calendly",
+        "icon": "📅",
+        "description": "Auto-import booking details from Calendly",
+        "free": True,
+        "requires_oauth": True
+    },
+    "acuity": {
+        "name": "Acuity Scheduling",
+        "icon": "📆",
+        "description": "Sync appointments from Acuity",
+        "free": True,
+        "requires_oauth": True
+    },
+    "google_calendar": {
+        "name": "Google Calendar",
+        "icon": "📅",
+        "description": "Two-way calendar sync",
+        "free": True,
+        "requires_oauth": True
+    },
+    "stripe": {
+        "name": "Stripe",
+        "icon": "💳",
+        "description": "Process payments & invoices",
+        "free": False,
+        "requires_oauth": True
+    }
+}
+
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -452,6 +486,51 @@ def init_db():
         logo_url TEXT,
         business_hours TEXT,
         cancellation_policy TEXT,
+        FOREIGN KEY (company_id) REFERENCES companies(id)
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS company_integrations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company_id INTEGER NOT NULL,
+        integration_type TEXT NOT NULL,
+        enabled INTEGER DEFAULT 0,
+        access_token TEXT,
+        refresh_token TEXT,
+        token_expires DATETIME,
+        settings TEXT,
+        last_sync DATETIME,
+        created_at DATETIME,
+        updated_at DATETIME,
+        FOREIGN KEY (company_id) REFERENCES companies(id),
+        UNIQUE(company_id, integration_type)
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS external_bookings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company_id INTEGER NOT NULL,
+        integration_type TEXT NOT NULL,
+        external_id TEXT,
+        hashed_email TEXT,
+        invitee_name TEXT,
+        start_time DATETIME,
+        end_time DATETIME,
+        service_type TEXT,
+        status TEXT,
+        raw_questions TEXT,
+        imported_at DATETIME,
+        processed INTEGER DEFAULT 0,
+        created_at DATETIME,
+        FOREIGN KEY (company_id) REFERENCES companies(id)
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS integration_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company_id INTEGER,
+        integration_type TEXT,
+        action TEXT,
+        status TEXT,
+        message TEXT,
+        created_at DATETIME,
         FOREIGN KEY (company_id) REFERENCES companies(id)
     )''')
 
@@ -920,6 +999,92 @@ def migrate_database():
                 print(f"Could not add badge_icon column to worker_badges: {e}")
     conn.commit()
     conn.close()
+
+    # Ensure integration tables exist for older databases and add missing company_integrations columns
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='company_integrations'")
+    if not c.fetchone():
+        c.execute('''CREATE TABLE IF NOT EXISTS company_integrations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_id INTEGER NOT NULL,
+            integration_type TEXT NOT NULL,
+            enabled INTEGER DEFAULT 0,
+            access_token TEXT,
+            refresh_token TEXT,
+            token_expires DATETIME,
+            settings TEXT,
+            last_sync DATETIME,
+            created_at DATETIME,
+            updated_at DATETIME,
+            FOREIGN KEY (company_id) REFERENCES companies(id),
+            UNIQUE(company_id, integration_type)
+        )''')
+        print('Created company_integrations table')
+
+    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='external_bookings'")
+    if not c.fetchone():
+        c.execute('''CREATE TABLE IF NOT EXISTS external_bookings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_id INTEGER NOT NULL,
+            integration_type TEXT NOT NULL,
+            external_id TEXT,
+            hashed_email TEXT,
+            invitee_name TEXT,
+            start_time DATETIME,
+            end_time DATETIME,
+            service_type TEXT,
+            status TEXT,
+            raw_questions TEXT,
+            imported_at DATETIME,
+            processed INTEGER DEFAULT 0,
+            created_at DATETIME,
+            FOREIGN KEY (company_id) REFERENCES companies(id)
+        )''')
+        print('Created external_bookings table')
+
+    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='integration_logs'")
+    if not c.fetchone():
+        c.execute('''CREATE TABLE IF NOT EXISTS integration_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_id INTEGER,
+            integration_type TEXT,
+            action TEXT,
+            status TEXT,
+            message TEXT,
+            created_at DATETIME,
+            FOREIGN KEY (company_id) REFERENCES companies(id)
+        )''')
+        print('Created integration_logs table')
+
+    c.execute("PRAGMA table_info(company_integrations)")
+    existing_columns = [row[1] for row in c.fetchall()]
+    if 'token_expires' not in existing_columns:
+        try:
+            c.execute("ALTER TABLE company_integrations ADD COLUMN token_expires DATETIME")
+            print('Added token_expires column to company_integrations')
+        except sqlite3.OperationalError:
+            pass
+    if 'settings' not in existing_columns:
+        try:
+            c.execute("ALTER TABLE company_integrations ADD COLUMN settings TEXT")
+            print('Added settings column to company_integrations')
+        except sqlite3.OperationalError:
+            pass
+    if 'last_sync' not in existing_columns:
+        try:
+            c.execute("ALTER TABLE company_integrations ADD COLUMN last_sync DATETIME")
+            print('Added last_sync column to company_integrations')
+        except sqlite3.OperationalError:
+            pass
+    if 'updated_at' not in existing_columns:
+        try:
+            c.execute("ALTER TABLE company_integrations ADD COLUMN updated_at DATETIME")
+            print('Added updated_at column to company_integrations')
+        except sqlite3.OperationalError:
+            pass
+    conn.commit()
+    conn.close()
 # ============================================================
 # NOTIFICATION SYSTEM
 # ============================================================
@@ -1242,6 +1407,179 @@ def get_current_user_company():
     if company_id:
         st.session_state.user['company_id'] = company_id
     return company_id
+
+
+def get_company_integration(company_id: int, integration_type: str):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "SELECT id, enabled, access_token, refresh_token, token_expires, settings, last_sync FROM company_integrations WHERE company_id = ? AND integration_type = ?",
+        (company_id, integration_type)
+    )
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "enabled": bool(row[1]),
+        "access_token": row[2],
+        "refresh_token": row[3],
+        "token_expires": row[4],
+        "settings": json.loads(row[5]) if row[5] else {},
+        "last_sync": row[6]
+    }
+
+
+def list_company_integrations(company_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "SELECT integration_type, enabled, settings, last_sync FROM company_integrations WHERE company_id = ?",
+        (company_id,)
+    )
+    rows = c.fetchall()
+    conn.close()
+    return {
+        row[0]: {
+            "enabled": bool(row[1]),
+            "settings": json.loads(row[2]) if row[2] else {},
+            "last_sync": row[3]
+        }
+        for row in rows
+    }
+
+
+def save_company_integration(company_id: int, integration_type: str, enabled: bool = False, access_token: str = None, refresh_token: str = None, token_expires: str = None, settings: dict = None, last_sync: str = None):
+    existing = get_company_integration(company_id, integration_type)
+    now = datetime.now().isoformat()
+    settings_json = json.dumps(settings or {})
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    if existing:
+        c.execute(
+            "UPDATE company_integrations SET enabled = ?, access_token = ?, refresh_token = ?, token_expires = ?, settings = ?, last_sync = ?, updated_at = ? WHERE company_id = ? AND integration_type = ?",
+            (1 if enabled else 0, access_token, refresh_token, token_expires, settings_json, last_sync, now, company_id, integration_type)
+        )
+    else:
+        c.execute(
+            "INSERT INTO company_integrations (company_id, integration_type, enabled, access_token, refresh_token, token_expires, settings, last_sync, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (company_id, integration_type, 1 if enabled else 0, access_token, refresh_token, token_expires, settings_json, last_sync, now, now)
+        )
+    conn.commit()
+    conn.close()
+
+
+def disable_company_integration(company_id: int, integration_type: str):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM company_integrations WHERE company_id = ? AND integration_type = ?", (company_id, integration_type))
+    c.execute("DELETE FROM external_bookings WHERE company_id = ? AND integration_type = ?", (company_id, integration_type))
+    conn.commit()
+    conn.close()
+
+
+def sync_integration(company_id: int, integration_type: str) -> int:
+    if integration_type == "calendly":
+        integration = CalendlyIntegration(company_id)
+        return integration.sync()
+    return 0
+
+
+def integrations_page():
+    if st.button("← Back"):
+        st.session_state.page = "dashboard"
+        st.rerun()
+
+    st.markdown("### 🔌 Integration Hub")
+    st.caption("Connect optional apps for your company. Tokens are stored per company and can be disconnected at any time.")
+
+    company_id = get_current_user_company()
+    if not company_id:
+        st.warning("Unable to determine your company. Please refresh and try again.")
+        return
+
+    company_integrations = list_company_integrations(company_id)
+    cols = st.columns(3)
+    for idx, (key, integration) in enumerate(AVAILABLE_INTEGRATIONS.items()):
+        with cols[idx % 3]:
+            status = company_integrations.get(key, {}).get("enabled", False)
+            last_sync = company_integrations.get(key, {}).get("last_sync")
+            st.markdown(f"### {integration['icon']} {integration['name']}")
+            st.write(integration['description'])
+            st.write(f"**Status:** {'✅ Connected' if status else 'Not connected'}")
+            if last_sync:
+                st.caption(f"Last sync: {last_sync[:16]}")
+
+            if status:
+                if st.button(f"🔄 Sync", key=f"sync_{key}"):
+                    with st.spinner(f"Syncing {integration['name']}..."):
+                        result = sync_integration(company_id, key)
+                        if result > 0:
+                            st.success(f"Synced {result} new bookings!")
+                        else:
+                            st.info("No new bookings found.")
+                        st.rerun()
+                if st.button(f"❌ Disconnect", key=f"disconnect_{key}"):
+                    disable_company_integration(company_id, key)
+                    st.success(f"{integration['name']} disconnected.")
+                    st.rerun()
+            else:
+                if integration['requires_oauth']:
+                    if key == "calendly":
+                        if st.button(f"🔌 Connect {integration['name']}", key=f"connect_{key}"):
+                            st.session_state.page = "integrations_calendly_auth"
+                            st.rerun()
+                    else:
+                        st.info("This integration will be available soon.")
+                else:
+                    st.info("This integration is not available yet.")
+
+
+def calendly_oauth_page():
+    st.markdown("### 🔗 Connect Calendly")
+    st.caption("Authorize Calendly for your company. You will be redirected back after granting access.")
+
+    company_id = get_current_user_company()
+    if not company_id:
+        st.warning("Unable to determine your company. Please refresh and try again.")
+        return
+
+    params = st.experimental_get_query_params()
+    code = params.get("code", [None])[0]
+    state = params.get("state", [None])[0]
+
+    if code and state == "calendly":
+        with st.spinner("Connecting to Calendly..."):
+            integration = CalendlyIntegration(company_id)
+            try:
+                integration.exchange_code_for_token(code)
+                st.success("✅ Successfully connected to Calendly!")
+                st.balloons()
+                st.experimental_set_query_params()
+                st.session_state.page = "integrations"
+                st.rerun()
+            except Exception as e:
+                st.error(f"Failed to connect: {e}")
+                if st.button("← Back to Integration Hub"):
+                    st.session_state.page = "integrations"
+                    st.rerun()
+    else:
+        integration = CalendlyIntegration(company_id)
+        try:
+            auth_url = integration.get_oauth_url()
+            st.markdown(
+                f"<a href=\"{auth_url}\" target=\"_self\" style=\"display:inline-block;padding:10px 18px;border-radius:8px;background:#1f6feb;color:#fff;text-decoration:none;font-weight:600;\">Continue to Calendly</a>",
+                unsafe_allow_html=True,
+            )
+            st.caption("After authorizing, Calendly will redirect you back automatically.")
+        except Exception as e:
+            st.error(f"Unable to start OAuth flow: {e}")
+
+        if st.button("← Back to Integration Hub"):
+            st.session_state.page = "integrations"
+            st.rerun()
+
 
 def create_company(company_name, subdomain, owner_email, owner_username, owner_password):
     owner_email = normalize_email(owner_email)
@@ -3169,6 +3507,7 @@ def dashboard():
             ("📋 Job Templates", "job_templates"),
             ("💾 Backup", "backup"),
             ("🎫 Support", "support"),
+            ("🔌 Integrations", "integrations"),
             ("⚙️ Settings", "settings"),
             ("✏️ Edit Profile", "edit_profile"),
             ("📜 Terms of Service", "terms"),
@@ -6065,6 +6404,7 @@ def settings_page():
     else:
         st.warning("Business profile not found. Please contact support.")
 
+
 def internal_pricing_dashboard():
     """Internal dashboard showing all three calculators"""
     if st.button("← Back to Dashboard"):
@@ -7099,6 +7439,10 @@ def main():
         if "page" not in st.session_state:
             st.session_state.page = "login"
 
+        params = st.experimental_get_query_params()
+        if params.get("code") and params.get("state", [""])[0] == "calendly":
+            st.session_state.page = "integrations_calendly_auth"
+
         if st.session_state.get("client_logged_in", False):
             if st.session_state.page == "client_dashboard":
                 client_dashboard()
@@ -7134,6 +7478,8 @@ def main():
                 "certifications": certifications_page,
                 "backup": backup_page,
                 "support": support_page,
+                "integrations": integrations_page,
+                "integrations_calendly_auth": calendly_oauth_page,
                 "settings": settings_page,
                 "terms": terms_page,
                 "test_approval": test_approval_link,
