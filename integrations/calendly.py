@@ -1,5 +1,6 @@
 import hashlib
 import os
+import sqlite3
 import requests
 from datetime import datetime, timedelta
 from typing import Dict, List
