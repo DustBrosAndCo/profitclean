@@ -24,7 +24,11 @@ class CalendlyIntegration(BaseIntegration):
     def _get_secret(self, key: str) -> str:
         try:
             return __import__("streamlit").secrets[key]
-        except Exception:
+        except KeyError:
+            return os.environ.get(key)
+        except Exception as e:
+            from logger_config import logger
+            logger.warning(f"Failed to read secret {key}: {e}")
             return os.environ.get(key)
 
     def get_integration_type(self) -> str:

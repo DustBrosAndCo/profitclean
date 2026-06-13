@@ -1612,6 +1612,9 @@ def calendly_oauth_page():
         
         📖 See `CALENDLY_SETUP.md` for detailed instructions.
         """)
+        if st.button("← Back to Integration Hub"):
+            st.session_state.page = "integrations"
+            st.rerun()
         return
 
     params = get_query_params_safely()

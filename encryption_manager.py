@@ -16,8 +16,11 @@ class EncryptionManager:
         try:
             key = st.secrets["ENCRYPTION_KEY"]
             return key.encode()
-        except Exception:
+        except KeyError:
             pass
+        except Exception as e:
+            from logger_config import logger
+            logger.warning(f"Failed to read ENCRYPTION_KEY from Streamlit secrets: {e}")
 
         key = os.environ.get("ENCRYPTION_KEY")
         if key:
@@ -28,8 +31,9 @@ class EncryptionManager:
         try:
             with open(".encryption_key", "wb") as f:
                 f.write(key)
-        except Exception:
-            pass
+        except (IOError, OSError) as e:
+            from logger_config import logger
+            logger.warning(f"Failed to write encryption key to file: {e}")
 
         return key
 
