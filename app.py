@@ -25,6 +25,7 @@ from io import BytesIO
 import base64
 import hashlib
 from datetime import datetime, date, timedelta
+from encryption_manager import encryption
 from functools import wraps
 import smtplib
 from email.mime.text import MIMEText
@@ -1420,13 +1421,21 @@ def get_company_integration(company_id: int, integration_type: str):
     conn.close()
     if not row:
         return None
+    settings = json.loads(row[5]) if row[5] else {}
+    # Decrypt any stored client_secret
+    if settings.get("client_secret"):
+        try:
+            settings["client_secret"] = encryption.decrypt(settings["client_secret"])
+        except Exception:
+            # leave as-is if decryption fails
+            pass
     return {
         "id": row[0],
         "enabled": bool(row[1]),
         "access_token": row[2],
         "refresh_token": row[3],
         "token_expires": row[4],
-        "settings": json.loads(row[5]) if row[5] else {},
+        "settings": settings,
         "last_sync": row[6]
     }
 
@@ -1440,20 +1449,33 @@ def list_company_integrations(company_id: int):
     )
     rows = c.fetchall()
     conn.close()
-    return {
-        row[0]: {
+    result = {}
+    for row in rows:
+        settings = json.loads(row[2]) if row[2] else {}
+        if settings.get("client_secret"):
+            try:
+                settings["client_secret"] = encryption.decrypt(settings["client_secret"])
+            except Exception:
+                pass
+        result[row[0]] = {
             "enabled": bool(row[1]),
-            "settings": json.loads(row[2]) if row[2] else {},
+            "settings": settings,
             "last_sync": row[3]
         }
-        for row in rows
-    }
+    return result
 
 
 def save_company_integration(company_id: int, integration_type: str, enabled: bool = False, access_token: str = None, refresh_token: str = None, token_expires: str = None, settings: dict = None, last_sync: str = None):
     existing = get_company_integration(company_id, integration_type)
     now = datetime.now().isoformat()
-    settings_json = json.dumps(settings or {})
+    # Encrypt sensitive settings (client_secret) before persisting
+    settings_to_save = dict(settings or {})
+    if settings_to_save.get("client_secret"):
+        try:
+            settings_to_save["client_secret"] = encryption.encrypt(settings_to_save["client_secret"])
+        except Exception:
+            pass
+    settings_json = json.dumps(settings_to_save)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     if existing:
@@ -1527,6 +1549,21 @@ def integrations_page():
             else:
                 if integration['requires_oauth']:
                     if key == "calendly":
+                        # Allow company admins to provide their own Calendly OAuth app credentials
+                        company_int = get_company_integration(company_id, 'calendly') or {}
+                        settings = company_int.get('settings', {})
+                        user_role = st.session_state.get('user', {}).get('role')
+                        if user_role in (UserRole.SUPER_ADMIN.value, UserRole.ADMIN.value):
+                            with st.expander("Admin: Configure Calendly OAuth app", expanded=False):
+                                cid = st.text_input("Client ID", value=settings.get('client_id', ''), key=f"cal_cid_{company_id}")
+                                csecret = st.text_input("Client Secret", value=settings.get('client_secret', ''), key=f"cal_csecret_{company_id}")
+                                ruri = st.text_input("Redirect URI", value=settings.get('redirect_uri', ''), key=f"cal_ruri_{company_id}")
+                                if st.button("Save OAuth credentials", key=f"save_cal_{company_id}"):
+                                    save_company_integration(company_id, 'calendly', settings={'client_id': cid, 'client_secret': csecret, 'redirect_uri': ruri})
+                                    st.success("Saved Calendly app credentials for this company.")
+                                    st.rerun()
+
+                        # Show connect button to initiate OAuth using company credentials if present
                         if st.button(f"🔌 Connect {integration['name']}", key=f"connect_{key}"):
                             st.session_state.page = "integrations_calendly_auth"
                             st.rerun()

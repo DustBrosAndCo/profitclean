@@ -12,10 +12,13 @@ class CalendlyIntegration(BaseIntegration):
     API_BASE = "https://api.calendly.com"
 
     def __init__(self, company_id: int):
-        self.client_id = self._get_secret("CALENDLY_CLIENT_ID")
-        self.client_secret = self._get_secret("CALENDLY_CLIENT_SECRET")
-        self.redirect_uri = self._get_secret("CALENDLY_REDIRECT_URI")
+        # Initialize base first so company-level settings are loaded into self.settings
         super().__init__(company_id)
+        # Prefer company-specific credentials stored in integration settings
+        self.client_id = self.settings.get("client_id") or self._get_secret("CALENDLY_CLIENT_ID")
+        # client_secret is stored encrypted in settings; it will be decrypted by BaseIntegration loader if present
+        self.client_secret = self.settings.get("client_secret") or self._get_secret("CALENDLY_CLIENT_SECRET")
+        self.redirect_uri = self.settings.get("redirect_uri") or self._get_secret("CALENDLY_REDIRECT_URI")
 
     def _get_secret(self, key: str) -> str:
         try:
