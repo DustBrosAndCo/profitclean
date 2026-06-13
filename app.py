@@ -1545,9 +1545,9 @@ def calendly_oauth_page():
         st.warning("Unable to determine your company. Please refresh and try again.")
         return
 
-    params = st.experimental_get_query_params()
-    code = params.get("code", [None])[0]
-    state = params.get("state", [None])[0]
+    params = get_query_params_safely()
+    code = parse_query_param(params, "code")
+    state = parse_query_param(params, "state")
 
     if code and state == "calendly":
         with st.spinner("Connecting to Calendly..."):
@@ -1556,7 +1556,7 @@ def calendly_oauth_page():
                 integration.exchange_code_for_token(code)
                 st.success("✅ Successfully connected to Calendly!")
                 st.balloons()
-                st.experimental_set_query_params()
+                set_query_params_safely()
                 st.session_state.page = "integrations"
                 st.rerun()
             except Exception as e:
@@ -7436,6 +7436,28 @@ def get_query_params_safely():
     return {}
 
 
+def set_query_params_safely(**kwargs):
+    """Safely set query params in Streamlit."""
+    if hasattr(st, "experimental_set_query_params"):
+        try:
+            st.experimental_set_query_params(**kwargs)
+        except Exception:
+            pass
+    elif hasattr(st, "set_query_params"):
+        try:
+            st.set_query_params(**kwargs)
+        except Exception:
+            pass
+
+
+def parse_query_param(params, key):
+    """Safely parse query param that may be a string or list."""
+    val = params.get(key)
+    if isinstance(val, list):
+        return val[0] if val else None
+    return val
+
+
 def main():
     # First, initialize database and run migrations
     init_db()
@@ -7454,7 +7476,9 @@ def main():
             st.session_state.page = "login"
 
         params = get_query_params_safely()
-        if params.get("code") and params.get("state", [""])[0] == "calendly":
+        code = parse_query_param(params, "code")
+        state = parse_query_param(params, "state")
+        if code and state == "calendly":
             st.session_state.page = "integrations_calendly_auth"
 
         if st.session_state.get("client_logged_in", False):
