@@ -26,6 +26,10 @@ class CalendlyIntegration(BaseIntegration):
     def get_integration_type(self) -> str:
         return "calendly"
 
+    def has_required_credentials(self) -> bool:
+        """Check if Calendly OAuth credentials are configured."""
+        return bool(self.client_id and self.client_secret and self.redirect_uri)
+
     def get_oauth_url(self) -> str:
         if not self.client_id or not self.redirect_uri:
             raise ValueError("Calendly OAuth credentials are not configured.")

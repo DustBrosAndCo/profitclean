@@ -1545,13 +1545,44 @@ def calendly_oauth_page():
         st.warning("Unable to determine your company. Please refresh and try again.")
         return
 
+    integration = CalendlyIntegration(company_id)
+    
+    # Check if credentials are configured
+    if not integration.has_required_credentials():
+        st.error("🔧 Calendly OAuth is not configured")
+        st.info("""
+        **Setup required to enable Calendly integration:**
+        
+        1. **Create a Calendly OAuth Application**
+           - Go to https://calendly.com/integrations/applications
+           - Click "Create New Application"
+           - Fill in app details
+           - Set Redirect URI based on your environment:
+             - Local: `http://localhost:8501`
+             - Production: Your Streamlit Cloud app URL
+           - Copy the Client ID and Secret
+        
+        2. **Add credentials to your environment**
+           - **For local development:** Create `.streamlit/secrets.toml` with:
+             ```
+             CALENDLY_CLIENT_ID = "your_client_id"
+             CALENDLY_CLIENT_SECRET = "your_client_secret"
+             CALENDLY_REDIRECT_URI = "http://localhost:8501"
+             ```
+           - **For Streamlit Cloud:** Add these in Settings → Secrets
+        
+        3. **Restart the app** after adding credentials
+        
+        📖 See `CALENDLY_SETUP.md` for detailed instructions.
+        """)
+        return
+
     params = get_query_params_safely()
     code = parse_query_param(params, "code")
     state = parse_query_param(params, "state")
 
     if code and state == "calendly":
         with st.spinner("Connecting to Calendly..."):
-            integration = CalendlyIntegration(company_id)
             try:
                 integration.exchange_code_for_token(code)
                 st.success("✅ Successfully connected to Calendly!")
@@ -1565,7 +1596,6 @@ def calendly_oauth_page():
                     st.session_state.page = "integrations"
                     st.rerun()
     else:
-        integration = CalendlyIntegration(company_id)
         try:
             auth_url = integration.get_oauth_url()
             st.markdown(

@@ -120,6 +120,10 @@ class BaseIntegration(ABC):
     def refresh_access_token(self) -> bool:
         return False
 
+    def has_required_credentials(self) -> bool:
+        """Override to check if integration has required credentials configured."""
+        return True
+
 
 class IntegrationError(Exception):
     pass
