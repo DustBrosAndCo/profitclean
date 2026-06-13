@@ -7422,6 +7422,20 @@ def admin_companies_page():
 # MAIN ROUTING
 # ============================================================
 
+def get_query_params_safely():
+    if hasattr(st, "experimental_get_query_params"):
+        try:
+            return st.experimental_get_query_params()
+        except Exception:
+            return {}
+    if hasattr(st, "get_query_params"):
+        try:
+            return st.get_query_params()
+        except Exception:
+            return {}
+    return {}
+
+
 def main():
     # First, initialize database and run migrations
     init_db()
@@ -7439,7 +7453,7 @@ def main():
         if "page" not in st.session_state:
             st.session_state.page = "login"
 
-        params = st.experimental_get_query_params()
+        params = get_query_params_safely()
         if params.get("code") and params.get("state", [""])[0] == "calendly":
             st.session_state.page = "integrations_calendly_auth"
 
