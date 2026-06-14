@@ -934,6 +934,32 @@ def init_db():
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
 
+    # Authentication logs for security tracking
+    c.execute('''CREATE TABLE IF NOT EXISTS auth_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        email TEXT,
+        event_type TEXT NOT NULL,
+        status TEXT,
+        ip_address TEXT,
+        user_agent TEXT,
+        error_message TEXT,
+        created_at DATETIME,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+    )''')
+
+    # Password reset tokens
+    c.execute('''CREATE TABLE IF NOT EXISTS password_reset_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        token TEXT NOT NULL UNIQUE,
+        verification_code TEXT,
+        expires_at DATETIME NOT NULL,
+        used BOOLEAN DEFAULT 0,
+        created_at DATETIME,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+    )''')
+
     conn.commit()
     conn.close()
     ensure_default_global_settings()
@@ -1645,6 +1671,44 @@ def send_job_reminder_email(company_id: int, job_id: int, client_email: str, cli
     return send_email(company_id, client_email, subject, body)
 
 
+def send_password_reset_email(email: str, reset_link: str) -> bool:
+    """Send password reset email"""
+    subject = "Reset Your ProfitClean Password"
+    body = f"""
+Dear User,
+
+You requested to reset your password. Click the link below to set a new password:
+
+{reset_link}
+
+This link will expire in 1 hour.
+
+If you did not request this, please ignore this email.
+
+- ProfitClean Team
+"""
+    # Use company_id 1 for system emails
+    return send_email(1, email, subject, body)
+
+
+def send_2fa_code_email(email: str, code: str) -> bool:
+    """Send 2FA verification code email"""
+    subject = "Your 2FA Verification Code"
+    body = f"""
+Dear User,
+
+Your 2FA verification code is: {code}
+
+This code will expire in 10 minutes.
+
+If you did not request this, please ignore this email.
+
+- ProfitClean Team
+"""
+    # Use company_id 1 for system emails
+    return send_email(1, email, subject, body)
+
+
 # ============================================================
 # MULTI-TENANT & SUPPORT HELPERS
 # ============================================================
@@ -2126,6 +2190,135 @@ def log_audit(user_id, action, details, ip=None):
         conn.close()
     except Exception as e:
         print(f"Audit log error: {e}")
+
+
+def log_auth_event(user_id, email, event_type, status, ip_address=None, user_agent=None, error_message=None):
+    """Log authentication events for security tracking"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO auth_logs (user_id, email, event_type, status, ip_address, user_agent, error_message, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (user_id, email, event_type, status, ip_address, user_agent, error_message, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+
+
+def request_password_reset(email):
+    """Request password reset with 2FA verification"""
+    import random
+    
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    # Find user
+    c.execute("SELECT id, username, email, totp_secret, totp_enabled FROM users WHERE email = ?", (email,))
+    user = c.fetchone()
+    
+    if not user:
+        conn.close()
+        return False, "If an account exists with this email, you will receive reset instructions."
+    
+    user_id, username, user_email, totp_secret, totp_enabled = user
+    
+    # Generate reset token (expires in 1 hour)
+    reset_token = secrets.token_urlsafe(32)
+    expires_at = datetime.now() + timedelta(hours=1)
+    
+    # Store token
+    c.execute("""
+        INSERT INTO password_reset_tokens (user_id, token, expires_at, created_at)
+        VALUES (?, ?, ?, ?)
+    """, (user_id, reset_token, expires_at.isoformat(), datetime.now().isoformat()))
+    
+    conn.commit()
+    conn.close()
+    
+    # Generate reset link
+    reset_link = f"https://profitclean-c4s6mqoafikfejkdfuwgvx.streamlit.app/reset_password?token={reset_token}"
+    
+    # If 2FA is enabled, send code via email
+    if totp_enabled:
+        # Generate and send 2FA code
+        twofa_code = str(random.randint(100000, 999999))
+        
+        # Store 2FA code temporarily
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("""
+            UPDATE password_reset_tokens 
+            SET verification_code = ? 
+            WHERE token = ?
+        """, (twofa_code, reset_token))
+        conn.commit()
+        conn.close()
+        
+        # Send 2FA code via email
+        send_2fa_code_email(user_email, twofa_code)
+        
+        return True, "A 2FA verification code has been sent to your email."
+    else:
+        # Send reset link directly
+        send_password_reset_email(user_email, reset_link)
+        return True, "Password reset link has been sent to your email."
+
+
+def reset_password_with_2fa(token, twofa_code, new_password):
+    """Reset password with 2FA verification"""
+    
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    # Verify token
+    c.execute("""
+        SELECT user_id, expires_at, verification_code, used 
+        FROM password_reset_tokens 
+        WHERE token = ? AND used = 0
+    """, (token,))
+    token_data = c.fetchone()
+    
+    if not token_data:
+        conn.close()
+        return False, "Invalid or expired reset token."
+    
+    user_id, expires_at, stored_code, used = token_data
+    
+    # Check expiration
+    if datetime.fromisoformat(expires_at) < datetime.now():
+        conn.close()
+        return False, "Reset link has expired. Please request a new one."
+    
+    # Verify 2FA code
+    if stored_code and stored_code != twofa_code:
+        conn.close()
+        return False, "Invalid 2FA verification code."
+    
+    # Validate new password
+    valid, msg = validate_password_strength(new_password)
+    if not valid:
+        conn.close()
+        return False, msg
+    
+    # Hash new password
+    salt = bcrypt.gensalt()
+    hashed = bcrypt.hashpw(new_password.encode('utf-8'), salt)
+    
+    # Update password
+    c.execute("""
+        UPDATE users 
+        SET password_hash = ?, salt = ?, login_attempts = 0, locked_until = NULL 
+        WHERE id = ?
+    """, (hashed.decode('utf-8'), salt.decode('utf-8'), user_id))
+    
+    # Mark token as used
+    c.execute("UPDATE password_reset_tokens SET used = 1 WHERE token = ?", (token,))
+    
+    conn.commit()
+    conn.close()
+    
+    log_auth_event(user_id, None, "password_reset", "success", None, None, "Password reset via 2FA")
+    
+    return True, "Password reset successfully. Please log in with your new password."
 
 def get_business_name():
     company_id = get_current_user_company()
@@ -2783,58 +2976,95 @@ def deny_worker_request(request_id, company_id):
 # AUTHENTICATION FUNCTIONS
 # ============================================================
 
-def authenticate_user(email, password, ip_address=None):
+def authenticate_user(email, password, ip_address=None, user_agent=None):
+    """Enhanced authenticate_user with comprehensive logging"""
     email = normalize_email(email)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    # Debug: Print what we're looking for
-    print(f"DEBUG: Attempting login for email: {email}")
+    
+    # Log the attempt
+    log_auth_event(None, email, "login_attempt", "pending", ip_address, user_agent)
+    
     c.execute("SELECT id, username, password_hash, role, company_id, manager_id, supervisor_id, login_attempts, locked_until, is_active, approval_status, totp_enabled FROM users WHERE lower(email) = ?", (email,))
     user = c.fetchone()
-    if user:
-        uid, uname, hashed, role, company_id, mgr_id, sup_id, attempts, locked, active, approval, totp_enabled = user
-        print(f"DEBUG: User found - ID: {uid}, Active: {active}, Approval: {approval}")
-        print(f"DEBUG: Stored hash: {hashed[:20] if hashed else 'None'}...")
-        print("DEBUG: Attempting password verification...")
-        if not active or approval != 'approved':
-            conn.close()
-            return False, "Account not active or not approved."
+    
+    if not user:
+        log_auth_event(None, email, "login_failed", "failed", ip_address, user_agent, "User not found")
+        conn.close()
+        return False, "User not found"
+    
+    uid, uname, hashed, role, company_id, mgr_id, sup_id, attempts, locked, active, approval, totp_enabled = user
+    
+    # Log for this specific user
+    log_auth_event(uid, email, "login_attempt", "pending", ip_address, user_agent)
+    
+    # Check account status
+    if not active or approval != 'approved':
+        log_auth_event(uid, email, "login_failed", "failed", ip_address, user_agent, "Account not active or not approved")
+        conn.close()
+        return False, "Account not active or not approved."
+    
+    # Check if company is active
+    c.execute("SELECT is_active FROM companies WHERE id = ?", (company_id,))
+    company_row = c.fetchone()
+    if company_row and company_row[0] == 0:
+        log_auth_event(uid, email, "login_failed", "failed", ip_address, user_agent, "Company deactivated")
+        conn.close()
+        return False, "Your company account has been deactivated. Please contact support."
+    
+    # Check if account is locked
+    if locked and datetime.fromisoformat(locked) > datetime.now():
+        log_auth_event(uid, email, "login_failed", "locked", ip_address, user_agent, f"Account locked until {locked}")
+        conn.close()
+        return False, f"Account locked. Try again after {locked}."
+    
+    # Verify password
+    password_valid = verify_password(password, hashed)
+    
+    if password_valid:
+        # Reset login attempts on success
+        c.execute("UPDATE users SET login_attempts = 0, locked_until = NULL, last_login = ? WHERE id = ?", 
+                  (datetime.now().isoformat(), uid))
         
-        c.execute("SELECT is_active FROM companies WHERE id = ?", (company_id,))
-        company_row = c.fetchone()
-        if company_row and company_row[0] == 0:
-            conn.close()
-            return False, "Your company account has been deactivated. Please contact support."
+        # Create session
+        token = generate_session_token()
+        expires = datetime.now() + timedelta(days=SESSION_EXPIRY_DAYS)
+        c.execute("INSERT INTO sessions (user_id, session_token, expires_at, created_at) VALUES (?,?,?,?)", 
+                  (uid, token, expires.isoformat(), datetime.now().isoformat()))
         
-        if locked and datetime.fromisoformat(locked) > datetime.now():
-            conn.close()
-            return False, "Account locked. Try later."
-        password_valid = verify_password(password, hashed)
-        print(f"DEBUG: Password valid: {password_valid}")
-        if password_valid:
-            c.execute("UPDATE users SET login_attempts = 0, locked_until = NULL, last_login = ? WHERE id = ?", (datetime.now().isoformat(), uid))
-            token = generate_session_token()
-            expires = datetime.now() + timedelta(days=SESSION_EXPIRY_DAYS)
-            c.execute("INSERT INTO sessions (user_id, session_token, expires_at, created_at) VALUES (?,?,?,?)", (uid, token, expires.isoformat(), datetime.now().isoformat()))
-            conn.commit()
-            log_audit(uid, "login_success", f"User {uname} logged in to company {company_id}", ip_address)
-            conn.close()
-            return True, {"user_id": uid, "username": uname, "role": role, "company_id": company_id, "manager_id": mgr_id, "supervisor_id": sup_id, "totp_enabled": totp_enabled, "token": token}
-        else:
-            new_attempts = attempts + 1
-            locked_until = None
-            if new_attempts >= MAX_LOGIN_ATTEMPTS:
-                locked_until = (datetime.now() + timedelta(minutes=ACCOUNT_LOCKOUT_MINUTES)).isoformat()
-            c.execute("UPDATE users SET login_attempts = ?, locked_until = ? WHERE id = ?", (new_attempts, locked_until, uid))
-            conn.commit()
-            log_audit(uid, "login_failed", f"Failed login for {uname}", ip_address)
-            conn.close()
-            print(f"DEBUG: Password mismatch for user {uname}")
-            return False, f"Invalid credentials. {MAX_LOGIN_ATTEMPTS - new_attempts} attempts left."
+        conn.commit()
+        
+        log_auth_event(uid, email, "login_success", "success", ip_address, user_agent)
+        conn.close()
+        
+        return True, {
+            "user_id": uid, 
+            "username": uname, 
+            "role": role, 
+            "company_id": company_id, 
+            "manager_id": mgr_id, 
+            "supervisor_id": sup_id, 
+            "totp_enabled": totp_enabled, 
+            "token": token
+        }
     else:
-        print(f"DEBUG: No user found with email: {email}")
-    conn.close()
-    return False, "User not found"
+        # Increment login attempts
+        new_attempts = attempts + 1
+        locked_until = None
+        
+        if new_attempts >= MAX_LOGIN_ATTEMPTS:
+            locked_until = (datetime.now() + timedelta(minutes=ACCOUNT_LOCKOUT_MINUTES)).isoformat()
+            log_auth_event(uid, email, "account_lock", "locked", ip_address, user_agent, f"Locked after {new_attempts} failed attempts")
+        
+        c.execute("UPDATE users SET login_attempts = ?, locked_until = ? WHERE id = ?", 
+                  (new_attempts, locked_until, uid))
+        conn.commit()
+        
+        remaining = MAX_LOGIN_ATTEMPTS - new_attempts
+        log_auth_event(uid, email, "login_failed", "failed", ip_address, user_agent, f"Invalid password. {remaining} attempts remaining")
+        
+        conn.close()
+        return False, f"Invalid credentials. {remaining} attempts left."
 
 def logout_user():
     if 'user' in st.session_state:
@@ -3538,29 +3768,6 @@ def login_page():
             st.session_state.page = "forgot_password"
             st.rerun()
 
-def forgot_password_page():
-    st.markdown("### 🔑 Forgot Password")
-    st.caption("Enter your email to reset your password")
-
-    with st.form("forgot_password"):
-        email = st.text_input("Email Address")
-        if st.form_submit_button("Reset Password"):
-            if not email:
-                st.warning("Please enter your email address")
-            else:
-                temp_password = secrets.token_hex(4)
-                success, message = reset_user_password(email, temp_password)
-                if success:
-                    st.success("Password reset successfully!")
-                    st.info("A temporary password has been generated below. Log in with this password and change it immediately.")
-                    st.code(temp_password)
-                else:
-                    st.error(message)
-
-    if st.button("← Back to Login"):
-        st.session_state.page = "login"
-        st.rerun()
-
 
 def two_factor_page():
     st.markdown("### 🔐 Two‑Factor Authentication")
@@ -3864,6 +4071,8 @@ def dashboard():
         effective_role = get_effective_user()['role'] if get_effective_user() else user['role']
         if effective_role in ['super_admin', 'admin', 'manager']:
             menu_items.append(("📋 Approval Requests", "approvals"))
+        if effective_role in ['super_admin', 'admin']:
+            menu_items.append(("🔍 Auth Logs", "debug_logs"))
         if effective_role in ['super_admin', 'support_staff']:
             menu_items.append(("🔧 Admin Tools", "admin_companies"))
         if effective_role in ['super_admin', 'admin']:
@@ -3982,6 +4191,117 @@ def test_approval_link():
         st.warning("⚠️ Cannot test - Streamlit app not running on port 8501")
     except Exception as e:
         st.error(f"Error: {e}")
+
+
+def forgot_password_page():
+    """Page for users to request password reset"""
+    
+    st.markdown("### 🔑 Reset Your Password")
+    st.caption("Enter your email to receive reset instructions")
+    
+    tab1, tab2 = st.tabs(["📧 Request Reset", "🔐 Set New Password"])
+    
+    with tab1:
+        with st.form("request_reset"):
+            email = st.text_input("Email Address")
+            
+            if st.form_submit_button("Send Reset Instructions"):
+                if email:
+                    success, message = request_password_reset(email)
+                    if success:
+                        st.success(message)
+                        if "2FA" in message:
+                            st.info("Please check your email for the verification code.")
+                        st.session_state.reset_requested = True
+                    else:
+                        st.warning(message)
+                else:
+                    st.error("Please enter your email address")
+    
+    with tab2:
+        st.markdown("#### Already have a reset token?")
+        
+        token = st.text_input("Reset Token (from email)")
+        twofa_code = st.text_input("2FA Verification Code (if required)")
+        new_password = st.text_input("New Password", type="password")
+        confirm_password = st.text_input("Confirm Password", type="password")
+        
+        if st.button("Reset Password"):
+            if new_password != confirm_password:
+                st.error("Passwords do not match")
+            elif not token:
+                st.error("Please enter your reset token")
+            else:
+                success, message = reset_password_with_2fa(token, twofa_code, new_password)
+                if success:
+                    st.success(message)
+                    st.info("Please log in with your new password")
+                    if st.button("Go to Login"):
+                        st.session_state.page = "login"
+                        st.rerun()
+                else:
+                    st.error(message)
+    
+    if st.button("← Back to Login"):
+        st.session_state.page = "login"
+        st.rerun()
+
+
+def debug_logs_page():
+    """Admin page to view authentication logs"""
+    
+    if st.session_state.user.get('role') not in ['super_admin', 'admin']:
+        st.error("Access denied")
+        return
+    
+    st.markdown("### 🔍 Authentication Logs")
+    st.caption("Troubleshoot login issues")
+    
+    conn = sqlite3.connect(DB_PATH)
+    
+    # Get logs
+    logs_df = pd.read_sql_query("""
+        SELECT id, user_id, email, event_type, status, error_message, created_at
+        FROM auth_logs 
+        ORDER BY created_at DESC 
+        LIMIT 100
+    """, conn)
+    conn.close()
+    
+    if logs_df.empty:
+        st.info("No authentication logs found")
+    else:
+        # Filters
+        col1, col2 = st.columns(2)
+        with col1:
+            event_filter = st.multiselect("Filter by event", logs_df['event_type'].unique())
+        with col2:
+            status_filter = st.multiselect("Filter by status", logs_df['status'].unique())
+        
+        # Apply filters
+        if event_filter:
+            logs_df = logs_df[logs_df['event_type'].isin(event_filter)]
+        if status_filter:
+            logs_df = logs_df[logs_df['status'].isin(status_filter)]
+        
+        st.dataframe(logs_df, use_container_width=True)
+        
+        # Check for problematic accounts
+        st.markdown("---")
+        st.markdown("### 🚨 Problem Accounts")
+        
+        problem_df = logs_df[logs_df['event_type'] == 'login_failed'].groupby('email').size().reset_index(name='failed_attempts')
+        problem_df = problem_df[problem_df['failed_attempts'] > 3]
+        
+        if not problem_df.empty:
+            st.warning("Accounts with multiple failed logins:")
+            st.dataframe(problem_df)
+        else:
+            st.success("No problematic accounts detected")
+    
+    if st.button("← Back to Dashboard"):
+        st.session_state.page = "dashboard"
+        st.rerun()
 
 
 def estimate_page():
@@ -7993,6 +8313,7 @@ def main():
                 "integrations_calendly_auth": calendly_oauth_page,
                 "calendly_callback": calendly_callback_page,
                 "approvals": admin_approval_dashboard,
+                "debug_logs": debug_logs_page,
                 "settings": settings_page,
                 "terms": terms_page,
                 "test_approval": test_approval_link,

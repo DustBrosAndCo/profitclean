@@ -79,7 +79,7 @@ class BaseIntegration:
 
     def is_connected(self) -> bool:
         return self.enabled and self.access_token is not None
-  import hashlib
+import hashlib
 import hmac
 import os
 import requests
@@ -381,7 +381,7 @@ class CalendlyIntegration(BaseIntegration):
         except Exception as e:
             self.log_event("webhook", "error", str(e))
         return False      
-     import unittest
+import unittest
 from unittest.mock import patch, MagicMock
 from datetime import datetime
 from calendly_integration import CalendlyIntegration
@@ -406,4 +406,3 @@ class TestCalendlyIntegration(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
-       
