@@ -2973,105 +2973,152 @@ def deny_worker_request(request_id, company_id):
 
 
 # ============================================================
+# SESSION MANAGEMENT (Persistent Login Fix)
+# ============================================================
+
+def generate_session_token():
+    return secrets.token_urlsafe(32)
+
+def create_user_session(user_id: int, expires_days: int = 7) -> str:
+    """Create a persistent session in the database"""
+    token = generate_session_token()
+    expires_at = datetime.now() + timedelta(days=expires_days)
+    
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO sessions (user_id, session_token, expires_at, created_at)
+        VALUES (?, ?, ?, ?)
+    """, (user_id, token, expires_at.isoformat(), datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+    return token
+
+def validate_session_token(token: str):
+    """Validate session and return user data"""
+    if not token:
+        return None
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""
+        SELECT u.id, u.username, u.email, u.role, u.company_id, 
+               u.manager_id, u.supervisor_id, u.totp_enabled
+        FROM sessions s
+        JOIN users u ON s.user_id = u.id
+        WHERE s.session_token = ? 
+          AND s.expires_at > datetime('now')
+          AND u.is_active = 1
+    """, (token,))
+    row = c.fetchone()
+    conn.close()
+    
+    if row:
+        return {
+            "user_id": row[0],
+            "username": row[1],
+            "email": row[2],
+            "role": row[3],
+            "company_id": row[4],
+            "manager_id": row[5],
+            "supervisor_id": row[6],
+            "totp_enabled": bool(row[7])
+        }
+    return None
+
+def clear_expired_sessions():
+    """Cleanup old sessions (run periodically)"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM sessions WHERE expires_at < datetime('now')")
+    conn.commit()
+    conn.close()
+
+
+# ============================================================
 # AUTHENTICATION FUNCTIONS
 # ============================================================
 
-def authenticate_user(email, password, ip_address=None, user_agent=None):
-    """Enhanced authenticate_user with comprehensive logging"""
+def authenticate_user(email: str, password: str, ip_address=None, user_agent=None):
+    """Enhanced authentication with persistent sessions"""
     email = normalize_email(email)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
-    # Log the attempt
     log_auth_event(None, email, "login_attempt", "pending", ip_address, user_agent)
     
-    c.execute("SELECT id, username, password_hash, role, company_id, manager_id, supervisor_id, login_attempts, locked_until, is_active, approval_status, totp_enabled FROM users WHERE lower(email) = ?", (email,))
+    # Get user
+    c.execute("""
+        SELECT id, username, password_hash, role, company_id, 
+               manager_id, supervisor_id, totp_enabled, is_active, locked_until 
+        FROM users WHERE lower(email) = ?
+    """, (email,))
     user = c.fetchone()
     
     if not user:
-        log_auth_event(None, email, "login_failed", "failed", ip_address, user_agent, "User not found")
         conn.close()
-        return False, "User not found"
+        log_auth_event(None, email, "login_attempt", "failed", ip_address, user_agent, "User not found")
+        return False, "Invalid email or password"
     
-    uid, uname, hashed, role, company_id, mgr_id, sup_id, attempts, locked, active, approval, totp_enabled = user
+    uid, uname, pwd_hash, role, company_id, mgr_id, sup_id, totp_enabled, is_active, locked_until = user
     
-    # Log for this specific user
-    log_auth_event(uid, email, "login_attempt", "pending", ip_address, user_agent)
-    
-    # Check account status
-    if not active or approval != 'approved':
-        log_auth_event(uid, email, "login_failed", "failed", ip_address, user_agent, "Account not active or not approved")
+    if not is_active:
         conn.close()
-        return False, "Account not active or not approved."
+        log_auth_event(uid, email, "login_attempt", "failed", ip_address, user_agent, "Account inactive")
+        return False, "Account is inactive. Contact your administrator."
     
-    # Check if company is active
-    c.execute("SELECT is_active FROM companies WHERE id = ?", (company_id,))
-    company_row = c.fetchone()
-    if company_row and company_row[0] == 0:
-        log_auth_event(uid, email, "login_failed", "failed", ip_address, user_agent, "Company deactivated")
+    # Check lockout
+    if locked_until and datetime.fromisoformat(locked_until) > datetime.now():
         conn.close()
-        return False, "Your company account has been deactivated. Please contact support."
-    
-    # Check if account is locked
-    if locked and datetime.fromisoformat(locked) > datetime.now():
-        log_auth_event(uid, email, "login_failed", "locked", ip_address, user_agent, f"Account locked until {locked}")
-        conn.close()
-        return False, f"Account locked. Try again after {locked}."
+        return False, f"Account locked until {locked_until}. Try again later."
     
     # Verify password
-    password_valid = verify_password(password, hashed)
+    if not verify_password(password, pwd_hash):
+        # Increment failed attempts
+        c.execute("UPDATE users SET login_attempts = login_attempts + 1 WHERE id = ?", (uid,))
+        if c.execute("SELECT login_attempts FROM users WHERE id = ?", (uid,)).fetchone()[0] >= MAX_LOGIN_ATTEMPTS:
+            lock_until = datetime.now() + timedelta(minutes=ACCOUNT_LOCKOUT_MINUTES)
+            c.execute("UPDATE users SET locked_until = ? WHERE id = ?", (lock_until.isoformat(), uid))
+        conn.commit()
+        conn.close()
+        log_auth_event(uid, email, "login_attempt", "failed", ip_address, user_agent, "Invalid password")
+        return False, "Invalid email or password"
     
-    if password_valid:
-        # Reset login attempts on success
-        c.execute("UPDATE users SET login_attempts = 0, locked_until = NULL, last_login = ? WHERE id = ?", 
-                  (datetime.now().isoformat(), uid))
-        
-        # Create session
-        token = generate_session_token()
-        expires = datetime.now() + timedelta(days=SESSION_EXPIRY_DAYS)
-        c.execute("INSERT INTO sessions (user_id, session_token, expires_at, created_at) VALUES (?,?,?,?)", 
-                  (uid, token, expires.isoformat(), datetime.now().isoformat()))
-        
-        conn.commit()
-        
-        log_auth_event(uid, email, "login_success", "success", ip_address, user_agent)
-        conn.close()
-        
-        return True, {
-            "user_id": uid, 
-            "username": uname, 
-            "role": role, 
-            "company_id": company_id, 
-            "manager_id": mgr_id, 
-            "supervisor_id": sup_id, 
-            "totp_enabled": totp_enabled, 
-            "token": token
-        }
-    else:
-        # Increment login attempts
-        new_attempts = attempts + 1
-        locked_until = None
-        
-        if new_attempts >= MAX_LOGIN_ATTEMPTS:
-            locked_until = (datetime.now() + timedelta(minutes=ACCOUNT_LOCKOUT_MINUTES)).isoformat()
-            log_auth_event(uid, email, "account_lock", "locked", ip_address, user_agent, f"Locked after {new_attempts} failed attempts")
-        
-        c.execute("UPDATE users SET login_attempts = ?, locked_until = ? WHERE id = ?", 
-                  (new_attempts, locked_until, uid))
-        conn.commit()
-        
-        remaining = MAX_LOGIN_ATTEMPTS - new_attempts
-        log_auth_event(uid, email, "login_failed", "failed", ip_address, user_agent, f"Invalid password. {remaining} attempts remaining")
-        
-        conn.close()
-        return False, f"Invalid credentials. {remaining} attempts left."
+    # Success - reset attempts
+    c.execute("UPDATE users SET login_attempts = 0, locked_until = NULL, last_login = ? WHERE id = ?", 
+              (datetime.now().isoformat(), uid))
+    conn.commit()
+    conn.close()
+    
+    # Create persistent session
+    session_token = create_user_session(uid, SESSION_EXPIRY_DAYS)
+    
+    log_auth_event(uid, email, "login_success", "success", ip_address, user_agent)
+    
+    user_data = {
+        "user_id": uid,
+        "username": uname,
+        "email": email,
+        "role": role,
+        "company_id": company_id,
+        "manager_id": mgr_id,
+        "supervisor_id": sup_id,
+        "totp_enabled": bool(totp_enabled),
+        "session_token": session_token
+    }
+    
+    return True, user_data
 
 def logout_user():
-    if 'user' in st.session_state:
-        log_audit(st.session_state.user['user_id'], "logout", "User logged out")
-    st.session_state.user = None
-    st.session_state.original_user = None
-    st.session_state.page = "login"
+    """Clear current session"""
+    if "session_token" in st.session_state:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("DELETE FROM sessions WHERE session_token = ?", (st.session_state.session_token,))
+        conn.commit()
+        conn.close()
+    for key in list(st.session_state.keys()):
+        if key not in ["page"]:  # preserve page if needed
+            del st.session_state[key]
 
 
 def get_effective_user():
@@ -3738,35 +3785,73 @@ def setup_wizard():
             st.rerun()
 
 def login_page():
-    st.markdown("### 🔐 Login to ProfitClean")
-    st.caption("Created by Dust Bros & Co.")
-    with st.form("login"):
-        email = st.text_input("Email")
-        password = st.text_input("Password", type="password")
-        if st.form_submit_button("Login"):
-            success, result = authenticate_user(email, password)
-            if success:
-                st.session_state.user = result
-                if result.get('totp_enabled'):
-                    st.session_state.pending_2fa_user = result
-                    st.session_state.page = "two_factor"
-                    st.rerun()
-                else:
-                    st.session_state.page = "dashboard"
-                    st.success(f"Welcome {result['username']}!")
-                    st.rerun()
-            else:
-                st.error(result)
-    st.markdown("---")
-    col1, col2 = st.columns(2)
+    st.markdown("# 🧹 ProfitClean Login")
+    
+    # Auto-recover session from query param or session_state
+    if "session_token" not in st.session_state:
+        params = get_query_params_safely()
+        token = parse_query_param(params, "session_token")
+        if token:
+            user = validate_session_token(token)
+            if user:
+                st.session_state.user = user
+                st.session_state.session_token = token
+                st.session_state.page = "dashboard"
+                st.rerun()
+    
+    # If already logged in via session_state
+    if st.session_state.get("user"):
+        user = validate_session_token(st.session_state.get("session_token"))
+        if user:
+            st.session_state.user = user
+            st.session_state.page = "dashboard"
+            st.rerun()
+    
+    col1, col2 = st.columns([2, 1])
+    
     with col1:
-        if st.button("📝 Create Account"):
+        with st.form("login_form"):
+            email = st.text_input("Email Address", placeholder="you@company.com")
+            password = st.text_input("Password", type="password")
+            
+            remember_me = st.checkbox("Remember me (7 days)", value=True)
+            
+            if st.form_submit_button("🔑 Login", use_container_width=True):
+                if not email or not password:
+                    st.error("Please enter email and password")
+                else:
+                    with st.spinner("Authenticating..."):
+                        success, result = authenticate_user(
+                            email, password, 
+                            ip_address=st.context.headers.get("X-Forwarded-For") if hasattr(st, 'context') else None
+                        )
+                        
+                        if success:
+                            st.session_state.user = result
+                            st.session_state.session_token = result["session_token"]
+                            st.success("✅ Login successful!")
+                            st.session_state.page = "dashboard"
+                            st.rerun()
+                        else:
+                            st.error(result)
+    
+    with col2:
+        st.markdown("### New here?")
+        if st.button("Create Account", use_container_width=True):
             st.session_state.page = "create_account"
             st.rerun()
-    with col2:
-        if st.button("🔑 Forgot Password?"):
+        
+        if st.button("Forgot Password?", use_container_width=True):
             st.session_state.page = "forgot_password"
             st.rerun()
+        
+        st.caption("Need help? Contact support@profitclean.com")
+    
+    # Footer
+    st.markdown("---")
+    if st.button("👤 Client Portal"):
+        st.session_state.page = "client_login"
+        st.rerun()
 
 
 def two_factor_page():
@@ -8255,6 +8340,18 @@ def main():
     # First, initialize database and run migrations
     init_db()
     migrate_database()
+    clear_expired_sessions()   # Clean old sessions on startup
+    
+    # Persistent session recovery
+    if "user" not in st.session_state:
+        params = get_query_params_safely()
+        token = parse_query_param(params, "session_token")
+        if token:
+            user = validate_session_token(token)
+            if user:
+                st.session_state.user = user
+                st.session_state.session_token = token
+                st.session_state.page = "dashboard"
     
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
