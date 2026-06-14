@@ -1513,6 +1513,13 @@ def integrations_page():
         st.session_state.page = "dashboard"
         st.rerun()
 
+    # Role check: Only admins can access integrations
+    user_role = st.session_state.get('user', {}).get('role')
+    if user_role not in (UserRole.SUPER_ADMIN.value, UserRole.ADMIN.value):
+        st.error("❌ Access denied. Only company administrators can access integration settings.")
+        st.info("Please contact your company administrator to connect Calendly or other integrations.")
+        return
+
     st.markdown("### 🔌 Integration Hub")
     st.caption("Connect optional apps for your company. Tokens are stored per company and can be disconnected at any time.")
 
@@ -1574,6 +1581,16 @@ def integrations_page():
 
 
 def calendly_oauth_page():
+    # Role check: Only admins can access Calendly OAuth
+    user_role = st.session_state.get('user', {}).get('role')
+    if user_role not in (UserRole.SUPER_ADMIN.value, UserRole.ADMIN.value):
+        st.error("❌ Access denied. Only company administrators can connect Calendly.")
+        st.info("Please contact your company administrator to connect Calendly.")
+        if st.button("← Back to Dashboard"):
+            st.session_state.page = "dashboard"
+            st.rerun()
+        return
+
     st.markdown("### 🔗 Connect Calendly")
     st.caption("Authorize Calendly for your company. You will be redirected back after granting access.")
 
