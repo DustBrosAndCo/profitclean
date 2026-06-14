@@ -4111,6 +4111,23 @@ def edit_profile_page():
         st.rerun()
 
 def dashboard():
+    # Check authentication
+    if 'user' not in st.session_state or not st.session_state.user:
+        st.warning("🔒 Please log in")
+        st.session_state.page = "login"
+        st.rerun()
+        return
+    
+    # Validate session token if available
+    if st.session_state.get('session_token'):
+        user = validate_session_token(st.session_state.session_token)
+        if not user:
+            st.warning("Session expired. Please log in again.")
+            st.session_state.page = "login"
+            st.rerun()
+            return
+        st.session_state.user = user
+    
     user = st.session_state.user
     business_name = get_business_name()
     company_id = get_current_user_company()
