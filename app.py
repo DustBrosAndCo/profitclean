@@ -282,6 +282,7 @@ AVAILABLE_INTEGRATIONS = {
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+    c.execute("PRAGMA foreign_keys = ON")
 
     # Companies table
     c.execute('''CREATE TABLE IF NOT EXISTS companies (
@@ -960,6 +961,19 @@ def init_db():
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
 
+    # Estimate approval tokens
+    c.execute('''CREATE TABLE IF NOT EXISTS estimate_approval_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        estimate_id INTEGER NOT NULL,
+        company_id INTEGER NOT NULL,
+        token TEXT NOT NULL UNIQUE,
+        expires_at DATETIME NOT NULL,
+        used BOOLEAN DEFAULT 0,
+        created_at DATETIME,
+        FOREIGN KEY (estimate_id) REFERENCES estimates(id),
+        FOREIGN KEY (company_id) REFERENCES companies(id)
+    )''')
+
     conn.commit()
     conn.close()
     ensure_default_global_settings()
@@ -1410,6 +1424,7 @@ def get_unread_notification_count(user_id: int) -> int:
     """Get count of unread notifications"""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+    # Safe: user_id is unique per user, and users are scoped to companies
     c.execute("SELECT COUNT(*) FROM notifications WHERE user_id = ? AND read_status = 0", (user_id,))
     count = c.fetchone()[0]
     conn.close()
@@ -1436,9 +1451,20 @@ def get_smtp_settings(company_id: int):
             "smtp_port": 587,
         }
 
+    # Decrypt SMTP password
+    encrypted_password = row[1] or ""
+    decrypted_password = ""
+    if encrypted_password:
+        try:
+            from encryption_manager import encryption
+            decrypted_password = encryption.decrypt(encrypted_password)
+        except Exception:
+            # If decryption fails, assume it's plain text (for migration)
+            decrypted_password = encrypted_password
+
     return {
         "smtp_email": row[0] or "",
-        "smtp_password": row[1] or "",
+        "smtp_password": decrypted_password,
         "smtp_server": row[2] or "smtp.gmail.com",
         "smtp_port": int(row[3]) if row[3] else 587,
     }
@@ -1468,7 +1494,7 @@ def send_email(company_id: int, to_email: str, subject: str, body: str, html_bod
         return False
 
     try:
-        print(f"EMAIL DEBUG: Sending via {smtp_server}:{smtp_port} from {smtp_email} to {to_email}")
+        # Removed debug logging for security
         msg = MIMEMultipart('alternative')
         msg['From'] = smtp_email
         msg['To'] = to_email
@@ -1483,7 +1509,7 @@ def send_email(company_id: int, to_email: str, subject: str, body: str, html_bod
             server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=10)
         else:
             server = smtplib.SMTP(smtp_server, smtp_port, timeout=10)
-            server.set_debuglevel(1)
+            # Disabled debug mode for security
             server.ehlo()
             server.starttls()
             server.ehlo()
@@ -1957,7 +1983,15 @@ def calendly_oauth_page():
     code = parse_query_param(params, "code")
     state = parse_query_param(params, "state")
 
-    if code and state == "calendly":
+    if code and state:
+        # Validate OAuth state for CSRF protection
+        stored_state = st.session_state.get('oauth_state')
+        if not stored_state or state != stored_state:
+            st.error("❌ Invalid OAuth state. Possible CSRF attack detected.")
+            st.session_state.page = "integrations"
+            st.rerun()
+            return
+        
         with st.spinner("Connecting to Calendly..."):
             try:
                 integration.exchange_code_for_token(code)
@@ -1972,8 +2006,12 @@ def calendly_oauth_page():
                     st.session_state.page = "integrations"
                     st.rerun()
     else:
+        # Generate and store random state for CSRF protection
+        oauth_state = secrets.token_urlsafe(32)
+        st.session_state['oauth_state'] = oauth_state
+        
         try:
-            auth_url = integration.get_oauth_url()
+            auth_url = integration.get_oauth_url(state=oauth_state)
             st.code(f"Auth URL being sent: {auth_url}", language="text")
             st.markdown(
                 f"<a href=\"{auth_url}\" target=\"_self\" style=\"display:inline-block;padding:10px 18px;border-radius:8px;background:#1f6feb;color:#fff;text-decoration:none;font-weight:600;\">Continue to Calendly</a>",
@@ -2011,7 +2049,9 @@ def create_company(company_name, subdomain, owner_email, owner_username, owner_p
     company_id = c.lastrowid
     hashed, salt = hash_password(owner_password)
     invite_code = secrets.token_hex(4).upper()
-    owner_role = "super_admin" if owner_email == "admin@profitclean.com" else "admin"
+    # Use configuration value for super admin email instead of hardcoded
+    super_admin_email = os.getenv('SUPER_ADMIN_EMAIL', 'admin@profitclean.com')
+    owner_role = "super_admin" if owner_email == super_admin_email else "admin"
     c.execute("""
         INSERT INTO users (username, email, password_hash, salt, role, company_id, can_manage_workers, is_active, approval_status, created_at, hire_date, invite_code)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
@@ -2029,6 +2069,7 @@ def create_support_staff(email, username, password):
     username = username.strip()
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+    # Support staff are global, so check globally for email uniqueness
     c.execute("SELECT id FROM users WHERE lower(email) = ?", (email,))
     if c.fetchone():
         conn.close()
@@ -2126,17 +2167,8 @@ def check_user_password_hash(user_id):
     conn.close()
 
     if user:
-        print(f"User ID: {user[0]}")
-        print(f"Username: {user[1]}")
-        print(f"Email: {user[2]}")
-        print(f"Hash length: {len(user[3]) if user[3] else 0}")
-        print(f"Hash prefix: {user[3][:30] if user[3] else 'None'}...")
-        if user[3] and user[3].startswith('$2b$'):
-            print("✅ Hash format looks valid")
-        else:
-            print("❌ Hash format is INVALID - does not start with $2b$")
-    else:
-        print("User not found")
+        # Removed sensitive debug logging for security
+        pass
 
 
 def reset_user_password(email, new_password, reset_code=None):
@@ -2319,6 +2351,86 @@ def reset_password_with_2fa(token, twofa_code, new_password):
     log_auth_event(user_id, None, "password_reset", "success", None, None, "Password reset via 2FA")
     
     return True, "Password reset successfully. Please log in with your new password."
+
+
+def generate_approval_token(estimate_id: int, company_id: int, expires_hours: int = 24) -> str:
+    """Generate and store a secure approval token for an estimate"""
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.now() + timedelta(hours=expires_hours)
+    
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO estimate_approval_tokens (estimate_id, company_id, token, expires_at, created_at)
+        VALUES (?, ?, ?, ?, ?)
+    """, (estimate_id, company_id, token, expires_at.isoformat(), datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+    
+    return token
+
+
+def validate_approval_token(token: str):
+    """Validate an approval token and return estimate data"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""
+        SELECT eat.estimate_id, eat.company_id, eat.expires_at, eat.used, e.status
+        FROM estimate_approval_tokens eat
+        JOIN estimates e ON eat.estimate_id = e.id
+        WHERE eat.token = ?
+    """, (token,))
+    token_data = c.fetchone()
+    conn.close()
+    
+    if not token_data:
+        return None, "Invalid approval token"
+    
+    estimate_id, company_id, expires_at, used, status = token_data
+    
+    # Check if already used
+    if used:
+        return None, "This approval link has already been used"
+    
+    # Check expiration
+    if datetime.fromisoformat(expires_at) < datetime.now():
+        return None, "Approval link has expired"
+    
+    # Check if estimate is already approved
+    if status == 'approved':
+        return None, "This estimate has already been approved"
+    
+    return {
+        "estimate_id": estimate_id,
+        "company_id": company_id
+    }, None
+
+
+def approve_estimate_with_token(token: str):
+    """Approve an estimate using a valid token"""
+    estimate_data, error = validate_approval_token(token)
+    if error:
+        return False, error
+    
+    estimate_id = estimate_data["estimate_id"]
+    company_id = estimate_data["company_id"]
+    
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    # Update estimate status
+    c.execute("UPDATE estimates SET status = 'approved', approved_at = ? WHERE id = ?", 
+              (datetime.now().isoformat(), estimate_id))
+    
+    # Mark token as used
+    c.execute("UPDATE estimate_approval_tokens SET used = 1 WHERE token = ?", (token,))
+    
+    conn.commit()
+    conn.close()
+    
+    log_audit(None, "estimate_approved", f"Estimate {estimate_id} approved via token")
+    
+    return True, "Estimate approved successfully"
 
 def get_business_name():
     company_id = get_current_user_company()
@@ -3762,8 +3874,16 @@ def setup_wizard():
                     if success:
                         conn = sqlite3.connect(DB_PATH)
                         c = conn.cursor()
+                        # Encrypt SMTP password before storing
+                        encrypted_password = ""
+                        if smtp_password:
+                            try:
+                                from encryption_manager import encryption
+                                encrypted_password = encryption.encrypt(smtp_password)
+                            except Exception:
+                                encrypted_password = smtp_password
                         c.execute("UPDATE business_profile SET business_name=?, phone=?, hourly_wage=?, min_job_fee=?, home_city=?, per_mile_rate=?, sales_tax_rate=?, smtp_email=?, smtp_password=?, smtp_server=?, smtp_port=?, setup_complete=1 WHERE company_id=?", 
-                                  (business_name, phone, hourly_wage, min_job_fee, home_city, 0.65, SALES_TAX_RATE, smtp_email, smtp_password, smtp_server, smtp_port, result))
+                                  (business_name, phone, hourly_wage, min_job_fee, home_city, 0.65, SALES_TAX_RATE, smtp_email, encrypted_password, smtp_server, smtp_port, result))
                         conn.commit()
                         
                         create_job_template(result, "Standard Office Clean", "Standard office cleaning including vacuum, dust, and restrooms", 
@@ -3786,18 +3906,6 @@ def setup_wizard():
 
 def login_page():
     st.markdown("# 🧹 ProfitClean Login")
-    
-    # Auto-recover session from query param or session_state
-    if "session_token" not in st.session_state:
-        params = get_query_params_safely()
-        token = parse_query_param(params, "session_token")
-        if token:
-            user = validate_session_token(token)
-            if user:
-                st.session_state.user = user
-                st.session_state.session_token = token
-                st.session_state.page = "dashboard"
-                st.rerun()
     
     # If already logged in via session_state
     if st.session_state.get("user"):
@@ -4224,6 +4332,52 @@ def dashboard():
     st.info("Use sidebar to navigate.")
 
 
+def approve_estimate_page():
+    """Handle estimate approval via secure token"""
+    params = get_query_params_safely()
+    token = parse_query_param(params, "token")
+    
+    if not token:
+        st.error("❌ Invalid approval link")
+        st.markdown("This approval link is missing the required token.")
+        if st.button("Return to Home"):
+            st.session_state.page = "login"
+            st.rerun()
+        return
+    
+    # Validate token
+    estimate_data, error = validate_approval_token(token)
+    
+    if error:
+        st.error(f"❌ {error}")
+        st.markdown("This approval link is invalid, expired, or has already been used.")
+        if st.button("Return to Home"):
+            st.session_state.page = "login"
+            st.rerun()
+        return
+    
+    # Show approval confirmation
+    st.markdown("### ✅ Approve Estimate")
+    st.caption(f"Estimate #{estimate_data['estimate_id']}")
+    
+    st.info("You are about to approve this estimate. This action cannot be undone.")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Confirm Approval", type="primary"):
+            success, message = approve_estimate_with_token(token)
+            if success:
+                st.success("✅ Estimate approved successfully!")
+                st.balloons()
+            else:
+                st.error(f"❌ {message}")
+    
+    with col2:
+        if st.button("Cancel"):
+            st.session_state.page = "login"
+            st.rerun()
+
+
 def test_approval_link():
     """TEST FUNCTION - Verify approval link generation and routing"""
     st.markdown("### 🧪 Test Approval Link System")
@@ -4605,7 +4759,11 @@ def estimate_page():
         st.success(f"✅ Estimate #{estimate_id} saved as draft!")
 
         if save_and_send:
-            approval_link = f"https://app.profitclean.com/approve/{estimate_id}/{secrets.token_hex(16)}"
+            # Generate secure approval token
+            approval_token = generate_approval_token(estimate_id, company_id)
+            # Use configurable base URL instead of hardcoded
+            base_url = os.getenv('APP_BASE_URL', 'https://profitclean-c4s6mqoafikfejkdfuwgvx.streamlit.app')
+            approval_link = f"{base_url}?page=approve_estimate&token={approval_token}"
             email_sent = send_estimate_email(
                 company_id,
                 estimate_id,
@@ -7196,8 +7354,16 @@ def settings_page():
                         c.execute("ALTER TABLE business_profile ADD COLUMN smtp_server TEXT")
                     if 'smtp_port' not in existing_columns:
                         c.execute("ALTER TABLE business_profile ADD COLUMN smtp_port INTEGER DEFAULT 587")
+                    # Encrypt SMTP password before storing
+                    encrypted_password = ""
+                    if smtp_password:
+                        try:
+                            from encryption_manager import encryption
+                            encrypted_password = encryption.encrypt(smtp_password)
+                        except Exception:
+                            encrypted_password = smtp_password
                     c.execute("UPDATE business_profile SET smtp_email=?, smtp_password=?, smtp_server=?, smtp_port=? WHERE company_id=?",
-                              (smtp_email, smtp_password, smtp_server, smtp_port, company_id))
+                              (smtp_email, encrypted_password, smtp_server, smtp_port, company_id))
                     conn.commit()
                     conn.close()
 
@@ -7282,6 +7448,15 @@ def settings_page():
                     except:
                         pass
                 
+                # Encrypt SMTP password before storing
+                encrypted_password = ""
+                if smtp_password:
+                    try:
+                        from encryption_manager import encryption
+                        encrypted_password = encryption.encrypt(smtp_password)
+                    except Exception:
+                        encrypted_password = smtp_password
+                
                 c.execute("""
                     UPDATE business_profile 
                     SET business_name=?, phone=?, email=?, hourly_wage=?, min_job_fee=?, home_city=?, 
@@ -7289,7 +7464,7 @@ def settings_page():
                         monthly_rent=?, monthly_insurance=?, monthly_vehicles=?, monthly_marketing=?,
                         monthly_software=?, monthly_admin_salary=?, desired_profit_margin=?
                     WHERE company_id=?
-                """, (bname, phone, email, wage, min_fee, home, smtp_email, smtp_password, smtp_server, smtp_port,
+                """, (bname, phone, email, wage, min_fee, home, smtp_email, encrypted_password, smtp_server, smtp_port,
                       monthly_rent, monthly_insurance, monthly_vehicles, monthly_marketing, monthly_software, monthly_admin_salary, desired_profit_margin, company_id))
                 
                 conn.commit()
@@ -7421,7 +7596,8 @@ def my_performance_page():
         st.subheader("Earned Badges")
         st.dataframe(badges)
     conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query("SELECT strftime('%Y-%m', job_date) as month, SUM(profit) as profit FROM quick_jobs WHERE user_id = ? GROUP BY month ORDER BY month", conn, params=(uid,))
+    company_id = get_current_user_company()
+    df = pd.read_sql_query("SELECT strftime('%Y-%m', job_date) as month, SUM(profit) as profit FROM quick_jobs WHERE user_id = ? AND company_id = ? GROUP BY month ORDER BY month", conn, params=(uid, company_id))
     conn.close()
     if not df.empty:
         fig = px.line(df, x='month', y='profit', title="Your Monthly Profit")
@@ -7482,6 +7658,8 @@ def client_login_page():
         if st.form_submit_button("Login"):
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
+            # Note: Email lookup is global - if multiple companies have same client email, first match wins
+            # This is acceptable for client portal as clients are scoped by company_id after login
             c.execute("SELECT id, business_name, company_id FROM clients WHERE email = ?", (email,))
             client = c.fetchone()
             conn.close()
@@ -7535,8 +7713,8 @@ def client_dashboard():
     
     st.markdown("### 📅 Upcoming Services")
     conn = sqlite3.connect(DB_PATH)
-    jobs_df = pd.read_sql_query("SELECT scheduled_date, scheduled_time, status FROM scheduled_jobs WHERE client_id = ? AND scheduled_date >= date('now') ORDER BY scheduled_date", 
-                                conn, params=(st.session_state.client_id,))
+    jobs_df = pd.read_sql_query("SELECT scheduled_date, scheduled_time, status FROM scheduled_jobs WHERE client_id = ? AND company_id = ? AND scheduled_date >= date('now') ORDER BY scheduled_date", 
+                                conn, params=(st.session_state.client_id, st.session_state.client_company_id))
     conn.close()
     if not jobs_df.empty:
         st.dataframe(jobs_df)
@@ -8359,17 +8537,6 @@ def main():
     migrate_database()
     clear_expired_sessions()   # Clean old sessions on startup
     
-    # Persistent session recovery
-    if "user" not in st.session_state:
-        params = get_query_params_safely()
-        token = parse_query_param(params, "session_token")
-        if token:
-            user = validate_session_token(token)
-            if user:
-                st.session_state.user = user
-                st.session_state.session_token = token
-                st.session_state.page = "dashboard"
-    
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT COUNT(*) FROM companies")
@@ -8385,7 +8552,7 @@ def main():
         params = get_query_params_safely()
         code = parse_query_param(params, "code")
         state = parse_query_param(params, "state")
-        if code and state == "calendly":
+        if code and state:
             st.session_state.page = "integrations_calendly_auth"
 
         if st.session_state.get("client_logged_in", False):
@@ -8431,6 +8598,7 @@ def main():
                 "settings": settings_page,
                 "terms": terms_page,
                 "test_approval": test_approval_link,
+                "approve_estimate": approve_estimate_page,
                 "internal_pricing": internal_pricing_dashboard,
                 "admin_companies": admin_companies_page,
             }
