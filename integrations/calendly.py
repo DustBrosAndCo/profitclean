@@ -1,9 +1,92 @@
-import hashlib
+import json
 import os
 import sqlite3
+from datetime import datetime
+from typing import Dict, Any
+
+# Global DB path (adjust as needed in your project)
+DB_PATH = "external_bookings.db"
+
+class BaseIntegration:
+    def __init__(self, company_id: int):
+        self.company_id = company_id
+        self.integration_type = self.get_integration_type()
+        self.settings: Dict[str, Any] = {}
+        self.enabled = False
+        self.access_token = None
+        self.refresh_token = None
+        self.token_expires = None
+        self.load_config()
+
+        # Ensure DB table exists
+        self._init_db()
+
+    def get_integration_type(self) -> str:
+        raise NotImplementedError("Subclasses must implement get_integration_type")
+
+    def _init_db(self):
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS external_bookings (
+                id INTEGER PRIMARY KEY,
+                company_id INTEGER,
+                source TEXT,
+                external_id TEXT,
+                hashed_email TEXT,
+                invitee_name TEXT,
+                start_time TEXT,
+                end_time TEXT,
+                service_type TEXT,
+                status TEXT,
+                raw_questions TEXT,
+                imported_at TEXT,
+                processed INTEGER DEFAULT 0,
+                UNIQUE(company_id, source, external_id)
+            )
+        ''')
+        conn.commit()
+        conn.close()
+
+    def load_config(self):
+        # In production, load from DB/encrypted store. Here we simulate with JSON file per company.
+        config_file = f"config_{self.company_id}_{self.integration_type}.json"
+        if os.path.exists(config_file):
+            try:
+                with open(config_file, "r") as f:
+                    data = json.load(f)
+                    self.settings = data.get("settings", {})
+                    self.enabled = data.get("enabled", False)
+                    self.access_token = self.settings.get("access_token")
+                    self.refresh_token = self.settings.get("refresh_token")
+                    expires_str = self.settings.get("token_expires")
+                    if expires_str:
+                        self.token_expires = datetime.fromisoformat(expires_str.replace("Z", "+00:00"))
+            except Exception:
+                pass
+
+    def save_config(self):
+        config_file = f"config_{self.company_id}_{self.integration_type}.json"
+        data = {
+            "enabled": self.enabled,
+            "settings": self.settings,
+        }
+        with open(config_file, "w") as f:
+            json.dump(data, f, indent=2)
+
+    def log_event(self, event_type: str, status: str, message: str):
+        print(f"[{datetime.now()}] [{self.integration_type}] {event_type.upper()} - {status}: {message}")
+
+    def is_connected(self) -> bool:
+        return self.enabled and self.access_token is not None
+  import hashlib
+import hmac
+import os
 import requests
 from datetime import datetime, timedelta
-from typing import Dict, List
+from typing import Dict, List, Optional
+from urllib.parse import urlencode
+
 from .base import BaseIntegration
 
 
@@ -13,18 +96,21 @@ class CalendlyIntegration(BaseIntegration):
     API_BASE = "https://api.calendly.com"
 
     def __init__(self, company_id: int):
-        # Initialize base first so company-level settings are loaded into self.settings
         super().__init__(company_id)
-        # Prefer company-specific credentials stored in integration settings
         self.client_id = self.settings.get("client_id") or self._get_secret("CALENDLY_CLIENT_ID")
-        # client_secret is stored encrypted in settings; it will be decrypted by BaseIntegration loader if present
         self.client_secret = self.settings.get("client_secret") or self._get_secret("CALENDLY_CLIENT_SECRET")
         self.redirect_uri = self.settings.get("redirect_uri") or self._get_secret("CALENDLY_REDIRECT_URI")
 
-    def _get_secret(self, key: str) -> str:
+        # Load persisted tokens
+        self.access_token = self.settings.get("access_token")
+        self.refresh_token = self.settings.get("refresh_token")
+        expires_str = self.settings.get("token_expires")
+        self.token_expires = datetime.fromisoformat(expires_str.replace("Z", "+00:00")) if expires_str else None
+
+    def _get_secret(self, key: str) -> Optional[str]:
         try:
             return __import__("streamlit").secrets[key]
-        except KeyError:
+        except (KeyError, ImportError):
             return os.environ.get(key)
         except Exception as e:
             from logger_config import logger
@@ -35,7 +121,6 @@ class CalendlyIntegration(BaseIntegration):
         return "calendly"
 
     def has_required_credentials(self) -> bool:
-        """Check if Calendly OAuth credentials are configured."""
         return bool(self.client_id and self.client_secret and self.redirect_uri)
 
     def get_oauth_url(self) -> str:
@@ -45,14 +130,15 @@ class CalendlyIntegration(BaseIntegration):
             "client_id": self.client_id,
             "response_type": "code",
             "redirect_uri": self.redirect_uri,
-            "scope": "default",
+            "scope": "scheduled_events:read users:read webhooks:write webhooks:read",
             "state": self.integration_type,
         }
-        return f"{self.AUTH_URL}?{requests.compat.urlencode(params)}"
+        return f"{self.AUTH_URL}?{urlencode(params)}"
 
-    def exchange_code_for_token(self, code: str) -> Dict[str, str]:
-        if not self.client_id or not self.client_secret or not self.redirect_uri:
-            raise ValueError("Calendly OAuth credentials are not configured.")
+    # === OAuth Methods (Improved) ===
+    def exchange_code_for_token(self, code: str) -> Dict:
+        if not all([self.client_id, self.client_secret, self.redirect_uri]):
+            raise ValueError("Calendly OAuth credentials not configured.")
 
         response = requests.post(
             self.TOKEN_URL,
@@ -69,24 +155,38 @@ class CalendlyIntegration(BaseIntegration):
 
         if response.status_code != 200:
             self.log_event("oauth", "failed", response.text)
-            raise Exception(f"OAuth failed: {response.status_code} {response.text}")
+            response.raise_for_status()
 
         token_data = response.json()
-        self.access_token = token_data.get("access_token")
-        self.refresh_token = token_data.get("refresh_token")
-        expires_in = token_data.get("expires_in", 3600)
-        self.token_expires = datetime.now() + timedelta(seconds=expires_in)
+        self._update_tokens(token_data)
         self.enabled = True
         self.settings["scope"] = token_data.get("scope")
-        self.settings["last_sync"] = datetime.now().isoformat()
+        self.settings["last_sync"] = datetime.utcnow().isoformat()
         self.save_config()
         self.log_event("oauth", "success", "Connected to Calendly")
         return token_data
 
-    def refresh_access_token(self) -> bool:
-        if not self.refresh_token or not self.client_id or not self.client_secret:
-            return False
+    def _update_tokens(self, token_data: Dict):
+        self.access_token = token_data.get("access_token")
+        self.refresh_token = token_data.get("refresh_token")
+        expires_in = token_data.get("expires_in", 3600)
+        self.token_expires = datetime.utcnow() + timedelta(seconds=expires_in)
 
+        self.settings.update({
+            "access_token": self.access_token,
+            "refresh_token": self.refresh_token,
+            "token_expires": self.token_expires.isoformat(),
+        })
+
+    def _ensure_valid_token(self):
+        if not self.access_token or not self.token_expires:
+            return
+        if self.token_expires - timedelta(minutes=5) < datetime.utcnow():
+            self.refresh_access_token()
+
+    def refresh_access_token(self) -> bool:
+        if not self.refresh_token:
+            return False
         response = requests.post(
             self.TOKEN_URL,
             data={
@@ -106,75 +206,66 @@ class CalendlyIntegration(BaseIntegration):
             return False
 
         token_data = response.json()
-        self.access_token = token_data.get("access_token")
-        self.refresh_token = token_data.get("refresh_token")
-        expires_in = token_data.get("expires_in", 3600)
-        self.token_expires = datetime.now() + timedelta(seconds=expires_in)
+        self._update_tokens(token_data)
         self.save_config()
         self.log_event("refresh", "success", "Token refreshed")
         return True
 
-    def fetch_bookings(self, since: datetime = None) -> List[Dict[str, str]]:
+    # === Core Sync (Improved with Pagination) ===
+    def fetch_bookings(self, since: Optional[datetime] = None) -> List[Dict]:
         if not self.is_connected():
             self.log_event("fetch", "failed", "Not connected")
             return []
+
+        self._ensure_valid_token()
 
         headers = {
             "Authorization": f"Bearer {self.access_token}",
             "Content-Type": "application/json",
         }
 
-        user_response = requests.get(f"{self.API_BASE}/users/me", headers=headers, timeout=20)
-        if user_response.status_code != 200:
-            self.log_event("fetch", "failed", "Could not fetch user info")
-            return []
-
-        user_uri = user_response.json().get("resource", {}).get("uri")
+        # Get user URI
+        user_resp = requests.get(f"{self.API_BASE}/users/me", headers=headers, timeout=20)
+        user_resp.raise_for_status()
+        user_uri = user_resp.json().get("resource", {}).get("uri")
         if not user_uri:
-            self.log_event("fetch", "failed", "Calendly user URI missing")
             return []
 
-        params = {
-            "user": user_uri,
-            "status": "active",
-            "count": 100,
-        }
+        params = {"user": user_uri, "status": "active", "count": 100}
         if since:
-            params["min_start_time"] = since.isoformat()
-
-        events_response = requests.get(f"{self.API_BASE}/scheduled_events", headers=headers, params=params, timeout=20)
-        if events_response.status_code != 200:
-            self.log_event("fetch", "failed", f"API error: {events_response.status_code}")
-            return []
+            params["min_start_time"] = since.isoformat() + "Z" if not since.tzinfo else since.isoformat()
 
         bookings = []
-        event_collection = events_response.json().get("collection", [])
-        for event in event_collection:
-            invitees_response = requests.get(f"{event.get('uri')}/invitees", headers=headers, timeout=20)
-            invitees = []
-            if invitees_response.status_code == 200:
-                invitees = invitees_response.json().get("collection", [])
+        url = f"{self.API_BASE}/scheduled_events"
 
-            for invitee in invitees:
-                email = invitee.get("email", "")
-                hashed_email = hashlib.sha256(email.encode()).hexdigest() if email else None
-                bookings.append(
-                    {
-                        "external_id": event.get("uri", "").split("/")[-1],
-                        "hashed_email": hashed_email,
-                        "invitee_name": invitee.get("name", ""),
-                        "start_time": event.get("start_time"),
-                        "end_time": event.get("end_time"),
-                        "service_type": event.get("name", ""),
-                        "status": event.get("status", ""),
-                        "raw_questions": str(invitee.get("questions", [])),
-                    }
-                )
+        while url:
+            resp = requests.get(url, headers=headers, params=params if url.endswith("/scheduled_events") else None, timeout=20)
+            resp.raise_for_status()
+            data = resp.json()
+
+            for event in data.get("collection", []):
+                inv_resp = requests.get(f"{event.get('uri')}/invitees", headers=headers, timeout=20)
+                if inv_resp.status_code == 200:
+                    for invitee in inv_resp.json().get("collection", []):
+                        email = invitee.get("email", "")
+                        hashed_email = hashlib.sha256(email.encode("utf-8")).hexdigest() if email else None
+                        bookings.append({
+                            "external_id": event.get("uri", "").split("/")[-1],
+                            "hashed_email": hashed_email,
+                            "invitee_name": invitee.get("name", ""),
+                            "start_time": event.get("start_time"),
+                            "end_time": event.get("end_time"),
+                            "service_type": event.get("name", ""),
+                            "status": event.get("status", ""),
+                            "raw_questions": str(invitee.get("questions", [])),
+                        })
+
+            url = data.get("pagination", {}).get("next_page")
 
         self.log_event("fetch", "success", f"Fetched {len(bookings)} bookings")
         return bookings
 
-    def store_bookings(self, bookings: List[Dict[str, str]]) -> int:
+    def store_bookings(self, bookings: List[Dict]) -> int:
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         imported_count = 0
@@ -182,44 +273,137 @@ class CalendlyIntegration(BaseIntegration):
         for booking in bookings:
             c.execute(
                 "SELECT id FROM external_bookings WHERE company_id = ? AND source = ? AND external_id = ?",
-                (self.company_id, self.integration_type, booking["external_id"]),
+                (self.company_id, self.integration_type, booking["external_id"])
             )
             if c.fetchone():
                 continue
 
             c.execute(
-                "INSERT INTO external_bookings (company_id, source, external_id, hashed_email, invitee_name, start_time, end_time, service_type, status, raw_questions, imported_at, processed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                """INSERT INTO external_bookings 
+                   (company_id, source, external_id, hashed_email, invitee_name, start_time, 
+                    end_time, service_type, status, raw_questions, imported_at, processed) 
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    self.company_id,
-                    self.integration_type,
-                    booking["external_id"],
-                    booking["hashed_email"],
-                    booking["invitee_name"],
-                    booking["start_time"],
-                    booking["end_time"],
-                    booking["service_type"],
-                    booking["status"],
-                    booking["raw_questions"],
-                    datetime.now().isoformat(),
-                    0,
-                ),
+                    self.company_id, self.integration_type, booking["external_id"],
+                    booking["hashed_email"], booking["invitee_name"], booking["start_time"],
+                    booking["end_time"], booking["service_type"], booking["status"],
+                    booking["raw_questions"], datetime.utcnow().isoformat(), 0
+                )
             )
             imported_count += 1
 
         conn.commit()
         conn.close()
-        self.settings["last_sync"] = datetime.now().isoformat()
+        self.settings["last_sync"] = datetime.utcnow().isoformat()
         self.save_config()
         return imported_count
 
     def sync(self) -> int:
-        last_sync_value = self.settings.get("last_sync")
-        if last_sync_value:
-            since = datetime.fromisoformat(last_sync_value) - timedelta(days=1)
-        else:
-            since = datetime.now() - timedelta(days=30)
-
+        last_sync = self.settings.get("last_sync")
+        since = datetime.fromisoformat(last_sync) - timedelta(days=1) if last_sync else datetime.utcnow() - timedelta(days=30)
         bookings = self.fetch_bookings(since)
-        if not bookings:
-            return 0
-        return self.store_bookings(bookings)
+        return self.store_bookings(bookings) if bookings else 0
+
+    # === WEBHOOK SUPPORT ===
+    def create_webhook(self, target_url: str, scope: str = "user") -> Dict:
+        self._ensure_valid_token()
+        headers = {"Authorization": f"Bearer {self.access_token}", "Content-Type": "application/json"}
+
+        payload = {
+            "url": target_url,
+            "events": ["invitee.created", "invitee.canceled"],
+            "scope": scope
+        }
+
+        resp = requests.post(f"{self.API_BASE}/webhook_subscriptions", json=payload, headers=headers, timeout=20)
+        resp.raise_for_status()
+        data = resp.json()
+        self.settings["webhook_subscription"] = data.get("resource")
+        self.save_config()
+        self.log_event("webhook", "created", f"Webhook created for {target_url}")
+        return data
+
+    def delete_webhook(self) -> bool:
+        subscription = self.settings.get("webhook_subscription")
+        if not subscription or not subscription.get("uri"):
+            return False
+        self._ensure_valid_token()
+        headers = {"Authorization": f"Bearer {self.access_token}"}
+        resp = requests.delete(subscription["uri"], headers=headers, timeout=20)
+        if resp.status_code in (200, 204):
+            self.settings.pop("webhook_subscription", None)
+            self.save_config()
+            return True
+        return False
+
+    def verify_webhook_signature(self, payload: bytes, signature_header: str, signing_key: str = None) -> bool:
+        """Verify Calendly webhook signature (t=...&v1=... format)"""
+        if not signing_key:
+            signing_key = self._get_secret("CALENDLY_SIGNING_KEY") or os.environ.get("CALENDLY_SIGNING_KEY")
+        if not signing_key or not signature_header:
+            return False
+
+        try:
+            # Example header: t=1234567890,v1=abc123...
+            parts = dict(item.split("=") for item in signature_header.split(","))
+            t = parts.get("t")
+            v1 = parts.get("v1")
+            if not t or not v1:
+                return False
+
+            message = f"{t}.{payload.decode('utf-8')}"
+            computed = hmac.new(signing_key.encode(), message.encode(), hashlib.sha256).hexdigest()
+            return hmac.compare_digest(computed, v1)
+        except Exception:
+            return False
+
+    def handle_webhook(self, payload: Dict) -> bool:
+        """Process incoming webhook and store booking"""
+        try:
+            event_type = payload.get("event")
+            if event_type in ["invitee.created", "invitee.canceled"]:
+                invitee = payload.get("payload", {}).get("invitee", {})
+                event_data = payload.get("payload", {}).get("event", {})
+
+                booking = {
+                    "external_id": event_data.get("uuid") or event_data.get("uri", "").split("/")[-1],
+                    "hashed_email": hashlib.sha256(invitee.get("email", "").encode()).hexdigest() if invitee.get("email") else None,
+                    "invitee_name": invitee.get("name", ""),
+                    "start_time": event_data.get("start_time"),
+                    "end_time": event_data.get("end_time"),
+                    "service_type": event_data.get("name", ""),
+                    "status": "canceled" if "canceled" in event_type else "active",
+                    "raw_questions": str(invitee.get("questions", [])),
+                }
+                self.store_bookings([booking])
+                self.log_event("webhook", "processed", f"Handled {event_type}")
+                return True
+        except Exception as e:
+            self.log_event("webhook", "error", str(e))
+        return False      
+     import unittest
+from unittest.mock import patch, MagicMock
+from datetime import datetime
+from calendly_integration import CalendlyIntegration
+
+class TestCalendlyIntegration(unittest.TestCase):
+    def setUp(self):
+        self.integration = CalendlyIntegration(company_id=1)
+
+    @patch('requests.post')
+    def test_exchange_code(self, mock_post):
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {"access_token": "abc", "refresh_token": "xyz", "expires_in": 3600}
+        result = self.integration.exchange_code_for_token("test_code")
+        self.assertIn("access_token", result)
+
+    def test_webhook_signature(self):
+        payload = b'{"test": "data"}'
+        # This is a simplified test - real key/signature needed for full verification
+        self.assertFalse(self.integration.verify_webhook_signature(payload, "", "dummy_key"))
+
+    # Add more tests as needed
+
+if __name__ == '__main__':
+    unittest.main()
+       
