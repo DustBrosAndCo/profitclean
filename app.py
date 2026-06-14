@@ -1923,6 +1923,11 @@ def calendly_oauth_page():
             st.rerun()
 
 
+def calendly_callback_page():
+    """Handle Calendly OAuth callback - redirects to calendly_oauth_page"""
+    calendly_oauth_page()
+
+
 def create_company(company_name, subdomain, owner_email, owner_username, owner_password):
     owner_email = normalize_email(owner_email)
     owner_username = owner_username.strip()
@@ -7985,6 +7990,7 @@ def main():
                 "support": support_page,
                 "integrations": integrations_page,
                 "integrations_calendly_auth": calendly_oauth_page,
+                "calendly_callback": calendly_callback_page,
                 "approvals": admin_approval_dashboard,
                 "settings": settings_page,
                 "terms": terms_page,
