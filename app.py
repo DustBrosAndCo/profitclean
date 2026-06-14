@@ -1910,6 +1910,7 @@ def calendly_oauth_page():
     else:
         try:
             auth_url = integration.get_oauth_url()
+            st.code(f"Auth URL being sent: {auth_url}", language="text")
             st.markdown(
                 f"<a href=\"{auth_url}\" target=\"_self\" style=\"display:inline-block;padding:10px 18px;border-radius:8px;background:#1f6feb;color:#fff;text-decoration:none;font-weight:600;\">Continue to Calendly</a>",
                 unsafe_allow_html=True,
