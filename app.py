@@ -899,6 +899,41 @@ def init_db():
         FOREIGN KEY (performed_by) REFERENCES users(id)
     )''')
 
+    # Approval requests for role-based permissions
+    c.execute('''CREATE TABLE IF NOT EXISTS approval_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company_id INTEGER NOT NULL,
+        requester_id INTEGER NOT NULL,
+        request_type TEXT NOT NULL,
+        target_type TEXT NOT NULL,
+        target_id INTEGER NOT NULL,
+        current_value TEXT,
+        requested_value TEXT,
+        reason TEXT,
+        status TEXT DEFAULT 'pending',
+        admin_notes TEXT,
+        created_at DATETIME,
+        reviewed_at DATETIME,
+        reviewed_by INTEGER,
+        FOREIGN KEY (company_id) REFERENCES companies(id),
+        FOREIGN KEY (requester_id) REFERENCES users(id),
+        FOREIGN KEY (reviewed_by) REFERENCES users(id)
+    )''')
+
+    # Activity log for worker actions
+    c.execute('''CREATE TABLE IF NOT EXISTS activity_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        action TEXT NOT NULL,
+        target_type TEXT,
+        target_id INTEGER,
+        details TEXT,
+        created_at DATETIME,
+        FOREIGN KEY (company_id) REFERENCES companies(id),
+        FOREIGN KEY (user_id) REFERENCES users(id)
+    )''')
+
     conn.commit()
     conn.close()
     ensure_default_global_settings()
@@ -1086,6 +1121,226 @@ def migrate_database():
             pass
     conn.commit()
     conn.close()
+# ============================================================
+# PERMISSION SYSTEM
+# ============================================================
+
+def has_permission(user_role: str, action: str, target_type: str = None) -> bool:
+    """Check if user has permission for an action"""
+    
+    # Super admin can do everything
+    if user_role == UserRole.SUPER_ADMIN.value:
+        return True
+    
+    # Permission matrix
+    permissions = {
+        'view_events': [UserRole.ADMIN.value, UserRole.MANAGER.value, UserRole.SUPERVISOR.value, UserRole.WORKER.value],
+        'add_event': [UserRole.ADMIN.value, UserRole.MANAGER.value, UserRole.SUPERVISOR.value, UserRole.WORKER.value],
+        'add_client': [UserRole.ADMIN.value, UserRole.MANAGER.value, UserRole.SUPERVISOR.value, UserRole.WORKER.value],
+        'edit_event': [UserRole.ADMIN.value, UserRole.MANAGER.value],
+        'edit_own_event': [UserRole.SUPERVISOR.value, UserRole.WORKER.value],
+        'delete_event': [UserRole.ADMIN.value],
+        'move_event': [UserRole.ADMIN.value],
+        'request_delete': [UserRole.MANAGER.value, UserRole.SUPERVISOR.value, UserRole.WORKER.value],
+        'request_move': [UserRole.MANAGER.value, UserRole.SUPERVISOR.value, UserRole.WORKER.value],
+        'approve_requests': [UserRole.ADMIN.value, UserRole.MANAGER.value],
+        'manage_workers': [UserRole.ADMIN.value, UserRole.MANAGER.value]
+    }
+    
+    allowed_roles = permissions.get(action, [])
+    return user_role in allowed_roles
+
+
+def can_delete_directly(user_role: str) -> bool:
+    """Check if user can delete without approval"""
+    return user_role in [UserRole.ADMIN.value, UserRole.SUPER_ADMIN.value]
+
+
+def can_move_directly(user_role: str) -> bool:
+    """Check if user can move without approval"""
+    return user_role in [UserRole.ADMIN.value, UserRole.SUPER_ADMIN.value]
+
+
+def requires_approval(user_role: str, action: str) -> bool:
+    """Check if action requires admin approval"""
+    if user_role in [UserRole.ADMIN.value, UserRole.SUPER_ADMIN.value]:
+        return False
+    if action in ['delete', 'move']:
+        return True
+    return False
+
+
+# ============================================================
+# APPROVAL REQUEST SYSTEM
+# ============================================================
+
+def create_approval_request(company_id: int, requester_id: int, request_type: str, target_type: str,
+                            target_id: int, requested_value: str = None, reason: str = "") -> int:
+    """Create an approval request for admin"""
+    
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    # Get current value if applicable
+    current_value = None
+    if target_type == 'scheduled_job':
+        c.execute("SELECT * FROM scheduled_jobs WHERE id = ? AND company_id = ?",
+                  (target_id, company_id))
+        row = c.fetchone()
+        if row:
+            current_value = f"Job: {row[5]} on {row[9]} at {row[10]}"
+    
+    c.execute("""
+        INSERT INTO approval_requests
+        (company_id, requester_id, request_type, target_type, target_id,
+         current_value, requested_value, reason, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+    """, (company_id, requester_id, request_type, target_type, target_id,
+          current_value, requested_value, reason, datetime.now().isoformat()))
+    
+    request_id = c.lastrowid
+    conn.commit()
+    conn.close()
+    
+    # Create notification for admins
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id FROM users WHERE company_id = ? AND role IN ('admin', 'manager')",
+              (company_id,))
+    admins = c.fetchall()
+    for admin in admins:
+        create_notification(admin[0], company_id,
+                           f"New {request_type} request",
+                           f"User requested to {request_type} {target_type} #{target_id}",
+                           "approval_needed", request_id)
+    conn.close()
+    
+    return request_id
+
+
+def get_pending_approval_requests(company_id: int) -> pd.DataFrame:
+    """Get pending approval requests for admin"""
+    
+    conn = sqlite3.connect(DB_PATH)
+    query = """
+        SELECT ar.*, u.username as requester_name
+        FROM approval_requests ar
+        JOIN users u ON ar.requester_id = u.id
+        WHERE ar.company_id = ? AND ar.status = 'pending'
+        ORDER BY ar.created_at DESC
+    """
+    df = pd.read_sql_query(query, conn, params=(company_id,))
+    conn.close()
+    return df
+
+
+def approve_request(request_id: int, admin_id: int, admin_notes: str = "") -> tuple:
+    """Approve a request and execute the action"""
+    
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    # Get request details
+    c.execute("SELECT * FROM approval_requests WHERE id = ?", (request_id,))
+    request = c.fetchone()
+    
+    if not request:
+        conn.close()
+        return False, "Request not found"
+    
+    request_type = request[3]
+    target_type = request[4]
+    target_id = request[5]
+    requested_value = request[7]
+    company_id = request[1]
+    requester_id = request[2]
+    
+    # Execute the approved action
+    success = False
+    if request_type == 'delete_event' and target_type == 'scheduled_job':
+        c.execute("DELETE FROM scheduled_jobs WHERE id = ?", (target_id,))
+        success = True
+    elif request_type == 'move_event' and target_type == 'scheduled_job':
+        # Parse requested_value (e.g., "2024-01-15|10:00 AM")
+        if requested_value:
+            try:
+                new_date, new_time = requested_value.split('|')
+                c.execute("UPDATE scheduled_jobs SET scheduled_date = ?, scheduled_time = ? WHERE id = ?",
+                          (new_date, new_time, target_id))
+                success = True
+            except ValueError:
+                success = False
+    elif request_type == 'edit_event' and target_type == 'scheduled_job':
+        if requested_value:
+            c.execute("UPDATE scheduled_jobs SET notes = ? WHERE id = ?",
+                      (requested_value, target_id))
+            success = True
+    
+    # Update request status
+    c.execute("""
+        UPDATE approval_requests
+        SET status = 'approved', reviewed_at = ?, reviewed_by = ?, admin_notes = ?
+        WHERE id = ?
+    """, (datetime.now().isoformat(), admin_id, admin_notes, request_id))
+    
+    conn.commit()
+    conn.close()
+    
+    # Notify requester
+    if success:
+        create_notification(requester_id, company_id,
+                           f"Your {request_type} request was approved",
+                           f"Admin approved your request to {request_type} {target_type} #{target_id}",
+                           "request_approved", request_id)
+    
+    return success, "Request approved and executed" if success else "Request approved but action failed"
+
+
+def reject_request(request_id: int, admin_id: int, reason: str) -> bool:
+    """Reject a request"""
+    
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    # Get requester info for notification
+    c.execute("SELECT requester_id, company_id FROM approval_requests WHERE id = ?", (request_id,))
+    request = c.fetchone()
+    
+    c.execute("""
+        UPDATE approval_requests
+        SET status = 'rejected', reviewed_at = ?, reviewed_by = ?, admin_notes = ?
+        WHERE id = ?
+    """, (datetime.now().isoformat(), admin_id, reason, request_id))
+    
+    conn.commit()
+    conn.close()
+    
+    if request:
+        create_notification(request[0], request[1],
+                           f"Your request was rejected",
+                           f"Reason: {reason}",
+                           "request_rejected", request_id)
+    
+    return True
+
+
+# ============================================================
+# ACTIVITY LOGGING
+# ============================================================
+
+def log_activity(company_id: int, user_id: int, action: str, target_type: str = None,
+                target_id: int = None, details: str = None):
+    """Log user activity for audit trail"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO activity_log (company_id, user_id, action, target_type, target_id, details, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (company_id, user_id, action, target_type, target_id, details, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+
+
 # ============================================================
 # NOTIFICATION SYSTEM
 # ============================================================
@@ -3601,6 +3856,8 @@ def dashboard():
             ("🧪 Test Approval Link", "test_approval"),
         ]
         effective_role = get_effective_user()['role'] if get_effective_user() else user['role']
+        if effective_role in ['super_admin', 'admin', 'manager']:
+            menu_items.append(("📋 Approval Requests", "approvals"))
         if effective_role in ['super_admin', 'support_staff']:
             menu_items.append(("🔧 Admin Tools", "admin_companies"))
         if effective_role in ['super_admin', 'admin']:
@@ -4794,34 +5051,157 @@ def schedule_page():
     if st.button("← Back"):
         st.session_state.page = "dashboard"
         st.rerun()
+    
     st.markdown("### 📅 Job Schedule")
+    
+    user_role = st.session_state.user['role']
     company_id = get_current_user_company()
+    user_id = st.session_state.user['user_id']
+    
+    # View is allowed for all roles
     view_date = st.date_input("Date", datetime.now())
     status_filter = st.selectbox("Status", ["All","scheduled","completed","cancelled"])
     df = get_scheduled_jobs(date_filter=view_date, status_filter=status_filter)
+    
     if df.empty:
         st.info("No jobs")
     else:
-        st.dataframe(df)
-    with st.expander("➕ Add Job"):
-        clients_df = get_all_clients()
-        client_options = ["Select..."] + clients_df['business_name'].tolist()
-        client = st.selectbox("Client", client_options)
-        accessible_workers = get_accessible_user_ids(st.session_state.user['user_id'], st.session_state.user['role'], company_id)
-        placeholders = ','.join(['?' for _ in accessible_workers])
-        conn = sqlite3.connect(DB_PATH)
-        workers_df = pd.read_sql_query(f"SELECT id, username FROM users WHERE role='worker' AND company_id = ? AND id IN ({placeholders})", conn, params=[company_id] + accessible_workers)
-        conn.close()
-        worker_options = ["Unassigned"] + workers_df['username'].tolist()
-        worker = st.selectbox("Worker", worker_options)
-        time_slot = st.selectbox("Time", ["8:00 AM","9:00 AM","10:00 AM","11:00 AM","12:00 PM","1:00 PM","2:00 PM","3:00 PM","4:00 PM"])
-        if st.button("Schedule"):
-            if client != "Select...":
-                client_id = clients_df[clients_df['business_name']==client]['id'].values[0]
-                worker_id = None if worker=="Unassigned" else workers_df[workers_df['username']==worker]['id'].values[0]
-                schedule_job(client_id, client, "", None, worker_id, view_date, time_slot)
-                st.success("Scheduled")
-                st.rerun()
+        # Display jobs with action buttons based on permissions
+        for _, job in df.iterrows():
+            with st.container():
+                col1, col2, col3, col4 = st.columns([3, 2, 2, 2])
+                
+                with col1:
+                    st.markdown(f"**{job['client_name']}**")
+                    st.caption(f"{job['scheduled_time']} | Worker: {job['assigned_worker_id'] or 'Unassigned'}")
+                
+                with col2:
+                    st.markdown(f"Status: {job['status']}")
+                
+                with col3:
+                    # Edit button - only for admin/manager
+                    if has_permission(user_role, 'edit_event'):
+                        if st.button(f"✏️ Edit", key=f"edit_{job['id']}"):
+                            st.session_state.edit_job_id = job['id']
+                            st.rerun()
+                
+                with col4:
+                    # Delete/Move buttons with approval logic
+                    if can_delete_directly(user_role):
+                        if st.button(f"🗑️ Delete", key=f"del_{job['id']}"):
+                            if st.confirm(f"Delete job for {job['client_name']}?"):
+                                conn = sqlite3.connect(DB_PATH)
+                                c = conn.cursor()
+                                c.execute("DELETE FROM scheduled_jobs WHERE id = ?", (job['id'],))
+                                conn.commit()
+                                conn.close()
+                                log_activity(company_id, user_id, 'delete_job', 'scheduled_job', job['id'], f"Deleted job for {job['client_name']}")
+                                st.success("Job deleted")
+                                st.rerun()
+                    else:
+                        if st.button(f"📨 Request Delete", key=f"req_del_{job['id']}"):
+                            with st.expander(f"Request deletion for {job['client_name']}", key=f"exp_del_{job['id']}"):
+                                reason = st.text_input("Reason for deletion request:", key=f"reason_{job['id']}")
+                                if st.button("Submit Request", key=f"submit_del_{job['id']}"):
+                                    create_approval_request(
+                                        company_id, user_id, 'delete_event', 'scheduled_job',
+                                        job['id'], None, reason
+                                    )
+                                    log_activity(company_id, user_id, 'request_delete', 'scheduled_job', job['id'], f"Requested deletion: {reason}")
+                                    st.success("Deletion request sent to admin")
+                                    st.rerun()
+                
+                st.markdown("---")
+    
+    # Add job - allowed for most roles
+    if has_permission(user_role, 'add_event'):
+        with st.expander("➕ Add Job"):
+            clients_df = get_all_clients()
+            client_options = ["Select..."] + clients_df['business_name'].tolist()
+            client = st.selectbox("Client", client_options)
+            accessible_workers = get_accessible_user_ids(st.session_state.user['user_id'], st.session_state.user['role'], company_id)
+            placeholders = ','.join(['?' for _ in accessible_workers])
+            conn = sqlite3.connect(DB_PATH)
+            workers_df = pd.read_sql_query(f"SELECT id, username FROM users WHERE role='worker' AND company_id = ? AND id IN ({placeholders})", conn, params=[company_id] + accessible_workers)
+            conn.close()
+            worker_options = ["Unassigned"] + workers_df['username'].tolist()
+            worker = st.selectbox("Worker", worker_options)
+            time_slot = st.selectbox("Time", ["8:00 AM","9:00 AM","10:00 AM","11:00 AM","12:00 PM","1:00 PM","2:00 PM","3:00 PM","4:00 PM"])
+            if st.button("Schedule"):
+                if client != "Select...":
+                    client_id = clients_df[clients_df['business_name']==client]['id'].values[0]
+                    worker_id = None if worker=="Unassigned" else workers_df[workers_df['username']==worker]['id'].values[0]
+                    schedule_job(client_id, client, "", None, worker_id, view_date, time_slot)
+                    log_activity(company_id, user_id, 'add_job', 'scheduled_job', None, f"Added job for {client}")
+                    st.success("Scheduled")
+                    st.rerun()
+
+
+def admin_approval_dashboard():
+    """Admin dashboard to manage approval requests"""
+    
+    if st.button("← Back"):
+        st.session_state.page = "dashboard"
+        st.rerun()
+    
+    st.markdown("### 📋 Approval Requests Dashboard")
+    st.caption("Review and manage requests from workers")
+    
+    user_role = st.session_state.user['role']
+    
+    if not has_permission(user_role, 'approve_requests'):
+        st.error("❌ You don't have permission to view this page")
+        return
+    
+    company_id = get_current_user_company()
+    user_id = st.session_state.user['user_id']
+    
+    # Get pending requests
+    pending_requests = get_pending_approval_requests(company_id)
+    
+    if pending_requests.empty:
+        st.info("No pending approval requests")
+    else:
+        for _, req in pending_requests.iterrows():
+            with st.container():
+                col1, col2, col3 = st.columns([2, 1, 2])
+                
+                with col1:
+                    st.markdown(f"**{req['request_type'].upper()} Request**")
+                    st.caption(f"From: {req['requester_name']}")
+                    st.caption(f"Target: {req['target_type']} #{req['target_id']}")
+                    if req['reason']:
+                        st.caption(f"Reason: {req['reason']}")
+                
+                with col2:
+                    st.markdown(f"**Current:** {req['current_value']}")
+                    if req['requested_value']:
+                        st.markdown(f"**Requested:** {req['requested_value']}")
+                
+                with col3:
+                    col_a, col_b = st.columns(2)
+                    with col_a:
+                        admin_notes = st.text_input("Notes", key=f"notes_{req['id']}")
+                        if st.button(f"✅ Approve", key=f"approve_{req['id']}"):
+                            success, msg = approve_request(req['id'], user_id, admin_notes)
+                            if success:
+                                log_activity(company_id, user_id, 'approve_request', 'approval_request', req['id'], f"Approved {req['request_type']} request from {req['requester_name']}")
+                                st.success(msg)
+                            else:
+                                st.error(msg)
+                            st.rerun()
+                    with col_b:
+                        if st.button(f"❌ Reject", key=f"reject_{req['id']}"):
+                            if admin_notes:
+                                reject_request(req['id'], user_id, admin_notes)
+                                log_activity(company_id, user_id, 'reject_request', 'approval_request', req['id'], f"Rejected {req['request_type']} request from {req['requester_name']}")
+                                st.success("Request rejected")
+                                st.rerun()
+                            else:
+                                st.warning("Please provide a reason for rejection")
+                
+                st.markdown("---")
+
 
 def job_templates_page():
     if st.button("← Back"):
@@ -7605,6 +7985,7 @@ def main():
                 "support": support_page,
                 "integrations": integrations_page,
                 "integrations_calendly_auth": calendly_oauth_page,
+                "approvals": admin_approval_dashboard,
                 "settings": settings_page,
                 "terms": terms_page,
                 "test_approval": test_approval_link,
