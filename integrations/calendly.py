@@ -384,7 +384,6 @@ class CalendlyIntegration(BaseIntegration):
 import unittest
 from unittest.mock import patch, MagicMock
 from datetime import datetime
-from calendly_integration import CalendlyIntegration
 
 class TestCalendlyIntegration(unittest.TestCase):
     def setUp(self):
