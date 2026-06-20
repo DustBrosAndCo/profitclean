@@ -27,7 +27,7 @@ class BaseIntegration(ABC):
         pass
 
     @abstractmethod
-    def get_oauth_url(self) -> str:
+    def get_oauth_url(self, state: str = None) -> str:
         pass
 
     @abstractmethod
