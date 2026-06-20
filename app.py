@@ -556,8 +556,22 @@ def init_db():
         updated_at DATETIME,
         preferred_contact_method TEXT DEFAULT 'email',
         lead_source TEXT,
+        password_hash TEXT,
+        salt TEXT,
+        portal_enabled INTEGER DEFAULT 0,
         FOREIGN KEY (company_id) REFERENCES companies(id),
         FOREIGN KEY (user_id) REFERENCES users(id)
+    )''')
+
+    # Client portal access tokens (for clients to set up/reset their portal password)
+    c.execute('''CREATE TABLE IF NOT EXISTS client_portal_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        client_id INTEGER NOT NULL,
+        token TEXT NOT NULL UNIQUE,
+        expires_at DATETIME NOT NULL,
+        used BOOLEAN DEFAULT 0,
+        created_at DATETIME,
+        FOREIGN KEY (client_id) REFERENCES clients(id)
     )''')
 
     # Estimates
@@ -1159,6 +1173,34 @@ def migrate_database():
             print('Added updated_at column to company_integrations')
         except sqlite3.OperationalError:
             pass
+    conn.commit()
+    conn.close()
+
+    # Client portal password migration
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("PRAGMA table_info(clients)")
+    client_columns = [col[1] for col in c.fetchall()]
+    for col_name, col_def in [("password_hash", "TEXT"), ("salt", "TEXT"), ("portal_enabled", "INTEGER DEFAULT 0")]:
+        if col_name not in client_columns:
+            try:
+                c.execute(f"ALTER TABLE clients ADD COLUMN {col_name} {col_def}")
+                print(f"Added {col_name} column to clients")
+            except sqlite3.OperationalError:
+                pass
+
+    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='client_portal_tokens'")
+    if not c.fetchone():
+        c.execute('''CREATE TABLE IF NOT EXISTS client_portal_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER NOT NULL,
+            token TEXT NOT NULL UNIQUE,
+            expires_at DATETIME NOT NULL,
+            used BOOLEAN DEFAULT 0,
+            created_at DATETIME,
+            FOREIGN KEY (client_id) REFERENCES clients(id)
+        )''')
+        print('Created client_portal_tokens table')
     conn.commit()
     conn.close()
 # ============================================================
@@ -2204,9 +2246,6 @@ def reset_user_password(email, new_password, reset_code=None):
     return True, "Password reset successfully"
 
 
-def generate_session_token():
-    return secrets.token_urlsafe(32)
-
 def validate_password_strength(pwd):
     if len(pwd) < MIN_PASSWORD_LENGTH:
         return False, f"Password must be at least {MIN_PASSWORD_LENGTH} characters"
@@ -2437,8 +2476,128 @@ def approve_estimate_with_token(token: str):
     conn.close()
     
     log_audit(None, "estimate_approved", f"Estimate {estimate_id} approved via token")
-    
+
     return True, "Estimate approved successfully"
+
+
+# ============================================================
+# CLIENT PORTAL AUTHENTICATION
+# ============================================================
+
+def generate_client_portal_token(client_id: int, expires_hours: int = 24) -> str:
+    """Generate and store a token for a client to set up or reset their portal password"""
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.now() + timedelta(hours=expires_hours)
+
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO client_portal_tokens (client_id, token, expires_at, created_at)
+        VALUES (?, ?, ?, ?)
+    """, (client_id, token, expires_at.isoformat(), datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+    return token
+
+
+def validate_client_portal_token(token: str):
+    """Validate a client portal token and return the client_id"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT client_id, expires_at, used FROM client_portal_tokens WHERE token = ?", (token,))
+    row = c.fetchone()
+    conn.close()
+
+    if not row:
+        return None, "Invalid portal access link"
+
+    client_id, expires_at, used = row
+    if used:
+        return None, "This link has already been used"
+    if datetime.fromisoformat(expires_at) < datetime.now():
+        return None, "This link has expired. Please request a new one."
+
+    return client_id, None
+
+
+def set_client_password(client_id: int, new_password: str, token: str = None):
+    """Set or reset a client's portal password"""
+    valid, msg = validate_password_strength(new_password)
+    if not valid:
+        return False, msg
+
+    hashed, salt = hash_password(new_password)
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE clients SET password_hash = ?, salt = ?, portal_enabled = 1 WHERE id = ?",
+              (hashed, salt, client_id))
+    if token:
+        c.execute("UPDATE client_portal_tokens SET used = 1 WHERE token = ?", (token,))
+    conn.commit()
+    conn.close()
+    return True, "Password set successfully"
+
+
+def send_client_portal_setup_email(company_id: int, client_email: str, client_name: str, setup_link: str) -> bool:
+    """Send a client a link to set up or reset their portal password"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT business_name FROM business_profile WHERE company_id = ?", (company_id,))
+    business = c.fetchone()
+    conn.close()
+    business_name = business[0] if business else "ProfitClean"
+
+    subject = f"Set up your client portal access - {business_name}"
+    body = f"""Dear {client_name},
+
+Click the link below to set up (or reset) your password for the {business_name} client portal:
+
+{setup_link}
+
+This link will expire in 24 hours. If you did not request this, please ignore this email.
+"""
+    html_body = f"""
+    <html><body>
+        <h2>Set Up Your Client Portal Access</h2>
+        <p>Dear {client_name},</p>
+        <p>Click the button below to set up (or reset) your password for the {business_name} client portal:</p>
+        <p><a href="{setup_link}" style="background-color: #10b981; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Set Password</a></p>
+        <p>This link will expire in 24 hours. If you did not request this, please ignore this email.</p>
+    </body></html>
+    """
+    return send_email(company_id, client_email, subject, body, html_body)
+
+
+def authenticate_client(email: str, password: str):
+    """Authenticate a client for the client portal. Returns (success, client_dict_or_error_message)."""
+    email = normalize_email(email)
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    # Note: email lookup is global across companies (matches existing client_login_page
+    # behavior) - if multiple companies have a client with the same email, the first
+    # match wins. Clients are scoped by company_id after login.
+    c.execute("SELECT id, business_name, company_id, password_hash, portal_enabled FROM clients WHERE email = ?", (email,))
+    client = c.fetchone()
+    conn.close()
+
+    if not client:
+        return False, "Invalid email or password"
+
+    client_id, business_name, company_id, password_hash, portal_enabled = client
+
+    if not portal_enabled or not password_hash:
+        return False, "PORTAL_NOT_SET_UP"
+
+    if not verify_password(password, password_hash):
+        return False, "Invalid email or password"
+
+    return True, {
+        "client_id": client_id,
+        "business_name": business_name,
+        "company_id": company_id,
+        "email": email,
+    }
+
 
 def get_business_name():
     company_id = get_current_user_company()
@@ -2484,26 +2643,6 @@ def get_company_settings():
 # ============================================================
 # EXPORT / IMPORT HELPERS
 # ============================================================
-
-def export_company_data(company_id):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    tables = ["users", "clients", "estimates", "scheduled_jobs", "inspections", "quick_jobs", "monthly_expenses", "supplies", "team_messages", "support_tickets", "worker_certifications", "worker_badges"]
-    data = {"company_id": company_id, "export_date": datetime.now().isoformat(), "tables": {}}
-    for table in tables:
-        try:
-            c.execute(f"SELECT * FROM {table} WHERE company_id = ?", (company_id,))
-            rows = c.fetchall()
-            c.execute(f"PRAGMA table_info({table})")
-            columns = [col[1] for col in c.fetchall()]
-            table_data = []
-            for row in rows:
-                table_data.append(dict(zip(columns, row)))
-            data["tables"][table] = table_data
-        except:
-            data["tables"][table] = []
-    conn.close()
-    return json.dumps(data, indent=2, default=str)
 
 def import_company_data(dest_company_id, data):
     conn = sqlite3.connect(DB_PATH)
@@ -3609,6 +3748,64 @@ def get_all_workers_for_supervisor(supervisor_id, company_id):
     df = pd.read_sql_query("SELECT id, username, email, hire_date, is_active FROM users WHERE supervisor_id = ? AND company_id = ? AND role = 'worker'", conn, params=(supervisor_id, company_id))
     conn.close()
     return df
+
+
+def render_worker_transfer_ui(key_prefix):
+    """Super-admin-only UI to move a worker/supervisor/manager to a different company.
+    Shared between workers_page() and admin_companies_page() so the transfer logic lives in one place."""
+    conn = sqlite3.connect(DB_PATH)
+    workers_df = pd.read_sql_query("""
+        SELECT u.id, u.username, u.email, u.role, u.company_id,
+               c.name as current_company
+        FROM users u
+        LEFT JOIN companies c ON u.company_id = c.id
+        WHERE u.role IN ('worker', 'supervisor', 'manager')
+        ORDER BY u.username
+    """, conn)
+    companies_df = pd.read_sql_query("SELECT id, name FROM companies WHERE is_active = 1 ORDER BY name", conn)
+    conn.close()
+
+    if workers_df.empty:
+        st.info("No workers found to transfer.")
+        return
+    if companies_df.empty:
+        st.info("No active companies found.")
+        return
+
+    col1, col2 = st.columns(2)
+    with col1:
+        selected_worker = st.selectbox(
+            "Select worker", workers_df['id'].tolist(),
+            format_func=lambda x: f"{workers_df[workers_df['id']==x]['username'].iloc[0]} ({workers_df[workers_df['id']==x]['current_company'].iloc[0]})",
+            key=f"{key_prefix}_worker_select",
+        )
+    with col2:
+        dest_company = st.selectbox(
+            "Destination company", companies_df['id'].tolist(),
+            format_func=lambda x: companies_df[companies_df['id']==x]['name'].iloc[0],
+            key=f"{key_prefix}_dest_select",
+        )
+
+    if st.button("Transfer Worker", key=f"{key_prefix}_btn"):
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        try:
+            c.execute("SELECT company_id FROM users WHERE id = ?", (selected_worker,))
+            row = c.fetchone()
+            from_company = row[0] if row else None
+            c.execute("UPDATE users SET company_id = ? WHERE id = ?", (dest_company, selected_worker))
+            c.execute("INSERT INTO worker_transfers (worker_id, from_company_id, to_company_id, transferred_by, transferred_at) VALUES (?,?,?,?,?)",
+                      (selected_worker, from_company, dest_company, st.session_state.user['user_id'], datetime.now().isoformat()))
+            c.execute("INSERT INTO audit_log (user_id, action, details, created_at) VALUES (?,?,?,?)",
+                      (st.session_state.user['user_id'], 'transfer_worker', f'Worker {selected_worker} transferred from {from_company} to {dest_company}', datetime.now().isoformat()))
+            conn.commit()
+            conn.close()
+            st.success("Worker transferred successfully")
+            st.rerun()
+        except Exception as e:
+            conn.rollback()
+            conn.close()
+            st.error(f"Transfer failed: {e}")
 
 def get_all_clients():
     company_id = get_current_user_company()
@@ -5660,42 +5857,7 @@ def workers_page():
 
         st.markdown("#### Transfer Worker Between Companies")
         st.caption("Moving a worker between companies is a platform-level action restricted to super admins.")
-        if not workers.empty:
-            sel_worker_xfer = st.selectbox(
-                "Select worker to transfer",
-                workers['id'].tolist(),
-                format_func=lambda x: f"{workers[workers['id']==x]['username'].iloc[0]} ({x})",
-                key="super_admin_transfer_worker_select",
-            )
-            companies_conn = sqlite3.connect(DB_PATH)
-            comps_df = pd.read_sql_query("SELECT id, name FROM companies WHERE is_active = 1 ORDER BY name", companies_conn)
-            companies_conn.close()
-            dest = st.selectbox(
-                "Transfer to Company",
-                comps_df['id'].tolist(),
-                format_func=lambda x: comps_df[comps_df['id']==x]['name'].iloc[0],
-                key="super_admin_transfer_worker_dest",
-            )
-            if st.button("Transfer Worker", key="super_admin_transfer_worker_btn"):
-                conn = sqlite3.connect(DB_PATH)
-                c = conn.cursor()
-                c.execute("SELECT company_id FROM users WHERE id = ?", (sel_worker_xfer,))
-                row = c.fetchone()
-                from_company = row[0] if row else None
-                try:
-                    c.execute("UPDATE users SET company_id = ? WHERE id = ?", (dest, sel_worker_xfer))
-                    c.execute("INSERT INTO worker_transfers (worker_id, from_company_id, to_company_id, transferred_by, transferred_at) VALUES (?,?,?,?,?)",
-                              (sel_worker_xfer, from_company, dest, st.session_state.user['user_id'], datetime.now().isoformat()))
-                    c.execute("INSERT INTO audit_log (user_id, action, details, created_at) VALUES (?,?,?,?)",
-                              (st.session_state.user['user_id'], 'transfer_worker', f'Worker {sel_worker_xfer} from {from_company} to {dest}', datetime.now().isoformat()))
-                    conn.commit()
-                    conn.close()
-                    st.success("Worker transferred successfully")
-                    st.rerun()
-                except Exception as e:
-                    conn.rollback()
-                    conn.close()
-                    st.error(f"Transfer failed: {e}")
+        render_worker_transfer_ui("super_admin_workers_page")
     elif user['role'] == 'support_staff':
         conn = sqlite3.connect(DB_PATH)
         if has_invite_code:
@@ -7841,26 +8003,85 @@ def client_login_page():
     st.markdown("### 👤 Client Portal Login")
     with st.form("client_login"):
         email = st.text_input("Email")
+        password = st.text_input("Password", type="password")
         if st.form_submit_button("Login"):
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            # Note: Email lookup is global - if multiple companies have same client email, first match wins
-            # This is acceptable for client portal as clients are scoped by company_id after login
-            c.execute("SELECT id, business_name, company_id FROM clients WHERE email = ?", (email,))
-            client = c.fetchone()
-            conn.close()
-            if client:
-                st.session_state.client_logged_in = True
-                st.session_state.client_id = client[0]
-                st.session_state.client_name = client[1]
-                st.session_state.client_company_id = client[2]
-                st.session_state.page = "client_dashboard"
-                st.rerun()
+            if not email or not password:
+                st.error("Please enter your email and password")
             else:
-                st.error("Client not found")
+                success, result = authenticate_client(email, password)
+                if success:
+                    st.session_state.client_logged_in = True
+                    st.session_state.client_id = result["client_id"]
+                    st.session_state.client_name = result["business_name"]
+                    st.session_state.client_company_id = result["company_id"]
+                    st.session_state.client_email = result["email"]
+                    st.session_state.page = "client_dashboard"
+                    st.rerun()
+                elif result == "PORTAL_NOT_SET_UP":
+                    st.warning("Portal access has not been set up for this email yet. Use the option below to set a password.")
+                else:
+                    st.error(result)
+
+    with st.expander("🔑 Set up or reset your portal password"):
+        setup_email = st.text_input("Email Address", key="client_portal_setup_email")
+        if st.button("Send Setup Link", key="client_portal_send_setup"):
+            if not setup_email:
+                st.error("Please enter your email address")
+            else:
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                c.execute("SELECT id, business_name, company_id FROM clients WHERE email = ?", (normalize_email(setup_email),))
+                client = c.fetchone()
+                conn.close()
+                # Always show the same message whether or not the email matches, so this
+                # form can't be used to enumerate which emails exist as clients.
+                if client:
+                    client_id, business_name, company_id = client
+                    setup_token = generate_client_portal_token(client_id)
+                    base_url = os.getenv('APP_BASE_URL', 'https://profitclean-c4s6mqoafikfejkdfuwgvx.streamlit.app')
+                    setup_link = f"{base_url}?page=client_set_password&token={setup_token}"
+                    send_client_portal_setup_email(company_id, setup_email, business_name, setup_link)
+                st.success("If an account exists with this email, a setup link has been sent.")
+
     if st.button("← Back"):
         st.session_state.page = "dashboard"
         st.rerun()
+
+
+def client_set_password_page():
+    st.markdown("### 🔑 Set Your Client Portal Password")
+    params = get_query_params_safely()
+    token = parse_query_param(params, "token")
+
+    if not token:
+        st.error("❌ Invalid or missing setup link")
+        if st.button("← Back to Login"):
+            st.session_state.page = "client_login"
+            st.rerun()
+        return
+
+    client_id, error = validate_client_portal_token(token)
+    if error:
+        st.error(f"❌ {error}")
+        if st.button("← Back to Login"):
+            st.session_state.page = "client_login"
+            st.rerun()
+        return
+
+    new_password = st.text_input("New Password", type="password")
+    confirm_password = st.text_input("Confirm Password", type="password")
+    if st.button("Set Password"):
+        if new_password != confirm_password:
+            st.error("Passwords do not match")
+        else:
+            success, msg = set_client_password(client_id, new_password, token)
+            if success:
+                st.success("✅ Password set! You can now log in.")
+                if st.button("Go to Login"):
+                    st.session_state.page = "client_login"
+                    st.rerun()
+            else:
+                st.error(msg)
 
 def client_dashboard():
     if st.sidebar.button("Logout"):
@@ -8422,53 +8643,7 @@ def admin_companies_page():
         st.markdown("### 🔄 Transfer Workers Between Companies")
         
         if current_user['role'] == 'super_admin':
-            conn = sqlite3.connect(DB_PATH)
-            workers_df = pd.read_sql_query("""
-                SELECT u.id, u.username, u.email, u.role, u.company_id,
-                       c.name as current_company
-                FROM users u
-                LEFT JOIN companies c ON u.company_id = c.id
-                WHERE u.role IN ('worker', 'supervisor', 'manager')
-                ORDER BY u.username
-            """, conn)
-            
-            companies_df = pd.read_sql_query("SELECT id, name FROM companies WHERE is_active = 1 ORDER BY name", conn)
-            conn.close()
-            
-            if not workers_df.empty and not companies_df.empty:
-                col1, col2 = st.columns(2)
-                with col1:
-                    selected_worker = st.selectbox("Select worker", workers_df['id'].tolist(),
-                                                   format_func=lambda x: f"{workers_df[workers_df['id']==x]['username'].iloc[0]} ({workers_df[workers_df['id']==x]['current_company'].iloc[0]})")
-                with col2:
-                    dest_company = st.selectbox("Destination company", companies_df['id'].tolist(),
-                                               format_func=lambda x: companies_df[companies_df['id']==x]['name'].iloc[0])
-                
-                if st.button("Transfer Worker"):
-                    conn = sqlite3.connect(DB_PATH)
-                    c = conn.cursor()
-                    try:
-                        c.execute("SELECT company_id FROM users WHERE id = ?", (selected_worker,))
-                        row = c.fetchone()
-                        from_company = row[0] if row else None
-                        c.execute("UPDATE users SET company_id = ? WHERE id = ?", (dest_company, selected_worker))
-                        c.execute("INSERT INTO worker_transfers (worker_id, from_company_id, to_company_id, transferred_by, transferred_at) VALUES (?,?,?,?,?)",
-                                  (selected_worker, from_company, dest_company, st.session_state.user['user_id'], datetime.now().isoformat()))
-                        c.execute("INSERT INTO audit_log (user_id, action, details, created_at) VALUES (?,?,?,?)",
-                                  (st.session_state.user['user_id'], 'transfer_worker', f'Worker {selected_worker} transferred from {from_company} to {dest_company}', datetime.now().isoformat()))
-                        conn.commit()
-                        st.success("Worker transferred successfully")
-                        conn.close()
-                        st.rerun()
-                    except Exception as e:
-                        conn.rollback()
-                        conn.close()
-                        st.error(f"Transfer failed: {e}")
-            else:
-                if workers_df.empty:
-                    st.info("No workers found to transfer.")
-                if companies_df.empty:
-                    st.info("No active companies found.")
+            render_worker_transfer_ui("admin_companies_tab3")
         else:
             st.error("❌ Access Denied: Only Super Admin can transfer workers between companies.")
             st.info("If you need to transfer a worker, please contact your system administrator.")
@@ -8740,6 +8915,16 @@ def main():
         state = parse_query_param(params, "state")
         if code and state:
             st.session_state.page = "integrations_calendly_auth"
+        elif not st.session_state.get("_page_param_consumed"):
+            # Honor a deep-link ?page=... param (used by emailed links like the
+            # estimate-approval and client-portal-setup emails) on first load only.
+            # Without the "consumed" guard, clicking any in-app nav button would
+            # just bounce back to this page on the next rerun since the query
+            # param is still in the URL.
+            deep_link_page = parse_query_param(params, "page")
+            if deep_link_page:
+                st.session_state.page = deep_link_page
+            st.session_state["_page_param_consumed"] = True
 
         if st.session_state.get("client_logged_in", False):
             if st.session_state.page == "client_dashboard":
@@ -8787,6 +8972,8 @@ def main():
                 "approve_estimate": approve_estimate_page,
                 "internal_pricing": internal_pricing_dashboard,
                 "admin_companies": admin_companies_page,
+                "client_login": client_login_page,
+                "client_set_password": client_set_password_page,
             }
             current = st.session_state.page
             if current in pages:
