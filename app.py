@@ -4930,6 +4930,135 @@ def save_estimate_to_database(
     return estimate_id
 
 
+PROPERTY_TYPES = ["Grocery Store", "Retail Store", "Gym", "School", "Office", "Restaurant", "Medical Office", "Dental Office", "Warehouse", "Airbnb / Short-Term Rental", "Other"]
+
+PROPERTY_SCOPE_TEMPLATES = {
+    "Grocery Store": [
+        "Remove all items from shelves, wipe down and sanitize shelving, reorganize and restock neatly",
+        "Wipe down AC vents",
+        "Clean multiple stains in the ceiling",
+        "Full floor cleaning and detailing",
+        "Restroom deep cleaning and sanitation",
+        "Interior window cleaning",
+        "Surface wipe-downs and high dusting",
+        "Debris removal",
+        "Sanitize soda machine nozzles",
+        "Clean refrigerator glass",
+        "Steam clean stains if needed",
+        "Clean checkout lanes",
+    ],
+    "Retail Store": [
+        "Remove items from shelves, wipe down and sanitize, reorganize and restock neatly",
+        "Wipe down AC vents",
+        "Full floor cleaning and detailing",
+        "Restroom deep cleaning and sanitation",
+        "Interior window cleaning",
+        "Surface wipe-downs and high dusting",
+        "Debris removal",
+        "Clean fitting room mirrors and surfaces",
+        "Clean checkout/register counters",
+    ],
+    "Gym": [
+        "Sanitize all gym equipment (cardio machines, weights, benches)",
+        "Clean and disinfect locker rooms and showers",
+        "Mop and disinfect floors and workout mats",
+        "Clean mirrors throughout the facility",
+        "Sanitize water fountains and hydration stations",
+        "Restroom deep cleaning and sanitation",
+        "Wipe down AC vents",
+        "Trash removal and liner replacement",
+        "Interior window cleaning",
+        "Surface wipe-downs and high dusting",
+    ],
+    "Office": [
+        "Empty trash and replace liners in all offices and common areas",
+        "Wipe down desks, conference tables, and workstations",
+        "Vacuum carpets and mop hard floors",
+        "Clean breakroom counters, sink, and appliances",
+        "Restroom deep cleaning and sanitation",
+        "Interior window cleaning",
+        "Wipe down AC vents",
+        "Surface wipe-downs and high dusting",
+        "Sanitize doorknobs and high-touch surfaces",
+    ],
+    "Restaurant": [
+        "Deep clean kitchen surfaces and degrease equipment",
+        "Clean and sanitize dining area tables and chairs",
+        "Mop and degrease kitchen floors",
+        "Restroom deep cleaning and sanitation",
+        "Clean walk-in cooler/freezer surfaces",
+        "Wipe down AC vents and exhaust hoods",
+        "Interior window cleaning",
+        "Trash and grease trap area cleanup",
+        "Surface wipe-downs and high dusting",
+    ],
+    "Medical Office": [
+        "Disinfect exam rooms and treatment areas (hospital-grade cleaner)",
+        "Sanitize waiting room furniture and high-touch surfaces",
+        "Restroom deep cleaning and sanitation",
+        "Biohazard-compliant trash removal",
+        "Mop and disinfect floors",
+        "Wipe down AC vents",
+        "Interior window cleaning",
+        "Surface wipe-downs and high dusting",
+        "Sanitize medical equipment exteriors",
+    ],
+    "Dental Office": [
+        "Disinfect treatment rooms and dental chairs (hospital-grade cleaner)",
+        "Sanitize suction lines and instrument trays",
+        "Sanitize waiting room furniture and high-touch surfaces",
+        "Restroom deep cleaning and sanitation",
+        "Biohazard-compliant trash and sharps disposal",
+        "Mop and disinfect floors",
+        "Wipe down AC vents",
+        "Interior window cleaning",
+        "Surface wipe-downs and high dusting",
+    ],
+    "Warehouse": [
+        "Sweep and scrub warehouse floors",
+        "Clean loading dock area",
+        "Dust high shelving and racking",
+        "Restroom deep cleaning and sanitation",
+        "Trash and debris removal",
+        "Wipe down AC vents",
+        "Office area cleaning (if applicable)",
+        "Surface wipe-downs and high dusting",
+    ],
+    "School": [
+        "Clean and sanitize classroom desks and chairs",
+        "Disinfect high-touch surfaces (door handles, light switches, railings)",
+        "Clean and sanitize cafeteria tables and serving areas",
+        "Restroom deep cleaning and sanitation",
+        "Sweep, mop, and/or vacuum hallways and classrooms",
+        "Wipe down whiteboards and surfaces",
+        "Trash removal and liner replacement",
+        "Wipe down AC vents",
+        "Interior window cleaning",
+        "Surface wipe-downs and high dusting",
+    ],
+    "Airbnb / Short-Term Rental": [
+        "Strip and remake beds with fresh linens",
+        "Launder and restock towels and linens",
+        "Full kitchen cleaning (counters, appliances, sink, dishes)",
+        "Full bathroom cleaning and sanitation",
+        "Vacuum and mop all floors",
+        "Restock guest supplies (toiletries, paper towels, coffee, etc.)",
+        "Trash removal and liner replacement",
+        "Dust and wipe down all surfaces",
+        "Check for damage or missing items and report to host",
+        "Interior window cleaning",
+    ],
+    "Other": [
+        "Full floor cleaning and detailing",
+        "Restroom deep cleaning and sanitation",
+        "Interior window cleaning",
+        "Surface wipe-downs and high dusting",
+        "Debris removal",
+        "Wipe down AC vents",
+    ],
+}
+
+
 def generate_customer_proposal():
     """Generate a professional customer proposal with pick-and-choose options and profit calculator"""
     if st.button("← Back"):
@@ -4985,13 +5114,17 @@ def generate_customer_proposal():
             client_email = st.text_input("Client Email", value=st.session_state.proposal_data.get("client_email", ""))
             property_address = st.text_area("Property Address", value=st.session_state.proposal_data.get("property_address", ""), height=68)
         with col2:
-            property_type = st.selectbox("Property Type", ["Grocery Store", "Retail Store", "Office", "Restaurant", "Medical/Dental", "Warehouse", "Other"], 
-                                        index=["Grocery Store", "Retail Store", "Office", "Restaurant", "Medical/Dental", "Warehouse", "Other"].index(
+            property_type = st.selectbox("Property Type", PROPERTY_TYPES,
+                                        index=PROPERTY_TYPES.index(
                                             st.session_state.proposal_data.get("property_type", "Grocery Store")))
             square_feet = st.number_input("Square Footage", min_value=100, value=st.session_state.proposal_data.get("square_feet", 2320), step=100)
-            num_checkout_lanes = st.number_input("Number of Checkout Lanes", min_value=0, value=st.session_state.proposal_data.get("num_checkout_lanes", 3))
-            has_soda_machine = st.checkbox("Has Soda Machine", value=st.session_state.proposal_data.get("has_soda_machine", True))
-        
+            if property_type == "Grocery Store":
+                num_checkout_lanes = st.number_input("Number of Checkout Lanes", min_value=0, value=st.session_state.proposal_data.get("num_checkout_lanes", 3))
+                has_soda_machine = st.checkbox("Has Soda Machine", value=st.session_state.proposal_data.get("has_soda_machine", True))
+            else:
+                num_checkout_lanes = 0
+                has_soda_machine = False
+
         st.session_state.proposal_data["client_name"] = client_name
         st.session_state.proposal_data["client_email"] = client_email
         st.session_state.proposal_data["property_address"] = property_address
@@ -5153,53 +5286,41 @@ def generate_customer_proposal():
     # SECTION 3: SCOPE OF WORK (Checkboxes)
     # ============================================================
     with st.expander("📋 Scope of Work (Select all that apply)", expanded=True):
-        st.markdown("#### Select tasks to include:")
-        
-        current_scope = st.session_state.proposal_data.get("scope_items", [])
-        
+        st.markdown(f"#### Select tasks to include ({property_type}):")
+
+        template_items = PROPERTY_SCOPE_TEMPLATES.get(property_type, PROPERTY_SCOPE_TEMPLATES["Other"])
+
+        # When the property type changes, default all of its template items to checked
+        if st.session_state.proposal_data.get("scope_property_type") != property_type:
+            current_scope = list(template_items)
+            st.session_state.proposal_data["scope_property_type"] = property_type
+        else:
+            current_scope = st.session_state.proposal_data.get("scope_items", [])
+
         col1, col2 = st.columns(2)
-        
+        midpoint = (len(template_items) + 1) // 2
+
+        scope_items = []
         with col1:
-            scope_shelves = st.checkbox("Remove items from shelves, wipe/sanitize, reorganize and restock", 
-                                       value="Remove all items from shelves, wipe down and sanitize shelving, reorganize and restock neatly" in current_scope)
-            scope_vents = st.checkbox("Wipe down AC vents", value="Wipe down AC vents" in current_scope)
-            scope_ceiling = st.checkbox("Clean ceiling stains", value="Clean multiple stains in the ceiling" in current_scope)
-            scope_floors = st.checkbox("Full floor cleaning and detailing", value="Full floor cleaning and detailing" in current_scope)
-            scope_restrooms = st.checkbox("Restroom deep cleaning and sanitation", value="Restroom deep cleaning and sanitation" in current_scope)
-            scope_windows = st.checkbox("Interior window cleaning", value="Interior window cleaning" in current_scope)
-        
+            for item in template_items[:midpoint]:
+                if st.checkbox(item, value=item in current_scope, key=f"scope_{property_type}_{item}"):
+                    scope_items.append(item)
+
         with col2:
-            scope_surfaces = st.checkbox("Surface wipe-downs and high dusting", value="Surface wipe-downs and high dusting" in current_scope)
-            scope_debris = st.checkbox("Debris removal", value="Debris removal" in current_scope)
-            scope_soda = st.checkbox("Sanitize soda machine nozzles", value="Sanitize soda machine nozzles" in current_scope)
-            scope_fridge = st.checkbox("Clean refrigerator glass", value="Clean refrigerator glass" in current_scope)
-            scope_steam = st.checkbox("Steam clean stains if needed", value="Steam clean stains if needed" in current_scope)
-            scope_exterior = st.checkbox("Clean checkout lanes", value="Clean checkout lanes" in current_scope)
-        
+            for item in template_items[midpoint:]:
+                if st.checkbox(item, value=item in current_scope, key=f"scope_{property_type}_{item}"):
+                    scope_items.append(item)
+
         additional_scope = st.text_area(
             "Additional scope items (one per line)",
             placeholder="Clean exterior windows\nPressure wash entryway\nRemove gum from floors",
             height=100)
-        
-        scope_items = []
-        if scope_shelves: scope_items.append("Remove all items from shelves, wipe down and sanitize shelving, reorganize and restock neatly")
-        if scope_vents: scope_items.append("Wipe down AC vents")
-        if scope_ceiling: scope_items.append("Clean multiple stains in the ceiling")
-        if scope_floors: scope_items.append("Full floor cleaning and detailing")
-        if scope_restrooms: scope_items.append("Restroom deep cleaning and sanitation")
-        if scope_windows: scope_items.append("Interior window cleaning")
-        if scope_surfaces: scope_items.append("Surface wipe-downs and high dusting")
-        if scope_debris: scope_items.append("Debris removal")
-        if scope_soda: scope_items.append("Sanitize soda machine nozzles")
-        if scope_fridge: scope_items.append("Clean refrigerator glass")
-        if scope_steam: scope_items.append("Steam clean stains if needed")
-        if scope_exterior: scope_items.append("Clean checkout lanes")
-        
+
         if additional_scope:
             for line in additional_scope.split('\n'):
                 if line.strip():
                     scope_items.append(line.strip())
-        
+
         st.session_state.proposal_data["scope_items"] = scope_items
     
     # ============================================================
@@ -5242,6 +5363,12 @@ def generate_customer_proposal():
             scope_text = "\n".join([f"- {item}" for item in scope_items])
             effective_hours = estimated_hours * (1.5 if is_deep_clean else 1)
             per_person_rate = total_price / crew_size / effective_hours if crew_size > 0 and effective_hours > 0 else 0
+
+            cleaning_type_label = "first-time deep cleaning" if is_deep_clean else "regular maintenance cleaning"
+            if property_type == "Grocery Store":
+                walkthrough_line = f"I completed a walkthrough today and took detailed photos. The store has {num_checkout_lanes} checkout lane(s){' and a soda machine' if has_soda_machine else ''}."
+            else:
+                walkthrough_line = "I completed a walkthrough today and took detailed photos of the property."
             
             email_html = f"""
             <!DOCTYPE html>
@@ -5274,9 +5401,9 @@ def generate_customer_proposal():
                 <p><strong>Date:</strong> {current_date}</p>
                 <p><strong>Dear {client_name},</strong></p>
                 
-                <p>Thank you for the opportunity to quote on the first-time deep cleaning of your <strong>{property_type.lower()}</strong> at <strong>{property_address}</strong>.</p>
-                
-                <p>I completed a walkthrough today and took detailed photos. The store has <strong>{num_checkout_lanes} checkout lane(s)</strong>{' and a soda machine' if has_soda_machine else ''}.</p>
+                <p>Thank you for the opportunity to quote on the {cleaning_type_label} of your <strong>{property_type.lower()}</strong> at <strong>{property_address}</strong>.</p>
+
+                <p>{walkthrough_line}</p>
                 
                 <div class="price-box">
                     <div class="price">${total_price:,.2f}</div>
@@ -5333,9 +5460,9 @@ Date: {current_date}
 
 Dear {client_name},
 
-Thank you for the opportunity to quote on the first-time deep cleaning of your {property_type.lower()} at {property_address}.
+Thank you for the opportunity to quote on the {cleaning_type_label} of your {property_type.lower()} at {property_address}.
 
-I completed a walkthrough today and took detailed photos. The store has {num_checkout_lanes} checkout lane(s){' and a soda machine' if has_soda_machine else ''}.
+{walkthrough_line}
 
 Total Price: ${total_price:,.2f} (all-inclusive with tax)
 
