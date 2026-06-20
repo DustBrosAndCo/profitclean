@@ -2131,7 +2131,15 @@ def get_accessible_user_ids(current_user_id, current_user_role, current_user_com
     elif current_user_role == 'supervisor':
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute("SELECT id FROM users WHERE supervisor_id = ? OR id = ? AND company_id = ?", (current_user_id, current_user_id, current_user_company))
+        # NOTE: SQL's AND binds tighter than OR, so without parentheses this
+        # parsed as "supervisor_id = ? OR (id = ? AND company_id = ?)" --
+        # the supervisor_id branch wasn't scoped by company_id at all,
+        # which could leak cross-tenant users if a supervisor_id value ever
+        # collided across companies. Both branches are now scoped.
+        c.execute(
+            "SELECT id FROM users WHERE (supervisor_id = ? OR id = ?) AND company_id = ?",
+            (current_user_id, current_user_id, current_user_company),
+        )
         ids = [row[0] for row in c.fetchall()]
         conn.close()
         return ids
@@ -2828,6 +2836,15 @@ def calculator_expense_based(company_id, labor_hours):
     
     monthly_fixed_costs = sum(row[:6]) if row[:6] else 0
     desired_profit_margin = row[6] if row[6] else 0.20
+    # Guard against a margin of 100% or more (e.g. a user entering "100" as
+    # a whole-number percent instead of "1.00" as a fraction, or just a bad
+    # value getting saved). Without this, "true_cost / (1 - margin)" below
+    # divides by zero or goes negative, crashing or showing a nonsensical
+    # "healthy price" on this profit-tracking app's core dashboard.
+    if desired_profit_margin >= 1:
+        desired_profit_margin = 0.95
+    elif desired_profit_margin < 0:
+        desired_profit_margin = 0
     hourly_wage = row[7] if row[7] else 15.0
     min_job_fee = row[8] if row[8] else 150
     
@@ -2865,7 +2882,10 @@ def calculator_expense_based(company_id, labor_hours):
             "overhead_cost": round(overhead_cost, 2)
         },
         "business_health": {
-            "status": "Healthy" if healthy_price <= 250 else "At Risk" if healthy_price > 350 else "Struggling",
+            # Was backwards: prices in (250, 350] evaluated to "Struggling"
+            # while prices > 350 evaluated to "At Risk", so a $300 price
+            # read as worse than a $400 price. Bands now escalate in order.
+            "status": "Healthy" if healthy_price <= 250 else "At Risk" if healthy_price <= 350 else "Struggling",
             "recommendation": "Increase efficiency or raise prices" if healthy_price > 300 else "On track"
         }
     }
@@ -3407,12 +3427,23 @@ def get_user_by_id(user_id):
 
 
 def force_logout_sessions(target_user_id=None):
+    """Force-logout a specific user, or everyone if no target is given.
+
+    Previously the "everyone" branch deleted WHERE expires_at > now(),
+    i.e. only currently-active sessions -- the inverse comparator of
+    clear_expired_sessions() (which correctly uses '<'). That happened to
+    still force-logout everyone (since deleting the active sessions is
+    exactly what logs people out), but it left already-expired session
+    rows behind uncleaned, and read as a copy-paste inversion bug. Now it
+    just deletes every session row for clarity: "force logout everyone"
+    means everyone, expired rows included.
+    """
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     if target_user_id:
         c.execute("DELETE FROM sessions WHERE user_id = ?", (target_user_id,))
     else:
-        c.execute("DELETE FROM sessions WHERE expires_at > datetime('now')")
+        c.execute("DELETE FROM sessions")
     conn.commit()
     deleted = c.rowcount
     conn.close()
@@ -5499,6 +5530,45 @@ def workers_page():
         conn.close()
         st.subheader("All Workers (All Companies)")
         st.dataframe(workers)
+
+        st.markdown("#### Transfer Worker Between Companies")
+        st.caption("Moving a worker between companies is a platform-level action restricted to super admins.")
+        if not workers.empty:
+            sel_worker_xfer = st.selectbox(
+                "Select worker to transfer",
+                workers['id'].tolist(),
+                format_func=lambda x: f"{workers[workers['id']==x]['username'].iloc[0]} ({x})",
+                key="super_admin_transfer_worker_select",
+            )
+            companies_conn = sqlite3.connect(DB_PATH)
+            comps_df = pd.read_sql_query("SELECT id, name FROM companies WHERE is_active = 1 ORDER BY name", companies_conn)
+            companies_conn.close()
+            dest = st.selectbox(
+                "Transfer to Company",
+                comps_df['id'].tolist(),
+                format_func=lambda x: comps_df[comps_df['id']==x]['name'].iloc[0],
+                key="super_admin_transfer_worker_dest",
+            )
+            if st.button("Transfer Worker", key="super_admin_transfer_worker_btn"):
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                c.execute("SELECT company_id FROM users WHERE id = ?", (sel_worker_xfer,))
+                row = c.fetchone()
+                from_company = row[0] if row else None
+                try:
+                    c.execute("UPDATE users SET company_id = ? WHERE id = ?", (dest, sel_worker_xfer))
+                    c.execute("INSERT INTO worker_transfers (worker_id, from_company_id, to_company_id, transferred_by, transferred_at) VALUES (?,?,?,?,?)",
+                              (sel_worker_xfer, from_company, dest, st.session_state.user['user_id'], datetime.now().isoformat()))
+                    c.execute("INSERT INTO audit_log (user_id, action, details, created_at) VALUES (?,?,?,?)",
+                              (st.session_state.user['user_id'], 'transfer_worker', f'Worker {sel_worker_xfer} from {from_company} to {dest}', datetime.now().isoformat()))
+                    conn.commit()
+                    conn.close()
+                    st.success("Worker transferred successfully")
+                    st.rerun()
+                except Exception as e:
+                    conn.rollback()
+                    conn.close()
+                    st.error(f"Transfer failed: {e}")
     elif user['role'] == 'support_staff':
         conn = sqlite3.connect(DB_PATH)
         if has_invite_code:
@@ -5536,33 +5606,14 @@ def workers_page():
         st.markdown("#### Manage Worker")
         if not workers.empty:
             sel_worker = st.selectbox("Select worker to manage", workers['id'].tolist(), format_func=lambda x: f"{workers[workers['id']==x]['username'].iloc[0]} ({x})")
-            col1, col2, col3 = st.columns([2,2,1])
+            # NOTE: "Transfer Worker" used to live here, letting a single
+            # company's admin move a worker into ANY active company (the
+            # destination list was every company in the system, not just
+            # this admin's own tenant) -- a cross-tenant authorization bug.
+            # Moving a worker between companies is a platform-level action,
+            # so it has been moved to the super_admin view below.
+            col1, col2 = st.columns([2,1])
             with col1:
-                companies_conn = sqlite3.connect(DB_PATH)
-                comps_df = pd.read_sql_query("SELECT id, name FROM companies WHERE is_active = 1 ORDER BY name", companies_conn)
-                companies_conn.close()
-                dest = st.selectbox("Transfer to Company", comps_df['id'].tolist(), format_func=lambda x: comps_df[comps_df['id']==x]['name'].iloc[0])
-                if st.button("Transfer Worker"):
-                    conn = sqlite3.connect(DB_PATH)
-                    c = conn.cursor()
-                    c.execute("SELECT company_id FROM users WHERE id = ?", (sel_worker,))
-                    row = c.fetchone()
-                    from_company = row[0] if row else None
-                    try:
-                        c.execute("UPDATE users SET company_id = ? WHERE id = ?", (dest, sel_worker))
-                        c.execute("INSERT INTO worker_transfers (worker_id, from_company_id, to_company_id, transferred_by, transferred_at) VALUES (?,?,?,?,?)",
-                                  (sel_worker, from_company, dest, st.session_state.user['user_id'], datetime.now().isoformat()))
-                        c.execute("INSERT INTO audit_log (user_id, action, details, created_at) VALUES (?,?,?,?)",
-                                  (st.session_state.user['user_id'], 'transfer_worker', f'Worker {sel_worker} from {from_company} to {dest}', datetime.now().isoformat()))
-                        conn.commit()
-                        conn.close()
-                        st.success("Worker transferred successfully")
-                        st.rerun()
-                    except Exception as e:
-                        conn.rollback()
-                        conn.close()
-                        st.error(f"Transfer failed: {e}")
-            with col2:
                 if st.button("Deactivate Worker"):
                     conn = sqlite3.connect(DB_PATH)
                     c = conn.cursor()
@@ -5578,7 +5629,7 @@ def workers_page():
                         conn.rollback()
                         conn.close()
                         st.error(f"Failed to deactivate: {e}")
-            with col3:
+            with col2:
                 if st.button("Refresh List"):
                     st.rerun()
     else:
@@ -7249,6 +7300,10 @@ def support_page():
         st.dataframe(tickets)
 
 def settings_page():
+    if st.session_state.user.get('role') not in ['super_admin', 'admin']:
+        st.error("Access denied. Business settings (including SMTP credentials and financials) are admin-only.")
+        return
+
     if st.button("← Back"):
         st.session_state.page = "dashboard"
         st.rerun()
@@ -7477,10 +7532,14 @@ def settings_page():
 
 def internal_pricing_dashboard():
     """Internal dashboard showing all three calculators"""
+    if st.session_state.user.get('role') not in ['super_admin', 'admin']:
+        st.error("Access denied")
+        return
+
     if st.button("← Back to Dashboard"):
         st.session_state.page = "dashboard"
         st.rerun()
-    
+
     st.markdown("### 📊 Internal Pricing Intelligence Dashboard")
     st.caption("Confidential - Internal use only. View all three pricing calculators.")
     

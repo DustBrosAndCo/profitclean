@@ -1,93 +1,23 @@
-import json
-import os
-import sqlite3
-from datetime import datetime
-from typing import Dict, Any
-
-# Global DB path (adjust as needed in your project)
-DB_PATH = "external_bookings.db"
-
-class BaseIntegration:
-    def __init__(self, company_id: int):
-        self.company_id = company_id
-        self.integration_type = self.get_integration_type()
-        self.settings: Dict[str, Any] = {}
-        self.enabled = False
-        self.access_token = None
-        self.refresh_token = None
-        self.token_expires = None
-        self.load_config()
-
-        # Ensure DB table exists
-        self._init_db()
-
-    def get_integration_type(self) -> str:
-        raise NotImplementedError("Subclasses must implement get_integration_type")
-
-    def _init_db(self):
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS external_bookings (
-                id INTEGER PRIMARY KEY,
-                company_id INTEGER,
-                source TEXT,
-                external_id TEXT,
-                hashed_email TEXT,
-                invitee_name TEXT,
-                start_time TEXT,
-                end_time TEXT,
-                service_type TEXT,
-                status TEXT,
-                raw_questions TEXT,
-                imported_at TEXT,
-                processed INTEGER DEFAULT 0,
-                UNIQUE(company_id, source, external_id)
-            )
-        ''')
-        conn.commit()
-        conn.close()
-
-    def load_config(self):
-        # In production, load from DB/encrypted store. Here we simulate with JSON file per company.
-        config_file = f"config_{self.company_id}_{self.integration_type}.json"
-        if os.path.exists(config_file):
-            try:
-                with open(config_file, "r") as f:
-                    data = json.load(f)
-                    self.settings = data.get("settings", {})
-                    self.enabled = data.get("enabled", False)
-                    self.access_token = self.settings.get("access_token")
-                    self.refresh_token = self.settings.get("refresh_token")
-                    expires_str = self.settings.get("token_expires")
-                    if expires_str:
-                        self.token_expires = datetime.fromisoformat(expires_str.replace("Z", "+00:00"))
-            except Exception:
-                pass
-
-    def save_config(self):
-        config_file = f"config_{self.company_id}_{self.integration_type}.json"
-        data = {
-            "enabled": self.enabled,
-            "settings": self.settings,
-        }
-        with open(config_file, "w") as f:
-            json.dump(data, f, indent=2)
-
-    def log_event(self, event_type: str, status: str, message: str):
-        print(f"[{datetime.now()}] [{self.integration_type}] {event_type.upper()} - {status}: {message}")
-
-    def is_connected(self) -> bool:
-        return self.enabled and self.access_token is not None
 import hashlib
 import hmac
 import os
+import sqlite3
 import requests
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from urllib.parse import urlencode
 
-from .base import BaseIntegration
+from .base import BaseIntegration, DB_PATH
+
+# NOTE: There used to be a second, unused local BaseIntegration class defined
+# in this file (with its own DB_PATH pointing at a stray "external_bookings.db"
+# file). CalendlyIntegration always actually inherited from the real
+# BaseIntegration imported from .base (which stores tokens encrypted in
+# profitclean.db) because the `from .base import BaseIntegration` rebinding
+# happened after the dead class was defined -- but store_bookings()/sync()
+# below were still writing to that unencrypted, never-initialized stray DB
+# file. Both are removed now; everything uses the shared DB_PATH (profitclean.db)
+# from integrations/base.py.
 
 
 class CalendlyIntegration(BaseIntegration):
@@ -265,8 +195,32 @@ class CalendlyIntegration(BaseIntegration):
         self.log_event("fetch", "success", f"Fetched {len(bookings)} bookings")
         return bookings
 
+    @staticmethod
+    def _ensure_bookings_table(conn: sqlite3.Connection):
+        """Create the external_bookings table in the shared app DB if it
+        doesn't already exist yet (idempotent)."""
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS external_bookings (
+                id INTEGER PRIMARY KEY,
+                company_id INTEGER,
+                source TEXT,
+                external_id TEXT,
+                hashed_email TEXT,
+                invitee_name TEXT,
+                start_time TEXT,
+                end_time TEXT,
+                service_type TEXT,
+                status TEXT,
+                raw_questions TEXT,
+                imported_at TEXT,
+                processed INTEGER DEFAULT 0,
+                UNIQUE(company_id, source, external_id)
+            )
+        ''')
+
     def store_bookings(self, bookings: List[Dict]) -> int:
         conn = sqlite3.connect(DB_PATH)
+        self._ensure_bookings_table(conn)
         c = conn.cursor()
         imported_count = 0
 
@@ -380,28 +334,4 @@ class CalendlyIntegration(BaseIntegration):
                 return True
         except Exception as e:
             self.log_event("webhook", "error", str(e))
-        return False      
-import unittest
-from unittest.mock import patch, MagicMock
-from datetime import datetime
-
-class TestCalendlyIntegration(unittest.TestCase):
-    def setUp(self):
-        self.integration = CalendlyIntegration(company_id=1)
-
-    @patch('requests.post')
-    def test_exchange_code(self, mock_post):
-        mock_post.return_value.status_code = 200
-        mock_post.return_value.json.return_value = {"access_token": "abc", "refresh_token": "xyz", "expires_in": 3600}
-        result = self.integration.exchange_code_for_token("test_code")
-        self.assertIn("access_token", result)
-
-    def test_webhook_signature(self):
-        payload = b'{"test": "data"}'
-        # This is a simplified test - real key/signature needed for full verification
-        self.assertFalse(self.integration.verify_webhook_signature(payload, "", "dummy_key"))
-
-    # Add more tests as needed
-
-if __name__ == '__main__':
-    unittest.main()
+        return False

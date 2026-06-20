@@ -22,9 +22,13 @@ def validate_email(email: str) -> Tuple[bool, Optional[str]]:
         return False, "Email is required"
     
     email = email.strip().lower()
-    
-    # Basic email regex pattern
-    pattern = r'^[a-z0-9]+[\._]?[a-z0-9]+[@]\w+[.]\w{2,3}(\.\w{2})?$'
+
+    # Basic email regex pattern. The previous pattern only allowed a single
+    # '.' or '_' in the local part and capped the TLD at 3 characters, which
+    # rejected plenty of legitimate addresses (e.g. "first.last@x.com",
+    # "user+tag@x.info"). This is still intentionally simple (full RFC 5322
+    # validation is out of scope), but covers normal real-world addresses.
+    pattern = r'^[a-z0-9][a-z0-9._%+-]*@[a-z0-9.-]+\.[a-z]{2,}$'
     if not re.match(pattern, email):
         return False, "Invalid email format"
     
