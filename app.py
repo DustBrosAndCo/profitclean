@@ -4930,7 +4930,7 @@ def save_estimate_to_database(
     return estimate_id
 
 
-PROPERTY_TYPES = ["Grocery Store", "Retail Store", "Gym", "School", "Office", "Restaurant", "Medical Office", "Dental Office", "Warehouse", "Airbnb / Short-Term Rental", "Other"]
+PROPOSAL_PROPERTY_TYPES = ["Grocery Store", "Retail Store", "Gym", "School", "Office", "Restaurant", "Medical Office", "Dental Office", "Warehouse", "Airbnb / Short-Term Rental", "Other"]
 
 PROPERTY_SCOPE_TEMPLATES = {
     "Grocery Store": [
@@ -5114,8 +5114,8 @@ def generate_customer_proposal():
             client_email = st.text_input("Client Email", value=st.session_state.proposal_data.get("client_email", ""))
             property_address = st.text_area("Property Address", value=st.session_state.proposal_data.get("property_address", ""), height=68)
         with col2:
-            property_type = st.selectbox("Property Type", PROPERTY_TYPES,
-                                        index=PROPERTY_TYPES.index(
+            property_type = st.selectbox("Property Type", PROPOSAL_PROPERTY_TYPES,
+                                        index=PROPOSAL_PROPERTY_TYPES.index(
                                             st.session_state.proposal_data.get("property_type", "Grocery Store")))
             square_feet = st.number_input("Square Footage", min_value=100, value=st.session_state.proposal_data.get("square_feet", 2320), step=100)
             if property_type == "Grocery Store":
