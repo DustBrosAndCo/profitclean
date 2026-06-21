@@ -34,6 +34,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import time
 import shutil
+import traceback
 from typing import Dict, Any, Optional, List, Tuple
 from dataclasses import dataclass, asdict
 from enum import Enum
@@ -55,6 +56,642 @@ BACKUP_DIR = os.path.join(os.path.expanduser("~"), "ProfitClean_Backups")
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(BACKUP_DIR, exist_ok=True)
+
+# ============================================================
+# TRANSLATIONS (i18n) -- worker-facing pages only
+# ============================================================
+
+TRANSLATIONS = {
+    "en": {
+        # Login
+        "login_title": "🧹 ProfitClean Login",
+        "login_email": "Email Address",
+        "login_password": "Password",
+        "login_remember_me": "Remember me (7 days)",
+        "login_button": "🔑 Login",
+        "login_missing_fields": "Please enter email and password",
+        "login_authenticating": "Authenticating...",
+        "login_success": "✅ Login successful!",
+        "login_new_here": "### New here?",
+        "login_create_account": "Create Account",
+        "login_forgot_password": "Forgot Password?",
+        "login_need_help": "Need help? Contact support@profitclean.com",
+        "login_client_portal": "👤 Client Portal",
+        "login_language_label": "🌐 Language / Idioma",
+        # Dashboard / sidebar menu
+        "menu_title": "### 📋 Menu",
+        "menu_dashboard": "🏠 Dashboard",
+        "menu_new_estimate": "📝 New Estimate",
+        "menu_proposal": "📄 Customer Proposal",
+        "menu_quick_job": "⚡ Quick Job",
+        "menu_clients": "👥 Clients",
+        "menu_workers": "👷 Workers",
+        "menu_schedule": "📅 Schedule",
+        "menu_pre_inspection": "🔍 Pre-Inspection",
+        "menu_profit": "💰 Profit",
+        "menu_history": "📋 History",
+        "menu_team_chat": "💬 Team Chat",
+        "menu_supplies": "📦 Supplies",
+        "menu_ai_tasks": "🤖 AI Tasks",
+        "menu_qr_tracking": "📱 QR Tracking",
+        "menu_gps_tracking": "📍 GPS Tracking",
+        "menu_my_performance": "🏅 My Performance",
+        "menu_certifications": "📜 Certifications",
+        "menu_job_templates": "📋 Job Templates",
+        "menu_backup": "💾 Backup",
+        "menu_support": "🎫 Support",
+        "menu_integrations": "🔌 Integrations",
+        "menu_settings": "⚙️ Settings",
+        "menu_edit_profile": "✏️ Edit Profile",
+        "menu_terms": "📜 Terms of Service",
+        "menu_need_help": "💬 Need Help?",
+        "menu_report_issue": "📝 Report Issue",
+        "menu_logout": "🚪 Logout",
+        "dashboard_welcome": "Welcome, {username} ({role}) | Company ID: {company_id} | Created by Dust Bros & Co.",
+        "dashboard_new_notifications": "📬 You have {count} new notifications. Check your profile to view them.",
+        "dashboard_role_override": "You are currently viewing data for company ID: {company_id} (override active).",
+        "dashboard_metric_clients": "Clients",
+        "dashboard_metric_pending": "Pending Estimates",
+        "dashboard_metric_workers": "Workers Under You",
+        "dashboard_metric_upcoming": "Upcoming Jobs",
+        "dashboard_upcoming_jobs": "### 📅 Upcoming Jobs",
+        "dashboard_no_upcoming": "No upcoming jobs scheduled",
+        "dashboard_use_sidebar": "Use sidebar to navigate.",
+        "back": "← Back",
+        # Edit Profile
+        "profile_title": "### ✏️ Edit Your Profile",
+        "profile_user_not_found": "User not found",
+        "profile_unread": "📬 You have {count} unread notifications",
+        "profile_username": "Username",
+        "profile_email": "Email",
+        "profile_role": "Role",
+        "profile_company_id": "Company ID",
+        "profile_hire_date": "Hire Date",
+        "profile_invite_code": "Your Invite Code",
+        "profile_not_set": "Not set",
+        "profile_change_password": "#### Change Password",
+        "profile_current_password": "Current Password",
+        "profile_new_password": "New Password",
+        "profile_confirm_password": "Confirm New Password",
+        "profile_save_changes": "Save Profile Changes",
+        "profile_current_password_wrong": "Current password is incorrect",
+        "profile_passwords_no_match": "New passwords do not match",
+        "profile_saved": "Profile updated",
+        "profile_language": "#### Language / Idioma",
+        "profile_language_help": "Choose the language you want to use throughout the app.",
+        "profile_language_saved": "Language preference saved!",
+        "profile_2fa_title": "#### Two‑Factor Authentication",
+        "profile_2fa_enabled": "2FA is ENABLED",
+        "profile_2fa_disable": "Disable 2FA",
+        "profile_2fa_disabled_msg": "2FA disabled",
+        "profile_2fa_disabled_info": "2FA is disabled. You can enable it.",
+        "profile_2fa_enable": "Enable 2FA",
+        "profile_notifications": "#### Notifications",
+        "profile_mark_read": "Mark Read",
+        "profile_no_notifications": "No notifications",
+        "profile_back_dashboard": "← Back to Dashboard",
+        # Quick Job
+        "quick_title": "### ⚡ Quick Job Entry",
+        "quick_date": "Date",
+        "quick_description": "Description",
+        "quick_hours": "Hours",
+        "quick_amount": "Amount Invoiced",
+        "quick_expenses": "Expenses",
+        "quick_estimated_profit": "Estimated Profit",
+        "quick_save": "Save",
+        "quick_saved": "Quick job saved!",
+        # Schedule
+        "schedule_title": "### 📅 Job Schedule",
+        "schedule_date": "Date",
+        "schedule_status": "Status",
+        "schedule_no_jobs": "No jobs",
+        "schedule_worker_unassigned": "Unassigned",
+        "schedule_worker_label": "Worker",
+        "schedule_edit": "✏️ Edit",
+        "schedule_delete": "🗑️ Delete",
+        "schedule_request_delete": "📨 Request Delete",
+        "schedule_delete_reason": "Reason for deletion request:",
+        "schedule_submit_request": "Submit Request",
+        "schedule_deletion_sent": "Deletion request sent to admin",
+        "schedule_job_deleted": "Job deleted",
+        "schedule_add_job": "➕ Add Job",
+        "schedule_client": "Client",
+        "schedule_select": "Select...",
+        "schedule_time": "Time",
+        "schedule_schedule_btn": "Schedule",
+        "schedule_scheduled": "Scheduled",
+        # Pre-Inspection
+        "insp_back_dashboard": "← Back to Dashboard",
+        "insp_login_required": "Please log in to use the pre-inspection checklist.",
+        "insp_title": "### 🔍 Pre-Inspection Checklist",
+        "insp_caption": "Quick estimate generator - fill in what you see to get a ballpark price (Medium to High range, excludes travel/tolls)",
+        "insp_tab_basics": "🏢 Property Basics",
+        "insp_tab_areas": "🧹 Areas to Clean",
+        "insp_tab_windows": "🪟 Windows & Glass",
+        "insp_tab_restrooms": "🚽 Restrooms",
+        "insp_tab_floors": "🧼 Floors",
+        "insp_tab_equipment": "🖥️ Equipment & Furniture",
+        "insp_tab_special": "🔧 Special Conditions",
+        "insp_property_info": "#### Property Information",
+        "insp_property_type": "Property Type",
+        "insp_please_specify": "Please specify",
+        "insp_sqft": "Estimated Square Feet",
+        "insp_num_floors": "Number of Floors",
+        "insp_has_elevator": "Building has elevator",
+        "insp_multi_building": "Multiple buildings on site",
+        "insp_num_buildings": "Number of buildings",
+        "insp_job_timing": "#### Job Timing",
+        "insp_frequency": "Cleaning Frequency",
+        "insp_access_time": "Access Time",
+        "insp_select_areas": "#### Select Areas That Need Cleaning",
+        "insp_check_all": "Check all that apply",
+        "insp_reception": "Reception/Waiting Area",
+        "insp_private_offices": "Private Offices",
+        "insp_workstations": "Open Workstations",
+        "insp_conference_rooms": "Conference Rooms",
+        "insp_breakroom": "Breakroom/Kitchen",
+        "insp_hallways": "Hallways/Corridors",
+        "insp_stairwells": "Stairwells",
+        "insp_storage_rooms": "Storage/Supply Rooms",
+        "insp_janitor_closet": "Janitor Closet (if provided)",
+        "insp_loading_dock": "Loading Dock/Warehouse Area",
+        "insp_exterior_entry": "Exterior Entry/Lobby",
+        "insp_sidewalk": "Sidewalk/Patio (sweep only)",
+        "insp_parking_garage": "Parking Garage (sweep)",
+        "insp_trash": "Trash/Recycling Collection",
+        "insp_window_title": "#### Window & Glass Cleaning",
+        "insp_interior_windows": "Interior Windows",
+        "insp_exterior_windows": "Exterior Windows (ground floor)",
+        "insp_high_windows": "High/Atrium Windows (need ladder)",
+        "insp_glass_doors": "Glass Doors",
+        "insp_glass_partitions": "Glass Partitions/Walls (linear ft)",
+        "insp_mirrors": "Large Mirrors",
+        "insp_window_tracks": "Window Tracks need cleaning",
+        "insp_window_screens": "Window Screens need cleaning",
+        "insp_restroom_title": "#### Restroom Details",
+        "insp_toilets": "Toilets",
+        "insp_urinals": "Urinals",
+        "insp_sinks": "Sinks",
+        "insp_rest_mirrors": "Mirrors (restroom)",
+        "insp_showers": "Showers (locker rooms)",
+        "insp_restroom_count": "Number of Restrooms",
+        "insp_deep_clean": "Deep clean required (grout, hard water stains, etc.)",
+        "insp_restock": "Restock supplies (soap, paper towels, TP)",
+        "insp_floor_title": "#### Floor Types & Conditions",
+        "insp_carpet": "Carpet (sq ft)",
+        "insp_tile": "Tile (sq ft)",
+        "insp_vinyl": "Vinyl/LVP (sq ft)",
+        "insp_hardwood": "Hardwood (sq ft)",
+        "insp_concrete": "Concrete/Polished (sq ft)",
+        "insp_floor_condition": "Floor Condition",
+        "insp_additional_floor": "#### Additional Floor Services",
+        "insp_carpet_extract": "Carpet Extraction/Deep Clean",
+        "insp_strip_wax": "Strip & Wax (tile/vinyl)",
+        "insp_floor_buff": "Daily Buff/Polish",
+        "insp_extract_sqft": "Extraction square feet",
+        "insp_area_rugs": "#### Area Rugs",
+        "insp_rug_small": "Small (3x5 or less)",
+        "insp_rug_medium": "Medium (5x8)",
+        "insp_rug_large": "Large (8x10+)",
+        "insp_equipment_title": "#### Equipment & Furniture Cleaning",
+        "insp_desks": "Desks",
+        "insp_computers": "Computers/Monitors",
+        "insp_phones": "Phones",
+        "insp_chairs": "Chairs (dust/wipe)",
+        "insp_tables": "Tables",
+        "insp_whiteboards": "Whiteboards",
+        "insp_appliances": "Appliances (fridge, microwave, etc.)",
+        "insp_equipment": "Special Equipment (machines, etc.)",
+        "insp_furniture_moving": "#### Furniture Moving",
+        "insp_move_light": "Light furniture to move (chairs, small tables)",
+        "insp_move_heavy": "Heavy items to move (machines, large desks)",
+        "insp_clean_under": "Clean under moved items",
+        "insp_special_title": "#### Special Conditions (Adds to price)",
+        "insp_high_dusting": "High dusting (ceilings, fans, vents)",
+        "insp_high_dust_sqft": "Square feet for high dusting",
+        "insp_blinds": "Blinds to clean",
+        "insp_disinfection": "Disinfection (high-touch surfaces)",
+        "insp_odor": "Odor control treatment",
+        "insp_post_construction": "Post-construction cleaning",
+        "insp_emergency": "Emergency/Rush (less than 48hr notice)",
+        "insp_holiday": "Holiday/After-hours",
+        "insp_supplies_provided": "Client provides cleaning supplies",
+        "insp_complexity": "Overall Complexity (1-10)",
+        "insp_generate_btn": "💰 Generate Ballpark Estimate",
+        "insp_results_title": "### 📋 Inspection Estimate Results",
+        "insp_results_caption": "*Excludes travel mileage, tolls, and parking fees*",
+        "insp_ballpark": "💰 BALLPARK ESTIMATE",
+        "insp_medium_high": "Medium to High Range",
+        "insp_excludes": "Excludes travel & tolls",
+        "insp_breakdown": "📊 Estimate Breakdown",
+        "insp_confidence_high": "🎯 Confidence Level: {confidence}% - This estimate is well-calibrated",
+        "insp_confidence_med": "⚠️ Confidence Level: {confidence}% - Consider more details",
+        "insp_confidence_low": "❌ Confidence Level: {confidence}% - More information needed for accuracy",
+        "insp_save_btn": "💾 Save This Inspection",
+        "insp_company_error": "Could not determine your company. Please log in again.",
+        "insp_saved": "Inspection saved! You can reference it later.",
+        # My Performance
+        "perf_title": "### 🏅 My Performance",
+        "perf_jobs_completed": "Jobs Completed",
+        "perf_total_profit": "Total Profit",
+        "perf_total_hours": "Total Hours",
+        "perf_years_service": "Years of Service",
+        "perf_anniversary": "🎉 Congratulations on your {years}‑year anniversary!",
+        "perf_badges": "Earned Badges",
+        "perf_monthly_profit_chart": "Your Monthly Profit",
+        # Certifications
+        "cert_title": "### 📜 Certifications",
+        "cert_none_yet": "No certifications yet.",
+        "cert_add_new": "➕ Add New Certification",
+        "cert_name": "Certification Name",
+        "cert_issuer": "Issuing Body",
+        "cert_date_earned": "Date Earned",
+        "cert_expiration": "Expiration Date (optional)",
+        "cert_upload": "Upload Certificate (PDF/Image)",
+        "cert_notes": "Notes",
+        "cert_submit": "Submit",
+        "cert_added": "Certification added",
+        "cert_none_from_team": "No certifications from your team.",
+        "cert_verify_id": "Certification ID to verify",
+        "cert_verify_btn": "Verify Certification",
+        "cert_verified": "Verified",
+        # Support
+        "support_title": "### 🎫 Support Tickets",
+        "support_type": "Type",
+        "support_description": "Description",
+        "support_steps": "Steps to Reproduce (if bug)",
+        "support_submit": "Submit",
+        "support_submitted": "Ticket {ticket_id} submitted",
+        "support_bug": "Bug",
+        "support_feature": "Feature request",
+        "support_data_issue": "Data issue",
+        "support_other": "Other",
+        # Team Chat
+        "chat_title": "### 💬 Team Chat",
+        "chat_message": "Message",
+        "chat_send": "Send",
+        # Pre-Inspection select option labels (display only -- underlying
+        # values stay in English since calculate_inspection_estimate()
+        # matches on these exact English strings)
+        "insp_prop_Office": "Office",
+        "insp_prop_Retail": "Retail",
+        "insp_prop_Warehouse": "Warehouse",
+        "insp_prop_Medical/Dental": "Medical/Dental",
+        "insp_prop_Restaurant": "Restaurant",
+        "insp_prop_School/Daycare": "School/Daycare",
+        "insp_prop_Hotel": "Hotel",
+        "insp_prop_Gym/Fitness": "Gym/Fitness",
+        "insp_prop_Church": "Church",
+        "insp_prop_Other": "Other",
+        "insp_freq_One-time": "One-time",
+        "insp_freq_Daily": "Daily",
+        "insp_freq_Weekly": "Weekly",
+        "insp_freq_Bi-weekly": "Bi-weekly",
+        "insp_freq_Monthly": "Monthly",
+        "insp_access_Normal business hours": "Normal business hours",
+        "insp_access_After hours (6PM-6AM)": "After hours (6PM-6AM)",
+        "insp_access_Weekend only": "Weekend only",
+        "insp_access_Very restricted window": "Very restricted window",
+        "insp_floorcond_Excellent": "Excellent",
+        "insp_floorcond_Good": "Good",
+        "insp_floorcond_Fair": "Fair",
+        "insp_floorcond_Poor": "Poor",
+        "insp_floorcond_Very Poor": "Very Poor",
+        "insp_holiday_No": "No",
+        "insp_holiday_Yes - Holiday": "Yes - Holiday",
+        "insp_holiday_Yes - Weekend": "Yes - Weekend",
+    },
+    "es": {
+        # Login
+        "login_title": "🧹 Inicio de Sesión de ProfitClean",
+        "login_email": "Correo Electrónico",
+        "login_password": "Contraseña",
+        "login_remember_me": "Recordarme (7 días)",
+        "login_button": "🔑 Iniciar Sesión",
+        "login_missing_fields": "Por favor ingrese su correo y contraseña",
+        "login_authenticating": "Autenticando...",
+        "login_success": "✅ ¡Inicio de sesión exitoso!",
+        "login_new_here": "### ¿Nuevo aquí?",
+        "login_create_account": "Crear Cuenta",
+        "login_forgot_password": "¿Olvidó su Contraseña?",
+        "login_need_help": "¿Necesita ayuda? Contacte support@profitclean.com",
+        "login_client_portal": "👤 Portal de Clientes",
+        "login_language_label": "🌐 Language / Idioma",
+        # Dashboard / sidebar menu
+        "menu_title": "### 📋 Menú",
+        "menu_dashboard": "🏠 Tablero",
+        "menu_new_estimate": "📝 Nuevo Presupuesto",
+        "menu_proposal": "📄 Propuesta para Cliente",
+        "menu_quick_job": "⚡ Trabajo Rápido",
+        "menu_clients": "👥 Clientes",
+        "menu_workers": "👷 Trabajadores",
+        "menu_schedule": "📅 Horario",
+        "menu_pre_inspection": "🔍 Pre-Inspección",
+        "menu_profit": "💰 Ganancias",
+        "menu_history": "📋 Historial",
+        "menu_team_chat": "💬 Chat del Equipo",
+        "menu_supplies": "📦 Suministros",
+        "menu_ai_tasks": "🤖 Tareas IA",
+        "menu_qr_tracking": "📱 Seguimiento QR",
+        "menu_gps_tracking": "📍 Seguimiento GPS",
+        "menu_my_performance": "🏅 Mi Desempeño",
+        "menu_certifications": "📜 Certificaciones",
+        "menu_job_templates": "📋 Plantillas de Trabajo",
+        "menu_backup": "💾 Respaldo",
+        "menu_support": "🎫 Soporte",
+        "menu_integrations": "🔌 Integraciones",
+        "menu_settings": "⚙️ Configuración",
+        "menu_edit_profile": "✏️ Editar Perfil",
+        "menu_terms": "📜 Términos de Servicio",
+        "menu_need_help": "💬 ¿Necesita Ayuda?",
+        "menu_report_issue": "📝 Reportar Problema",
+        "menu_logout": "🚪 Cerrar Sesión",
+        "dashboard_welcome": "Bienvenido, {username} ({role}) | ID de Empresa: {company_id} | Creado por Dust Bros & Co.",
+        "dashboard_new_notifications": "📬 Tiene {count} notificaciones nuevas. Revise su perfil para verlas.",
+        "dashboard_role_override": "Actualmente está viendo datos de la empresa con ID: {company_id} (anulación activa).",
+        "dashboard_metric_clients": "Clientes",
+        "dashboard_metric_pending": "Presupuestos Pendientes",
+        "dashboard_metric_workers": "Trabajadores a su Cargo",
+        "dashboard_metric_upcoming": "Trabajos Próximos",
+        "dashboard_upcoming_jobs": "### 📅 Trabajos Próximos",
+        "dashboard_no_upcoming": "No hay trabajos programados próximamente",
+        "dashboard_use_sidebar": "Use el menú lateral para navegar.",
+        "back": "← Volver",
+        # Edit Profile
+        "profile_title": "### ✏️ Editar su Perfil",
+        "profile_user_not_found": "Usuario no encontrado",
+        "profile_unread": "📬 Tiene {count} notificaciones sin leer",
+        "profile_username": "Nombre de Usuario",
+        "profile_email": "Correo Electrónico",
+        "profile_role": "Rol",
+        "profile_company_id": "ID de Empresa",
+        "profile_hire_date": "Fecha de Contratación",
+        "profile_invite_code": "Su Código de Invitación",
+        "profile_not_set": "No establecido",
+        "profile_change_password": "#### Cambiar Contraseña",
+        "profile_current_password": "Contraseña Actual",
+        "profile_new_password": "Nueva Contraseña",
+        "profile_confirm_password": "Confirmar Nueva Contraseña",
+        "profile_save_changes": "Guardar Cambios del Perfil",
+        "profile_current_password_wrong": "La contraseña actual es incorrecta",
+        "profile_passwords_no_match": "Las nuevas contraseñas no coinciden",
+        "profile_saved": "Perfil actualizado",
+        "profile_language": "#### Idioma / Language",
+        "profile_language_help": "Elija el idioma que desea usar en toda la aplicación.",
+        "profile_language_saved": "¡Preferencia de idioma guardada!",
+        "profile_2fa_title": "#### Autenticación de Dos Factores",
+        "profile_2fa_enabled": "La autenticación de dos factores está ACTIVADA",
+        "profile_2fa_disable": "Desactivar Autenticación de Dos Factores",
+        "profile_2fa_disabled_msg": "Autenticación de dos factores desactivada",
+        "profile_2fa_disabled_info": "La autenticación de dos factores está desactivada. Puede activarla.",
+        "profile_2fa_enable": "Activar Autenticación de Dos Factores",
+        "profile_notifications": "#### Notificaciones",
+        "profile_mark_read": "Marcar como Leído",
+        "profile_no_notifications": "No hay notificaciones",
+        "profile_back_dashboard": "← Volver al Tablero",
+        # Quick Job
+        "quick_title": "### ⚡ Registro Rápido de Trabajo",
+        "quick_date": "Fecha",
+        "quick_description": "Descripción",
+        "quick_hours": "Horas",
+        "quick_amount": "Monto Facturado",
+        "quick_expenses": "Gastos",
+        "quick_estimated_profit": "Ganancia Estimada",
+        "quick_save": "Guardar",
+        "quick_saved": "¡Trabajo rápido guardado!",
+        # Schedule
+        "schedule_title": "### 📅 Horario de Trabajos",
+        "schedule_date": "Fecha",
+        "schedule_status": "Estado",
+        "schedule_no_jobs": "No hay trabajos",
+        "schedule_worker_unassigned": "Sin asignar",
+        "schedule_worker_label": "Trabajador",
+        "schedule_edit": "✏️ Editar",
+        "schedule_delete": "🗑️ Eliminar",
+        "schedule_request_delete": "📨 Solicitar Eliminación",
+        "schedule_delete_reason": "Razón para la solicitud de eliminación:",
+        "schedule_submit_request": "Enviar Solicitud",
+        "schedule_deletion_sent": "Solicitud de eliminación enviada al administrador",
+        "schedule_job_deleted": "Trabajo eliminado",
+        "schedule_add_job": "➕ Agregar Trabajo",
+        "schedule_client": "Cliente",
+        "schedule_select": "Seleccionar...",
+        "schedule_time": "Hora",
+        "schedule_schedule_btn": "Programar",
+        "schedule_scheduled": "Programado",
+        # Pre-Inspection
+        "insp_back_dashboard": "← Volver al Tablero",
+        "insp_login_required": "Por favor inicie sesión para usar la lista de pre-inspección.",
+        "insp_title": "### 🔍 Lista de Pre-Inspección",
+        "insp_caption": "Generador de presupuesto rápido - complete lo que observe para obtener un precio aproximado (rango medio a alto, excluye viajes/peajes)",
+        "insp_tab_basics": "🏢 Datos de la Propiedad",
+        "insp_tab_areas": "🧹 Áreas a Limpiar",
+        "insp_tab_windows": "🪟 Ventanas y Vidrios",
+        "insp_tab_restrooms": "🚽 Baños",
+        "insp_tab_floors": "🧼 Pisos",
+        "insp_tab_equipment": "🖥️ Equipo y Muebles",
+        "insp_tab_special": "🔧 Condiciones Especiales",
+        "insp_property_info": "#### Información de la Propiedad",
+        "insp_property_type": "Tipo de Propiedad",
+        "insp_please_specify": "Por favor especifique",
+        "insp_sqft": "Pies Cuadrados Estimados",
+        "insp_num_floors": "Número de Pisos",
+        "insp_has_elevator": "El edificio tiene elevador",
+        "insp_multi_building": "Múltiples edificios en el sitio",
+        "insp_num_buildings": "Número de edificios",
+        "insp_job_timing": "#### Horario del Trabajo",
+        "insp_frequency": "Frecuencia de Limpieza",
+        "insp_access_time": "Horario de Acceso",
+        "insp_select_areas": "#### Seleccione las Áreas que Necesitan Limpieza",
+        "insp_check_all": "Marque todas las que apliquen",
+        "insp_reception": "Recepción/Sala de Espera",
+        "insp_private_offices": "Oficinas Privadas",
+        "insp_workstations": "Estaciones de Trabajo Abiertas",
+        "insp_conference_rooms": "Salas de Conferencia",
+        "insp_breakroom": "Cocina/Sala de Descanso",
+        "insp_hallways": "Pasillos/Corredores",
+        "insp_stairwells": "Escaleras",
+        "insp_storage_rooms": "Cuartos de Almacenamiento/Suministros",
+        "insp_janitor_closet": "Closet de Limpieza (si se proporciona)",
+        "insp_loading_dock": "Muelle de Carga/Área de Almacén",
+        "insp_exterior_entry": "Entrada Exterior/Vestíbulo",
+        "insp_sidewalk": "Acera/Patio (solo barrer)",
+        "insp_parking_garage": "Estacionamiento (barrer)",
+        "insp_trash": "Recolección de Basura/Reciclaje",
+        "insp_window_title": "#### Limpieza de Ventanas y Vidrios",
+        "insp_interior_windows": "Ventanas Interiores",
+        "insp_exterior_windows": "Ventanas Exteriores (primer piso)",
+        "insp_high_windows": "Ventanas Altas/Atrio (requieren escalera)",
+        "insp_glass_doors": "Puertas de Vidrio",
+        "insp_glass_partitions": "Particiones/Paredes de Vidrio (pies lineales)",
+        "insp_mirrors": "Espejos Grandes",
+        "insp_window_tracks": "Las rieles de las ventanas necesitan limpieza",
+        "insp_window_screens": "Las mallas de las ventanas necesitan limpieza",
+        "insp_restroom_title": "#### Detalles del Baño",
+        "insp_toilets": "Inodoros",
+        "insp_urinals": "Urinarios",
+        "insp_sinks": "Lavamanos",
+        "insp_rest_mirrors": "Espejos (baño)",
+        "insp_showers": "Duchas (vestidores)",
+        "insp_restroom_count": "Número de Baños",
+        "insp_deep_clean": "Se requiere limpieza profunda (lechada, manchas de agua dura, etc.)",
+        "insp_restock": "Reabastecer suministros (jabón, toallas de papel, papel higiénico)",
+        "insp_floor_title": "#### Tipos y Condiciones de Piso",
+        "insp_carpet": "Alfombra (pies cuadrados)",
+        "insp_tile": "Baldosa (pies cuadrados)",
+        "insp_vinyl": "Vinilo/LVP (pies cuadrados)",
+        "insp_hardwood": "Madera (pies cuadrados)",
+        "insp_concrete": "Concreto/Pulido (pies cuadrados)",
+        "insp_floor_condition": "Condición del Piso",
+        "insp_additional_floor": "#### Servicios Adicionales de Piso",
+        "insp_carpet_extract": "Extracción/Limpieza Profunda de Alfombra",
+        "insp_strip_wax": "Decapado y Encerado (baldosa/vinilo)",
+        "insp_floor_buff": "Pulido Diario",
+        "insp_extract_sqft": "Pies cuadrados de extracción",
+        "insp_area_rugs": "#### Alfombras de Área",
+        "insp_rug_small": "Pequeña (3x5 o menos)",
+        "insp_rug_medium": "Mediana (5x8)",
+        "insp_rug_large": "Grande (8x10+)",
+        "insp_equipment_title": "#### Limpieza de Equipo y Muebles",
+        "insp_desks": "Escritorios",
+        "insp_computers": "Computadoras/Monitores",
+        "insp_phones": "Teléfonos",
+        "insp_chairs": "Sillas (sacudir/limpiar)",
+        "insp_tables": "Mesas",
+        "insp_whiteboards": "Pizarras Blancas",
+        "insp_appliances": "Electrodomésticos (refrigerador, microondas, etc.)",
+        "insp_equipment": "Equipo Especial (máquinas, etc.)",
+        "insp_furniture_moving": "#### Movimiento de Muebles",
+        "insp_move_light": "Muebles ligeros para mover (sillas, mesas pequeñas)",
+        "insp_move_heavy": "Artículos pesados para mover (máquinas, escritorios grandes)",
+        "insp_clean_under": "Limpiar debajo de los artículos movidos",
+        "insp_special_title": "#### Condiciones Especiales (Aumentan el precio)",
+        "insp_high_dusting": "Desempolvado alto (techos, ventiladores, rejillas)",
+        "insp_high_dust_sqft": "Pies cuadrados para desempolvado alto",
+        "insp_blinds": "Persianas para limpiar",
+        "insp_disinfection": "Desinfección (superficies de alto contacto)",
+        "insp_odor": "Tratamiento de control de olores",
+        "insp_post_construction": "Limpieza post-construcción",
+        "insp_emergency": "Emergencia/Urgente (menos de 48 horas de aviso)",
+        "insp_holiday": "Días Festivos/Fuera de Horario",
+        "insp_supplies_provided": "El cliente provee los suministros de limpieza",
+        "insp_complexity": "Complejidad General (1-10)",
+        "insp_generate_btn": "💰 Generar Presupuesto Aproximado",
+        "insp_results_title": "### 📋 Resultados del Presupuesto de Inspección",
+        "insp_results_caption": "*Excluye millaje de viaje, peajes y tarifas de estacionamiento*",
+        "insp_ballpark": "💰 PRESUPUESTO APROXIMADO",
+        "insp_medium_high": "Rango Medio a Alto",
+        "insp_excludes": "Excluye viajes y peajes",
+        "insp_breakdown": "📊 Desglose del Presupuesto",
+        "insp_confidence_high": "🎯 Nivel de Confianza: {confidence}% - Este presupuesto está bien calibrado",
+        "insp_confidence_med": "⚠️ Nivel de Confianza: {confidence}% - Considere agregar más detalles",
+        "insp_confidence_low": "❌ Nivel de Confianza: {confidence}% - Se necesita más información para mayor precisión",
+        "insp_save_btn": "💾 Guardar esta Inspección",
+        "insp_company_error": "No se pudo determinar su empresa. Por favor inicie sesión de nuevo.",
+        "insp_saved": "¡Inspección guardada! Puede consultarla más tarde.",
+        # My Performance
+        "perf_title": "### 🏅 Mi Desempeño",
+        "perf_jobs_completed": "Trabajos Completados",
+        "perf_total_profit": "Ganancia Total",
+        "perf_total_hours": "Horas Totales",
+        "perf_years_service": "Años de Servicio",
+        "perf_anniversary": "🎉 ¡Felicidades por su aniversario de {years} año(s)!",
+        "perf_badges": "Insignias Obtenidas",
+        "perf_monthly_profit_chart": "Su Ganancia Mensual",
+        # Certifications
+        "cert_title": "### 📜 Certificaciones",
+        "cert_none_yet": "Aún no hay certificaciones.",
+        "cert_add_new": "➕ Agregar Nueva Certificación",
+        "cert_name": "Nombre de la Certificación",
+        "cert_issuer": "Entidad Emisora",
+        "cert_date_earned": "Fecha de Obtención",
+        "cert_expiration": "Fecha de Vencimiento (opcional)",
+        "cert_upload": "Subir Certificado (PDF/Imagen)",
+        "cert_notes": "Notas",
+        "cert_submit": "Enviar",
+        "cert_added": "Certificación agregada",
+        "cert_none_from_team": "No hay certificaciones de su equipo.",
+        "cert_verify_id": "ID de Certificación para verificar",
+        "cert_verify_btn": "Verificar Certificación",
+        "cert_verified": "Verificada",
+        # Support
+        "support_title": "### 🎫 Tickets de Soporte",
+        "support_type": "Tipo",
+        "support_description": "Descripción",
+        "support_steps": "Pasos para Reproducir (si es un error)",
+        "support_submit": "Enviar",
+        "support_submitted": "Ticket {ticket_id} enviado",
+        "support_bug": "Error",
+        "support_feature": "Solicitud de función",
+        "support_data_issue": "Problema de datos",
+        "support_other": "Otro",
+        # Team Chat
+        "chat_title": "### 💬 Chat del Equipo",
+        "chat_message": "Mensaje",
+        "chat_send": "Enviar",
+        # Pre-Inspection select option labels (display only)
+        "insp_prop_Office": "Oficina",
+        "insp_prop_Retail": "Comercio Minorista",
+        "insp_prop_Warehouse": "Almacén",
+        "insp_prop_Medical/Dental": "Médico/Dental",
+        "insp_prop_Restaurant": "Restaurante",
+        "insp_prop_School/Daycare": "Escuela/Guardería",
+        "insp_prop_Hotel": "Hotel",
+        "insp_prop_Gym/Fitness": "Gimnasio/Fitness",
+        "insp_prop_Church": "Iglesia",
+        "insp_prop_Other": "Otro",
+        "insp_freq_One-time": "Una vez",
+        "insp_freq_Daily": "Diario",
+        "insp_freq_Weekly": "Semanal",
+        "insp_freq_Bi-weekly": "Quincenal",
+        "insp_freq_Monthly": "Mensual",
+        "insp_access_Normal business hours": "Horario comercial normal",
+        "insp_access_After hours (6PM-6AM)": "Fuera de horario (6PM-6AM)",
+        "insp_access_Weekend only": "Solo fines de semana",
+        "insp_access_Very restricted window": "Ventana muy restringida",
+        "insp_floorcond_Excellent": "Excelente",
+        "insp_floorcond_Good": "Bueno",
+        "insp_floorcond_Fair": "Regular",
+        "insp_floorcond_Poor": "Malo",
+        "insp_floorcond_Very Poor": "Muy Malo",
+        "insp_holiday_No": "No",
+        "insp_holiday_Yes - Holiday": "Sí - Día Festivo",
+        "insp_holiday_Yes - Weekend": "Sí - Fin de Semana",
+    },
+}
+
+
+def get_user_language():
+    """Determine which language to render UI strings in."""
+    if st.session_state.get('client_logged_in'):
+        return st.session_state.get('lang', 'en')
+    user = st.session_state.get('user')
+    if user and user.get('language'):
+        return user['language']
+    return st.session_state.get('lang', 'en')
+
+
+def t(key, **kwargs):
+    """Translate a UI string key into the current user's language."""
+    lang = get_user_language()
+    text = TRANSLATIONS.get(lang, TRANSLATIONS['en']).get(key) or TRANSLATIONS['en'].get(key, key)
+    if kwargs:
+        try:
+            return text.format(**kwargs)
+        except Exception:
+            return text
+    return text
+
+
+def language_selector(key_suffix=""):
+    """Render a language picker. Returns the selected language code ('en' or 'es')."""
+    options = {"English": "en", "Español": "es"}
+    current_code = get_user_language()
+    current_label = "Español" if current_code == "es" else "English"
+    choice = st.selectbox(t("login_language_label"), list(options.keys()),
+                           index=list(options.keys()).index(current_label),
+                           key=f"lang_select_{key_suffix}")
+    return options[choice]
 
 # ============================================================
 # ENUMS AND DATA CLASSES
@@ -464,6 +1101,7 @@ def init_db():
         address TEXT,
         emergency_contact TEXT,
         hourly_rate REAL,
+        language TEXT DEFAULT 'en',
         FOREIGN KEY (company_id) REFERENCES companies(id),
         FOREIGN KEY (manager_id) REFERENCES users(id),
         FOREIGN KEY (supervisor_id) REFERENCES users(id),
@@ -1337,6 +1975,20 @@ def migrate_database():
         print('Created client_portal_tokens table')
     conn.commit()
     conn.close()
+
+    # Language preference migration
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("PRAGMA table_info(users)")
+    user_columns = [col[1] for col in c.fetchall()]
+    if 'language' not in user_columns:
+        try:
+            c.execute("ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'en'")
+            print("Added language column to users")
+        except sqlite3.OperationalError:
+            pass
+    conn.commit()
+    conn.close()
 # ============================================================
 # PERMISSION SYSTEM
 # ============================================================
@@ -1555,6 +2207,25 @@ def log_activity(company_id: int, user_id: int, action: str, target_type: str = 
     """, (company_id, user_id, action, target_type, target_id, details, datetime.now().isoformat()))
     conn.commit()
     conn.close()
+
+
+def log_error_event(error_type: str, error_message: str, page_url: str = None, stack_trace: str = None):
+    """Log an unhandled error so the 'Errors (24h)' metric on the Super Admin
+    dashboard reflects something real instead of always reading 0."""
+    user = st.session_state.get('user') if hasattr(st, 'session_state') else None
+    company_id = user.get('company_id') if user else None
+    user_id = user.get('user_id') if user else None
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("""
+            INSERT INTO error_logs (company_id, user_id, error_type, error_message, page_url, stack_trace, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (company_id, user_id, error_type, error_message, page_url, stack_trace, datetime.now().isoformat()))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
 
 
 # ============================================================
@@ -3406,17 +4077,17 @@ def validate_session_token(token: str):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("""
-        SELECT u.id, u.username, u.email, u.role, u.company_id, 
-               u.manager_id, u.supervisor_id, u.totp_enabled
+        SELECT u.id, u.username, u.email, u.role, u.company_id,
+               u.manager_id, u.supervisor_id, u.totp_enabled, u.language
         FROM sessions s
         JOIN users u ON s.user_id = u.id
-        WHERE s.session_token = ? 
+        WHERE s.session_token = ?
           AND s.expires_at > datetime('now')
           AND u.is_active = 1
     """, (token,))
     row = c.fetchone()
     conn.close()
-    
+
     if row:
         return {
             "user_id": row[0],
@@ -3426,7 +4097,8 @@ def validate_session_token(token: str):
             "company_id": row[4],
             "manager_id": row[5],
             "supervisor_id": row[6],
-            "totp_enabled": bool(row[7])
+            "totp_enabled": bool(row[7]),
+            "language": row[8] or "en"
         }
     return None
 
@@ -3453,18 +4125,18 @@ def authenticate_user(email: str, password: str, ip_address=None, user_agent=Non
     
     # Get user
     c.execute("""
-        SELECT id, username, password_hash, role, company_id, 
-               manager_id, supervisor_id, totp_enabled, is_active, locked_until 
+        SELECT id, username, password_hash, role, company_id,
+               manager_id, supervisor_id, totp_enabled, is_active, locked_until, language
         FROM users WHERE lower(email) = ?
     """, (email,))
     user = c.fetchone()
-    
+
     if not user:
         conn.close()
         log_auth_event(None, email, "login_attempt", "failed", ip_address, user_agent, "User not found")
         return False, "Invalid email or password"
-    
-    uid, uname, pwd_hash, role, company_id, mgr_id, sup_id, totp_enabled, is_active, locked_until = user
+
+    uid, uname, pwd_hash, role, company_id, mgr_id, sup_id, totp_enabled, is_active, locked_until, language = user
     
     if not is_active:
         conn.close()
@@ -3510,9 +4182,10 @@ def authenticate_user(email: str, password: str, ip_address=None, user_agent=Non
         "manager_id": mgr_id,
         "supervisor_id": sup_id,
         "totp_enabled": bool(totp_enabled),
+        "language": language or "en",
         "session_token": session_token
     }
-    
+
     return True, user_data
 
 def logout_user():
@@ -4269,8 +4942,11 @@ def setup_wizard():
             st.rerun()
 
 def login_page():
-    st.markdown("# 🧹 ProfitClean Login")
-    
+    lang_choice = language_selector(key_suffix="login")
+    st.session_state['lang'] = lang_choice
+
+    st.markdown(f"# {t('login_title')}")
+
     # If already logged in via session_state
     if st.session_state.get("user"):
         user = validate_session_token(st.session_state.get("session_token"))
@@ -4278,61 +4954,80 @@ def login_page():
             st.session_state.user = user
             st.session_state.page = "dashboard"
             st.rerun()
-    
+
     col1, col2 = st.columns([2, 1])
-    
+
     with col1:
         with st.form("login_form"):
-            email = st.text_input("Email Address", placeholder="you@company.com")
-            password = st.text_input("Password", type="password")
-            
-            remember_me = st.checkbox("Remember me (7 days)", value=True)
-            
-            if st.form_submit_button("🔑 Login", use_container_width=True):
+            email = st.text_input(t("login_email"), placeholder="you@company.com")
+            password = st.text_input(t("login_password"), type="password")
+
+            remember_me = st.checkbox(t("login_remember_me"), value=True)
+
+            if st.form_submit_button(t("login_button"), use_container_width=True):
                 if not email or not password:
-                    st.error("Please enter email and password")
+                    st.error(t("login_missing_fields"))
                 else:
-                    with st.spinner("Authenticating..."):
+                    with st.spinner(t("login_authenticating")):
                         success, result = authenticate_user(
-                            email, password, 
+                            email, password,
                             ip_address=st.context.headers.get("X-Forwarded-For") if hasattr(st, 'context') else None
                         )
-                        
+
                         if success:
-                            st.session_state.user = result
-                            st.session_state.session_token = result["session_token"]
-                            st.success("✅ Login successful!")
-                            st.session_state.page = "dashboard"
-                            st.rerun()
+                            # Carry the pre-login language choice through as the user's
+                            # saved preference, so picking "Español" here doesn't get
+                            # silently overridden by the DB default once they're past login.
+                            if result.get('language') != lang_choice:
+                                conn = sqlite3.connect(DB_PATH)
+                                c = conn.cursor()
+                                c.execute("UPDATE users SET language = ? WHERE id = ?", (lang_choice, result['user_id']))
+                                conn.commit()
+                                conn.close()
+                                result['language'] = lang_choice
+
+                            if result.get('totp_enabled'):
+                                # Password is correct, but 2FA is enabled -- hold off on
+                                # granting access until the second factor is verified.
+                                st.session_state.pending_2fa_user = result
+                                st.session_state.page = "two_factor"
+                                st.rerun()
+                            else:
+                                st.session_state.user = result
+                                st.session_state.session_token = result["session_token"]
+                                st.success(t("login_success"))
+                                st.session_state.page = "dashboard"
+                                st.rerun()
                         else:
                             st.error(result)
-    
+
     with col2:
-        st.markdown("### New here?")
-        if st.button("Create Account", use_container_width=True):
+        st.markdown(t("login_new_here"))
+        if st.button(t("login_create_account"), use_container_width=True):
             st.session_state.page = "create_account"
             st.rerun()
-        
-        if st.button("Forgot Password?", use_container_width=True):
+
+        if st.button(t("login_forgot_password"), use_container_width=True):
             st.session_state.page = "forgot_password"
             st.rerun()
-        
-        st.caption("Need help? Contact support@profitclean.com")
-    
+
+        st.caption(t("login_need_help"))
+
     # Footer
     st.markdown("---")
-    if st.button("👤 Client Portal"):
+    if st.button(t("login_client_portal")):
         st.session_state.page = "client_login"
         st.rerun()
 
 
 def two_factor_page():
     st.markdown("### 🔐 Two‑Factor Authentication")
-    st.caption("Enter the code from your authenticator app")
-    user = st.session_state.pending_2fa_user
+    st.caption("Enter the 6-digit code from your authenticator app, or one of your backup codes")
+    user = st.session_state.get('pending_2fa_user')
     if not user:
         st.session_state.page = "login"
         st.rerun()
+        return
     with st.form("2fa"):
         code = st.text_input("Authentication Code")
         if st.form_submit_button("Verify"):
@@ -4341,14 +5036,22 @@ def two_factor_page():
             c.execute("SELECT totp_secret FROM users WHERE id = ?", (user['user_id'],))
             row = c.fetchone()
             conn.close()
-            if row and verify_totp(row[0], code):
+            verified = bool(row and row[0] and verify_totp(row[0], code))
+            if not verified:
+                verified = verify_backup_code(user['user_id'], code)
+            if verified:
                 st.session_state.user = user
+                st.session_state.session_token = user.get('session_token')
                 del st.session_state.pending_2fa_user
                 st.session_state.page = "dashboard"
                 st.success("2FA verified!")
                 st.rerun()
             else:
                 st.error("Invalid code. Try again.")
+    if st.button("← Back to Login"):
+        st.session_state.pop('pending_2fa_user', None)
+        st.session_state.page = "login"
+        st.rerun()
 
 def create_account_page():
     st.markdown("### 📝 Create Your Account")
@@ -4468,34 +5171,34 @@ def edit_profile_page():
     if 'user' not in st.session_state:
         st.session_state.page = "login"
         st.rerun()
-    st.markdown("### ✏️ Edit Your Profile")
+    st.markdown(t("profile_title"))
     user_data = get_current_user_data()
     if not user_data:
-        st.error("User not found")
+        st.error(t("profile_user_not_found"))
         return
-    
+
     unread_count = get_unread_notification_count(st.session_state.user['user_id'])
     if unread_count > 0:
-        st.info(f"📬 You have {unread_count} unread notifications")
-    
+        st.info(t("profile_unread", count=unread_count))
+
     if len(user_data) == 10:
         uid, username, email, role, company_id, mgr_id, sup_id, hire_date, totp_enabled, invite_code = user_data
     else:
         uid, username, email, role, company_id, mgr_id, sup_id, hire_date, totp_enabled = user_data
-        invite_code = "Not set"
-    
+        invite_code = t("profile_not_set")
+
     with st.form("edit_profile_form"):
-        new_username = st.text_input("Username", username)
-        new_email = st.text_input("Email", email)
-        st.text_input("Role", role, disabled=True)
-        st.text_input("Company ID", str(company_id) if company_id else "N/A", disabled=True)
-        st.text_input("Hire Date", hire_date[:10] if hire_date else "N/A", disabled=True)
-        st.text_input("Your Invite Code", invite_code if invite_code else "Not set", disabled=True)
-        st.markdown("#### Change Password")
-        cur_pwd = st.text_input("Current Password", type="password")
-        new_pwd = st.text_input("New Password", type="password")
-        confirm_pwd = st.text_input("Confirm New Password", type="password")
-        if st.form_submit_button("Save Profile Changes"):
+        new_username = st.text_input(t("profile_username"), username)
+        new_email = st.text_input(t("profile_email"), email)
+        st.text_input(t("profile_role"), role, disabled=True)
+        st.text_input(t("profile_company_id"), str(company_id) if company_id else "N/A", disabled=True)
+        st.text_input(t("profile_hire_date"), hire_date[:10] if hire_date else "N/A", disabled=True)
+        st.text_input(t("profile_invite_code"), invite_code if invite_code else t("profile_not_set"), disabled=True)
+        st.markdown(t("profile_change_password"))
+        cur_pwd = st.text_input(t("profile_current_password"), type="password")
+        new_pwd = st.text_input(t("profile_new_password"), type="password")
+        confirm_pwd = st.text_input(t("profile_confirm_password"), type="password")
+        if st.form_submit_button(t("profile_save_changes")):
             updates = []
             params = []
             if new_username != username:
@@ -4511,9 +5214,9 @@ def edit_profile_page():
                 row = c.fetchone()
                 conn.close()
                 if not row or not verify_password(cur_pwd, row[0]):
-                    st.error("Current password is incorrect")
+                    st.error(t("profile_current_password_wrong"))
                 elif new_pwd != confirm_pwd:
-                    st.error("New passwords do not match")
+                    st.error(t("profile_passwords_no_match"))
                 else:
                     valid, msg = validate_password_strength(new_pwd)
                     if not valid:
@@ -4530,33 +5233,47 @@ def edit_profile_page():
                 c.execute(f"UPDATE users SET {', '.join(updates)} WHERE id = ?", params)
                 conn.commit()
                 conn.close()
-                st.success("Profile updated")
+                st.success(t("profile_saved"))
                 st.rerun()
-    
+
     st.markdown("---")
-    st.markdown("#### Two‑Factor Authentication")
+    st.markdown(t("profile_language"))
+    st.caption(t("profile_language_help"))
+    new_lang = language_selector(key_suffix="profile")
+    if new_lang != st.session_state.user.get('language', 'en'):
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("UPDATE users SET language = ? WHERE id = ?", (new_lang, uid))
+        conn.commit()
+        conn.close()
+        st.session_state.user['language'] = new_lang
+        st.success(t("profile_language_saved"))
+        st.rerun()
+
+    st.markdown("---")
+    st.markdown(t("profile_2fa_title"))
     if totp_enabled:
-        st.success("2FA is ENABLED")
-        if st.button("Disable 2FA"):
+        st.success(t("profile_2fa_enabled"))
+        if st.button(t("profile_2fa_disable")):
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
             c.execute("UPDATE users SET totp_enabled = 0, totp_secret = NULL WHERE id = ?", (uid,))
             conn.commit()
             conn.close()
-            st.success("2FA disabled")
+            st.success(t("profile_2fa_disabled_msg"))
             st.rerun()
     else:
-        st.info("2FA is disabled. You can enable it.")
-        if st.button("Enable 2FA"):
+        st.info(t("profile_2fa_disabled_info"))
+        if st.button(t("profile_2fa_enable")):
             secret = generate_totp_secret()
             uri = get_totp_uri(secret, email)
             st.session_state.totp_secret = secret
             st.session_state.totp_email = email
             st.session_state.page = "setup_2fa"
             st.rerun()
-    
+
     st.markdown("---")
-    st.markdown("#### Notifications")
+    st.markdown(t("profile_notifications"))
     notifications = get_user_notifications(uid, 10)
     if not notifications.empty:
         for _, notif in notifications.iterrows():
@@ -4571,14 +5288,14 @@ def edit_profile_page():
                         st.caption(notif['message'])
                 with col2:
                     if notif['read_status'] == 0:
-                        if st.button("Mark Read", key=f"mark_{notif['id']}"):
+                        if st.button(t("profile_mark_read"), key=f"mark_{notif['id']}"):
                             mark_notification_read(notif['id'])
                             st.rerun()
                 st.markdown("---")
     else:
-        st.info("No notifications")
-    
-    if st.button("← Back to Dashboard"):
+        st.info(t("profile_no_notifications"))
+
+    if st.button(t("profile_back_dashboard")):
         st.session_state.page = "dashboard"
         st.rerun()
 
@@ -4604,42 +5321,42 @@ def dashboard():
     business_name = get_business_name()
     company_id = get_current_user_company()
     st.title(f"🧹 {business_name}")
-    st.caption(f"Welcome, {user['username']} ({user['role']}) | Company ID: {company_id} | Created by Dust Bros & Co.")
-    
+    st.caption(t("dashboard_welcome", username=user['username'], role=user['role'], company_id=company_id))
+
     unread_count = get_unread_notification_count(user['user_id'])
     if unread_count > 0:
-        st.info(f"📬 You have {unread_count} new notifications. Check your profile to view them.")
-    
+        st.info(t("dashboard_new_notifications", count=unread_count))
+
     if st.session_state.user.get('role_override'):
-        st.warning(f"You are currently viewing data for company ID: {st.session_state.user['company_id']} (override active).")
-    
+        st.warning(t("dashboard_role_override", company_id=st.session_state.user['company_id']))
+
     with st.sidebar:
-        st.markdown("### 📋 Menu")
+        st.markdown(t("menu_title"))
         menu_items = [
-            ("🏠 Dashboard", "dashboard"),
-            ("📝 New Estimate", "estimate"),
-            ("📄 Customer Proposal", "proposal"),
-            ("⚡ Quick Job", "quick"),
-            ("👥 Clients", "clients"),
-            ("👷 Workers", "workers"),
-            ("📅 Schedule", "schedule"),
-            ("🔍 Pre-Inspection", "inspections"),
-            ("💰 Profit", "profit"),
-            ("📋 History", "history"),
-            ("💬 Team Chat", "chat"),
-            ("📦 Supplies", "supplies"),
-            ("🤖 AI Tasks", "ai_tasks"),
-            ("📱 QR Tracking", "qr_tracking"),
-            ("📍 GPS Tracking", "gps_tracking"),
-            ("🏅 My Performance", "my_performance"),
-            ("📜 Certifications", "certifications"),
-            ("📋 Job Templates", "job_templates"),
-            ("💾 Backup", "backup"),
-            ("🎫 Support", "support"),
-            ("🔌 Integrations", "integrations"),
-            ("⚙️ Settings", "settings"),
-            ("✏️ Edit Profile", "edit_profile"),
-            ("📜 Terms of Service", "terms"),
+            (t("menu_dashboard"), "dashboard"),
+            (t("menu_new_estimate"), "estimate"),
+            (t("menu_proposal"), "proposal"),
+            (t("menu_quick_job"), "quick"),
+            (t("menu_clients"), "clients"),
+            (t("menu_workers"), "workers"),
+            (t("menu_schedule"), "schedule"),
+            (t("menu_pre_inspection"), "inspections"),
+            (t("menu_profit"), "profit"),
+            (t("menu_history"), "history"),
+            (t("menu_team_chat"), "chat"),
+            (t("menu_supplies"), "supplies"),
+            (t("menu_ai_tasks"), "ai_tasks"),
+            (t("menu_qr_tracking"), "qr_tracking"),
+            (t("menu_gps_tracking"), "gps_tracking"),
+            (t("menu_my_performance"), "my_performance"),
+            (t("menu_certifications"), "certifications"),
+            (t("menu_job_templates"), "job_templates"),
+            (t("menu_backup"), "backup"),
+            (t("menu_support"), "support"),
+            (t("menu_integrations"), "integrations"),
+            (t("menu_settings"), "settings"),
+            (t("menu_edit_profile"), "edit_profile"),
+            (t("menu_terms"), "terms"),
 
         ]
         effective_role = get_effective_user()['role'] if get_effective_user() else user['role']
@@ -4656,15 +5373,15 @@ def dashboard():
                 st.session_state.page = page
                 st.rerun()
         st.markdown("---")
-        with st.expander("💬 Need Help?"):
-            if st.button("📝 Report Issue"):
+        with st.expander(t("menu_need_help")):
+            if st.button(t("menu_report_issue")):
                 st.session_state.page = "support"
                 st.rerun()
         st.markdown("---")
-        if st.button("🚪 Logout"):
+        if st.button(t("menu_logout")):
             logout_user()
             st.rerun()
-    
+
     st.markdown("---")
     accessible = get_accessible_user_ids(user['user_id'], user['role'], company_id)
     placeholders = ','.join(['?' for _ in accessible])
@@ -4679,19 +5396,19 @@ def dashboard():
     c.execute(f"SELECT COUNT(*) FROM scheduled_jobs WHERE company_id = ? AND user_id IN ({placeholders}) AND scheduled_date >= date('now') AND status='scheduled'", [company_id] + accessible)
     upcoming = c.fetchone()[0]
     conn.close()
-    
+
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Clients", client_cnt)
-    col2.metric("Pending Estimates", pending)
-    col3.metric("Workers Under You", worker_cnt)
-    col4.metric("Upcoming Jobs", upcoming)
-    
-    st.markdown("### 📅 Upcoming Jobs")
+    col1.metric(t("dashboard_metric_clients"), client_cnt)
+    col2.metric(t("dashboard_metric_pending"), pending)
+    col3.metric(t("dashboard_metric_workers"), worker_cnt)
+    col4.metric(t("dashboard_metric_upcoming"), upcoming)
+
+    st.markdown(t("dashboard_upcoming_jobs"))
     upcoming_jobs = get_upcoming_jobs(14)
     if not upcoming_jobs.empty:
         st.dataframe(upcoming_jobs[['scheduled_date', 'scheduled_time', 'client_name', 'assigned_worker_id', 'status']])
     else:
-        st.info("No upcoming jobs scheduled")
+        st.info(t("dashboard_no_upcoming"))
     
     st.info("Use sidebar to navigate.")
 
@@ -5816,17 +6533,17 @@ This proposal is valid for 30 days from {current_date}.
                 else:
                     st.warning("Please enter recipient email address")
 def quick_job_page():
-    if st.button("← Back"):
+    if st.button(t("back")):
         st.session_state.page = "dashboard"
         st.rerun()
-    st.markdown("### ⚡ Quick Job Entry")
+    st.markdown(t("quick_title"))
     company_id = get_current_user_company()
     with st.form("quick"):
-        date = st.date_input("Date", datetime.now())
-        desc = st.text_input("Description")
-        hours = st.number_input("Hours", 0.5, 24.0, 2.0)
-        amount = st.number_input("Amount Invoiced", 0.0, 10000.0, 350.0)
-        expenses = st.number_input("Expenses", 0.0, 500.0, 25.0)
+        date = st.date_input(t("quick_date"), datetime.now())
+        desc = st.text_input(t("quick_description"))
+        hours = st.number_input(t("quick_hours"), 0.5, 24.0, 2.0)
+        amount = st.number_input(t("quick_amount"), 0.0, 10000.0, 350.0)
+        expenses = st.number_input(t("quick_expenses"), 0.0, 500.0, 25.0)
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute("SELECT hourly_wage FROM business_profile WHERE company_id = ?", (company_id,))
@@ -5834,8 +6551,8 @@ def quick_job_page():
         conn.close()
         hourly = row[0] if row else 15.0
         profit = amount - expenses - (hours * hourly)
-        st.metric("Estimated Profit", f"${profit:.2f}")
-        if st.form_submit_button("Save"):
+        st.metric(t("quick_estimated_profit"), f"${profit:.2f}")
+        if st.form_submit_button(t("quick_save")):
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
             c.execute("INSERT INTO quick_jobs (company_id, user_id, job_date, description, hours, amount_invoiced, job_expenses, profit, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
@@ -5843,7 +6560,7 @@ def quick_job_page():
             conn.commit()
             conn.close()
             update_worker_badges(st.session_state.user['user_id'])
-            st.success("Quick job saved!")
+            st.success(t("quick_saved"))
             st.rerun()
 
 def clients_page():
@@ -5882,17 +6599,45 @@ def clients_page():
     else:
         for _, row in df.iterrows():
             with st.expander(f"🏢 {row['business_name']}"):
-                st.write(f"Contact: {row['contact_name'] or 'N/A'}, Phone: {row['phone'] or 'N/A'}, Email: {row['email'] or 'N/A'}")
-                st.write(f"Address: {row['address'] or 'N/A'}, {row['city'] or 'N/A'}, {row['state']} {row['zip']}")
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button(f"✏️ Edit", key=f"edit_{row['id']}"):
-                        st.session_state.edit_client_id = row['id']
-                        st.rerun()
-                with col2:
-                    if st.button(f"🗑️ Delete", key=f"del_{row['id']}"):
-                        delete_client(row['id'])
-                        st.rerun()
+                if st.session_state.get('edit_client_id') == row['id']:
+                    with st.form(f"edit_client_form_{row['id']}"):
+                        e_business = st.text_input("Business Name *", row['business_name'])
+                        e_contact = st.text_input("Contact Name", row['contact_name'] or "")
+                        e_phone = st.text_input("Phone", row['phone'] or "")
+                        e_email = st.text_input("Email", row['email'] or "")
+                        e_address = st.text_input("Address", row['address'] or "")
+                        e_city = st.text_input("City", row['city'] or "")
+                        e_state = st.text_input("State", row['state'] or "FL")
+                        e_zip = st.text_input("Zip", row['zip'] or "")
+                        e_lat = st.number_input("Latitude", value=float(row['lat'] or 0.0), format="%.6f")
+                        e_lon = st.number_input("Longitude", value=float(row['lon'] or 0.0), format="%.6f")
+                        e_notes = st.text_area("Notes", row['notes'] or "")
+                        col_a, col_b = st.columns(2)
+                        with col_a:
+                            if st.form_submit_button("💾 Save Changes"):
+                                if e_business:
+                                    update_client(row['id'], e_business, e_contact, e_phone, e_email, e_address, e_city, e_state, e_zip, e_lat, e_lon, e_notes)
+                                    st.session_state.edit_client_id = None
+                                    st.success("Client updated")
+                                    st.rerun()
+                                else:
+                                    st.error("Business name required")
+                        with col_b:
+                            if st.form_submit_button("Cancel"):
+                                st.session_state.edit_client_id = None
+                                st.rerun()
+                else:
+                    st.write(f"Contact: {row['contact_name'] or 'N/A'}, Phone: {row['phone'] or 'N/A'}, Email: {row['email'] or 'N/A'}")
+                    st.write(f"Address: {row['address'] or 'N/A'}, {row['city'] or 'N/A'}, {row['state']} {row['zip']}")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button(f"✏️ Edit", key=f"edit_{row['id']}"):
+                            st.session_state.edit_client_id = row['id']
+                            st.rerun()
+                    with col2:
+                        if st.button(f"🗑️ Delete", key=f"del_{row['id']}"):
+                            delete_client(row['id'])
+                            st.rerun()
 
 def workers_page():
     if st.button("← Back"):
@@ -6038,47 +6783,75 @@ def workers_page():
             st.info("No sweet‑spot requests pending")
 
 def schedule_page():
-    if st.button("← Back"):
+    if st.button(t("back")):
         st.session_state.page = "dashboard"
         st.rerun()
-    
-    st.markdown("### 📅 Job Schedule")
-    
+
+    st.markdown(t("schedule_title"))
+
     user_role = st.session_state.user['role']
     company_id = get_current_user_company()
     user_id = st.session_state.user['user_id']
-    
+
     # View is allowed for all roles
-    view_date = st.date_input("Date", datetime.now())
-    status_filter = st.selectbox("Status", ["All","scheduled","completed","cancelled"])
+    view_date = st.date_input(t("schedule_date"), datetime.now())
+    status_filter = st.selectbox(t("schedule_status"), ["All","scheduled","completed","cancelled"])
     df = get_scheduled_jobs(date_filter=view_date, status_filter=status_filter)
-    
+
     if df.empty:
-        st.info("No jobs")
+        st.info(t("schedule_no_jobs"))
     else:
         # Display jobs with action buttons based on permissions
         for _, job in df.iterrows():
             with st.container():
+                if st.session_state.get('edit_job_id') == job['id']:
+                    with st.form(f"edit_job_form_{job['id']}"):
+                        e_date = st.date_input("Date", datetime.fromisoformat(job['scheduled_date']))
+                        e_time = st.selectbox("Time", ["8:00 AM","9:00 AM","10:00 AM","11:00 AM","12:00 PM","1:00 PM","2:00 PM","3:00 PM","4:00 PM"],
+                                               index=["8:00 AM","9:00 AM","10:00 AM","11:00 AM","12:00 PM","1:00 PM","2:00 PM","3:00 PM","4:00 PM"].index(job['scheduled_time']) if job['scheduled_time'] in ["8:00 AM","9:00 AM","10:00 AM","11:00 AM","12:00 PM","1:00 PM","2:00 PM","3:00 PM","4:00 PM"] else 0)
+                        e_status = st.selectbox("Status", ["scheduled","completed","cancelled"],
+                                                 index=["scheduled","completed","cancelled"].index(job['status']) if job['status'] in ["scheduled","completed","cancelled"] else 0)
+                        e_notes = st.text_area("Notes", job['notes'] or "")
+                        col_a, col_b = st.columns(2)
+                        with col_a:
+                            if st.form_submit_button("💾 Save Changes"):
+                                conn = sqlite3.connect(DB_PATH)
+                                c = conn.cursor()
+                                c.execute("UPDATE scheduled_jobs SET scheduled_date = ?, scheduled_time = ?, status = ?, notes = ? WHERE id = ?",
+                                          (e_date.isoformat(), e_time, e_status, e_notes, job['id']))
+                                conn.commit()
+                                conn.close()
+                                log_activity(company_id, user_id, 'edit_job', 'scheduled_job', job['id'], f"Edited job for {job['client_name']}")
+                                st.session_state.edit_job_id = None
+                                st.success("Job updated")
+                                st.rerun()
+                        with col_b:
+                            if st.form_submit_button("Cancel"):
+                                st.session_state.edit_job_id = None
+                                st.rerun()
+                    st.markdown("---")
+                    continue
+
                 col1, col2, col3, col4 = st.columns([3, 2, 2, 2])
-                
+
                 with col1:
                     st.markdown(f"**{job['client_name']}**")
-                    st.caption(f"{job['scheduled_time']} | Worker: {job['assigned_worker_id'] or 'Unassigned'}")
-                
+                    st.caption(f"{job['scheduled_time']} | {t('schedule_worker_label')}: {job['assigned_worker_id'] or t('schedule_worker_unassigned')}")
+
                 with col2:
-                    st.markdown(f"Status: {job['status']}")
-                
+                    st.markdown(f"{t('schedule_status')}: {job['status']}")
+
                 with col3:
                     # Edit button - only for admin/manager
                     if has_permission(user_role, 'edit_event'):
-                        if st.button(f"✏️ Edit", key=f"edit_{job['id']}"):
+                        if st.button(t("schedule_edit"), key=f"edit_{job['id']}"):
                             st.session_state.edit_job_id = job['id']
                             st.rerun()
-                
+
                 with col4:
                     # Delete/Move buttons with approval logic
                     if can_delete_directly(user_role):
-                        if st.button(f"🗑️ Delete", key=f"del_{job['id']}"):
+                        if st.button(t("schedule_delete"), key=f"del_{job['id']}"):
                             if st.confirm(f"Delete job for {job['client_name']}?"):
                                 conn = sqlite3.connect(DB_PATH)
                                 c = conn.cursor()
@@ -6086,44 +6859,44 @@ def schedule_page():
                                 conn.commit()
                                 conn.close()
                                 log_activity(company_id, user_id, 'delete_job', 'scheduled_job', job['id'], f"Deleted job for {job['client_name']}")
-                                st.success("Job deleted")
+                                st.success(t("schedule_job_deleted"))
                                 st.rerun()
                     else:
-                        if st.button(f"📨 Request Delete", key=f"req_del_{job['id']}"):
+                        if st.button(t("schedule_request_delete"), key=f"req_del_{job['id']}"):
                             with st.expander(f"Request deletion for {job['client_name']}", key=f"exp_del_{job['id']}"):
-                                reason = st.text_input("Reason for deletion request:", key=f"reason_{job['id']}")
-                                if st.button("Submit Request", key=f"submit_del_{job['id']}"):
+                                reason = st.text_input(t("schedule_delete_reason"), key=f"reason_{job['id']}")
+                                if st.button(t("schedule_submit_request"), key=f"submit_del_{job['id']}"):
                                     create_approval_request(
                                         company_id, user_id, 'delete_event', 'scheduled_job',
                                         job['id'], None, reason
                                     )
                                     log_activity(company_id, user_id, 'request_delete', 'scheduled_job', job['id'], f"Requested deletion: {reason}")
-                                    st.success("Deletion request sent to admin")
+                                    st.success(t("schedule_deletion_sent"))
                                     st.rerun()
-                
+
                 st.markdown("---")
-    
+
     # Add job - allowed for most roles
     if has_permission(user_role, 'add_event'):
-        with st.expander("➕ Add Job"):
+        with st.expander(t("schedule_add_job")):
             clients_df = get_all_clients()
-            client_options = ["Select..."] + clients_df['business_name'].tolist()
-            client = st.selectbox("Client", client_options)
+            client_options = [t("schedule_select")] + clients_df['business_name'].tolist()
+            client = st.selectbox(t("schedule_client"), client_options)
             accessible_workers = get_accessible_user_ids(st.session_state.user['user_id'], st.session_state.user['role'], company_id)
             placeholders = ','.join(['?' for _ in accessible_workers])
             conn = sqlite3.connect(DB_PATH)
             workers_df = pd.read_sql_query(f"SELECT id, username FROM users WHERE role='worker' AND company_id = ? AND id IN ({placeholders})", conn, params=[company_id] + accessible_workers)
             conn.close()
-            worker_options = ["Unassigned"] + workers_df['username'].tolist()
-            worker = st.selectbox("Worker", worker_options)
-            time_slot = st.selectbox("Time", ["8:00 AM","9:00 AM","10:00 AM","11:00 AM","12:00 PM","1:00 PM","2:00 PM","3:00 PM","4:00 PM"])
-            if st.button("Schedule"):
-                if client != "Select...":
+            worker_options = [t("schedule_worker_unassigned")] + workers_df['username'].tolist()
+            worker = st.selectbox(t("schedule_worker_label"), worker_options)
+            time_slot = st.selectbox(t("schedule_time"), ["8:00 AM","9:00 AM","10:00 AM","11:00 AM","12:00 PM","1:00 PM","2:00 PM","3:00 PM","4:00 PM"])
+            if st.button(t("schedule_schedule_btn")):
+                if client != t("schedule_select"):
                     client_id = clients_df[clients_df['business_name']==client]['id'].values[0]
-                    worker_id = None if worker=="Unassigned" else workers_df[workers_df['username']==worker]['id'].values[0]
+                    worker_id = None if worker==t("schedule_worker_unassigned") else workers_df[workers_df['username']==worker]['id'].values[0]
                     schedule_job(client_id, client, "", None, worker_id, view_date, time_slot)
                     log_activity(company_id, user_id, 'add_job', 'scheduled_job', None, f"Added job for {client}")
-                    st.success("Scheduled")
+                    st.success(t("schedule_scheduled"))
                     st.rerun()
 
 
@@ -6485,250 +7258,259 @@ def calculate_inspection_estimate(data):
 
 def pre_inspection_page():
     """Quick pre-inspection checklist for ballpark estimates (Medium to High range)"""
-    if st.button("← Back to Dashboard"):
+    if st.button(t("insp_back_dashboard")):
         st.session_state.page = "dashboard"
         st.rerun()
-    
+
     if 'user' not in st.session_state or not st.session_state.user:
-        st.warning("Please log in to use the pre-inspection checklist.")
+        st.warning(t("insp_login_required"))
         st.session_state.page = "login"
         st.rerun()
         return
-    
-    st.markdown("### 🔍 Pre-Inspection Checklist")
-    st.caption("Quick estimate generator - fill in what you see to get a ballpark price (Medium to High range, excludes travel/tolls)")
-    
+
+    st.markdown(t("insp_title"))
+    st.caption(t("insp_caption"))
+
     # Create tabs for different inspection categories
     tabs = st.tabs([
-        "🏢 Property Basics", 
-        "🧹 Areas to Clean", 
-        "🪟 Windows & Glass",
-        "🚽 Restrooms", 
-        "🧼 Floors", 
-        "🖥️ Equipment & Furniture",
-        "🔧 Special Conditions"
+        t("insp_tab_basics"),
+        t("insp_tab_areas"),
+        t("insp_tab_windows"),
+        t("insp_tab_restrooms"),
+        t("insp_tab_floors"),
+        t("insp_tab_equipment"),
+        t("insp_tab_special"),
     ])
-    
+
     # ============================================================
     # TAB 1: PROPERTY BASICS
     # ============================================================
     with tabs[0]:
-        st.markdown("#### Property Information")
-        
+        st.markdown(t("insp_property_info"))
+
         col1, col2 = st.columns(2)
         with col1:
+            prop_type_values = ["Office", "Retail", "Warehouse", "Medical/Dental", "Restaurant",
+                                 "School/Daycare", "Hotel", "Gym/Fitness", "Church", "Other"]
             property_type = st.selectbox(
-                "Property Type",
-                ["Office", "Retail", "Warehouse", "Medical/Dental", "Restaurant", 
-                 "School/Daycare", "Hotel", "Gym/Fitness", "Church", "Other"],
+                t("insp_property_type"),
+                prop_type_values,
+                format_func=lambda v: t(f"insp_prop_{v}"),
                 key="insp_prop_type"
             )
-            
+
             if property_type == "Other":
-                property_type_other = st.text_input("Please specify", key="insp_prop_other")
+                property_type_other = st.text_input(t("insp_please_specify"), key="insp_prop_other")
                 property_type = property_type_other if property_type_other else "Other"
-            
-            square_feet = st.number_input("Estimated Square Feet", min_value=100, max_value=500000, value=2000, step=500, key="insp_sqft")
-        
+
+            square_feet = st.number_input(t("insp_sqft"), min_value=100, max_value=500000, value=2000, step=500, key="insp_sqft")
+
         with col2:
-            num_floors = st.number_input("Number of Floors", min_value=1, max_value=20, value=1, key="insp_floors")
-            has_elevator = st.checkbox("Building has elevator", key="insp_elevator")
-            multi_building = st.checkbox("Multiple buildings on site", key="insp_multi_building")
-            
+            num_floors = st.number_input(t("insp_num_floors"), min_value=1, max_value=20, value=1, key="insp_floors")
+            has_elevator = st.checkbox(t("insp_has_elevator"), key="insp_elevator")
+            multi_building = st.checkbox(t("insp_multi_building"), key="insp_multi_building")
+
             if multi_building:
-                num_buildings = st.number_input("Number of buildings", min_value=2, max_value=10, value=2, key="insp_buildings")
+                num_buildings = st.number_input(t("insp_num_buildings"), min_value=2, max_value=10, value=2, key="insp_buildings")
             else:
                 num_buildings = 1
-        
+
         st.markdown("---")
-        st.markdown("#### Job Timing")
-        
+        st.markdown(t("insp_job_timing"))
+
         col1, col2 = st.columns(2)
         with col1:
+            freq_values = ["One-time", "Daily", "Weekly", "Bi-weekly", "Monthly"]
             frequency = st.selectbox(
-                "Cleaning Frequency",
-                ["One-time", "Daily", "Weekly", "Bi-weekly", "Monthly"],
+                t("insp_frequency"),
+                freq_values,
+                format_func=lambda v: t(f"insp_freq_{v}"),
                 key="insp_freq"
             )
-        
+
         with col2:
+            access_values = ["Normal business hours", "After hours (6PM-6AM)", "Weekend only", "Very restricted window"]
             access_time = st.selectbox(
-                "Access Time",
-                ["Normal business hours", "After hours (6PM-6AM)", "Weekend only", "Very restricted window"],
+                t("insp_access_time"),
+                access_values,
+                format_func=lambda v: t(f"insp_access_{v}"),
                 key="insp_access"
             )
-    
+
     # ============================================================
     # TAB 2: AREAS TO CLEAN
     # ============================================================
     with tabs[1]:
-        st.markdown("#### Select Areas That Need Cleaning")
-        st.caption("Check all that apply")
-        
+        st.markdown(t("insp_select_areas"))
+        st.caption(t("insp_check_all"))
+
         col1, col2, col3 = st.columns(3)
-        
+
         with col1:
-            reception_area = st.checkbox("Reception/Waiting Area", key="insp_reception")
-            private_offices = st.number_input("Private Offices", min_value=0, value=0, key="insp_offices")
-            open_workstations = st.number_input("Open Workstations", min_value=0, value=0, key="insp_workstations")
-            conference_rooms = st.number_input("Conference Rooms", min_value=0, value=0, key="insp_conference")
-            breakroom_kitchen = st.checkbox("Breakroom/Kitchen", key="insp_breakroom")
-        
+            reception_area = st.checkbox(t("insp_reception"), key="insp_reception")
+            private_offices = st.number_input(t("insp_private_offices"), min_value=0, value=0, key="insp_offices")
+            open_workstations = st.number_input(t("insp_workstations"), min_value=0, value=0, key="insp_workstations")
+            conference_rooms = st.number_input(t("insp_conference_rooms"), min_value=0, value=0, key="insp_conference")
+            breakroom_kitchen = st.checkbox(t("insp_breakroom"), key="insp_breakroom")
+
         with col2:
-            hallways = st.checkbox("Hallways/Corridors", key="insp_hallways")
-            stairwells = st.number_input("Stairwells", min_value=0, value=0, key="insp_stairs")
-            storage_rooms = st.number_input("Storage/Supply Rooms", min_value=0, value=0, key="insp_storage")
-            st.checkbox("Janitor Closet (if provided)", key="insp_janitor")
-            loading_dock = st.checkbox("Loading Dock/Warehouse Area", key="insp_dock")
-        
+            hallways = st.checkbox(t("insp_hallways"), key="insp_hallways")
+            stairwells = st.number_input(t("insp_stairwells"), min_value=0, value=0, key="insp_stairs")
+            storage_rooms = st.number_input(t("insp_storage_rooms"), min_value=0, value=0, key="insp_storage")
+            st.checkbox(t("insp_janitor_closet"), key="insp_janitor")
+            loading_dock = st.checkbox(t("insp_loading_dock"), key="insp_dock")
+
         with col3:
-            exterior_entry = st.checkbox("Exterior Entry/Lobby", key="insp_exterior")
-            st.checkbox("Sidewalk/Patio (sweep only)", key="insp_sidewalk")
-            st.checkbox("Parking Garage (sweep)", key="insp_parking")
-            trash_recycling = st.checkbox("Trash/Recycling Collection", key="insp_trash")
-    
+            exterior_entry = st.checkbox(t("insp_exterior_entry"), key="insp_exterior")
+            st.checkbox(t("insp_sidewalk"), key="insp_sidewalk")
+            st.checkbox(t("insp_parking_garage"), key="insp_parking")
+            trash_recycling = st.checkbox(t("insp_trash"), key="insp_trash")
+
     # ============================================================
     # TAB 3: WINDOWS & GLASS
     # ============================================================
     with tabs[2]:
-        st.markdown("#### Window & Glass Cleaning")
-        
+        st.markdown(t("insp_window_title"))
+
         col1, col2 = st.columns(2)
-        
+
         with col1:
-            interior_windows = st.number_input("Interior Windows", min_value=0, value=0, key="insp_int_windows", help="Count individual window panes")
-            exterior_windows = st.number_input("Exterior Windows (ground floor)", min_value=0, value=0, key="insp_ext_windows")
-            high_windows = st.number_input("High/Atrium Windows (need ladder)", min_value=0, value=0, key="insp_high_windows")
-        
+            interior_windows = st.number_input(t("insp_interior_windows"), min_value=0, value=0, key="insp_int_windows", help="Count individual window panes")
+            exterior_windows = st.number_input(t("insp_exterior_windows"), min_value=0, value=0, key="insp_ext_windows")
+            high_windows = st.number_input(t("insp_high_windows"), min_value=0, value=0, key="insp_high_windows")
+
         with col2:
-            glass_doors = st.number_input("Glass Doors", min_value=0, value=0, key="insp_glass_doors")
-            glass_partitions = st.number_input("Glass Partitions/Walls (linear ft)", min_value=0, value=0, key="insp_partitions")
-            mirrors = st.number_input("Large Mirrors", min_value=0, value=0, key="insp_mirrors")
-        
-        window_tracks = st.checkbox("Window Tracks need cleaning", key="insp_tracks")
-        st.checkbox("Window Screens need cleaning", key="insp_screens")
-    
+            glass_doors = st.number_input(t("insp_glass_doors"), min_value=0, value=0, key="insp_glass_doors")
+            glass_partitions = st.number_input(t("insp_glass_partitions"), min_value=0, value=0, key="insp_partitions")
+            mirrors = st.number_input(t("insp_mirrors"), min_value=0, value=0, key="insp_mirrors")
+
+        window_tracks = st.checkbox(t("insp_window_tracks"), key="insp_tracks")
+        st.checkbox(t("insp_window_screens"), key="insp_screens")
+
     # ============================================================
     # TAB 4: RESTROOMS
     # ============================================================
     with tabs[3]:
-        st.markdown("#### Restroom Details")
-        
+        st.markdown(t("insp_restroom_title"))
+
         col1, col2, col3 = st.columns(3)
-        
+
         with col1:
-            num_toilets = st.number_input("Toilets", min_value=0, value=0, key="insp_toilets")
-            num_urinals = st.number_input("Urinals", min_value=0, value=0, key="insp_urinals")
-        
+            num_toilets = st.number_input(t("insp_toilets"), min_value=0, value=0, key="insp_toilets")
+            num_urinals = st.number_input(t("insp_urinals"), min_value=0, value=0, key="insp_urinals")
+
         with col2:
-            num_sinks = st.number_input("Sinks", min_value=0, value=0, key="insp_sinks")
-            num_mirrors_rest = st.number_input("Mirrors (restroom)", min_value=0, value=0, key="insp_rest_mirrors")
-        
+            num_sinks = st.number_input(t("insp_sinks"), min_value=0, value=0, key="insp_sinks")
+            num_mirrors_rest = st.number_input(t("insp_rest_mirrors"), min_value=0, value=0, key="insp_rest_mirrors")
+
         with col3:
-            num_showers = st.number_input("Showers (locker rooms)", min_value=0, value=0, key="insp_showers")
-            restroom_count = st.number_input("Number of Restrooms", min_value=0, value=0, key="insp_restroom_count")
-        
-        deep_clean = st.checkbox("Deep clean required (grout, hard water stains, etc.)", key="insp_deep_clean")
-        restock_supplies = st.checkbox("Restock supplies (soap, paper towels, TP)", key="insp_restock")
+            num_showers = st.number_input(t("insp_showers"), min_value=0, value=0, key="insp_showers")
+            restroom_count = st.number_input(t("insp_restroom_count"), min_value=0, value=0, key="insp_restroom_count")
+
+        deep_clean = st.checkbox(t("insp_deep_clean"), key="insp_deep_clean")
+        restock_supplies = st.checkbox(t("insp_restock"), key="insp_restock")
     
     # ============================================================
     # TAB 5: FLOORS
     # ============================================================
     with tabs[4]:
-        st.markdown("#### Floor Types & Conditions")
-        
+        st.markdown(t("insp_floor_title"))
+
         col1, col2 = st.columns(2)
-        
+
         with col1:
-            carpet_sqft = st.number_input("Carpet (sq ft)", min_value=0, value=0, key="insp_carpet")
-            tile_sqft = st.number_input("Tile (sq ft)", min_value=0, value=0, key="insp_tile")
-            vinyl_sqft = st.number_input("Vinyl/LVP (sq ft)", min_value=0, value=0, key="insp_vinyl")
-        
+            carpet_sqft = st.number_input(t("insp_carpet"), min_value=0, value=0, key="insp_carpet")
+            tile_sqft = st.number_input(t("insp_tile"), min_value=0, value=0, key="insp_tile")
+            vinyl_sqft = st.number_input(t("insp_vinyl"), min_value=0, value=0, key="insp_vinyl")
+
         with col2:
-            hardwood_sqft = st.number_input("Hardwood (sq ft)", min_value=0, value=0, key="insp_hardwood")
-            concrete_sqft = st.number_input("Concrete/Polished (sq ft)", min_value=0, value=0, key="insp_concrete")
-            
+            hardwood_sqft = st.number_input(t("insp_hardwood"), min_value=0, value=0, key="insp_hardwood")
+            concrete_sqft = st.number_input(t("insp_concrete"), min_value=0, value=0, key="insp_concrete")
+
             floor_condition = st.select_slider(
-                "Floor Condition",
+                t("insp_floor_condition"),
                 options=["Excellent", "Good", "Fair", "Poor", "Very Poor"],
                 value="Good",
+                format_func=lambda v: t(f"insp_floorcond_{v}"),
                 key="insp_floor_condition"
             )
-        
-        st.markdown("#### Additional Floor Services")
+
+        st.markdown(t("insp_additional_floor"))
         col1, col2, col3 = st.columns(3)
-        
+
         with col1:
-            carpet_extract = st.checkbox("Carpet Extraction/Deep Clean", key="insp_extract")
+            carpet_extract = st.checkbox(t("insp_carpet_extract"), key="insp_extract")
         with col2:
-            strip_wax = st.checkbox("Strip & Wax (tile/vinyl)", key="insp_wax")
+            strip_wax = st.checkbox(t("insp_strip_wax"), key="insp_wax")
         with col3:
-            floor_buff = st.checkbox("Daily Buff/Polish", key="insp_buff")
-        
+            floor_buff = st.checkbox(t("insp_floor_buff"), key="insp_buff")
+
         if carpet_extract:
-            st.number_input("Extraction square feet", min_value=0, value=carpet_sqft, key="insp_extract_sqft")
-        
+            st.number_input(t("insp_extract_sqft"), min_value=0, value=carpet_sqft, key="insp_extract_sqft")
+
         # Area rugs
-        st.markdown("#### Area Rugs")
+        st.markdown(t("insp_area_rugs"))
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.number_input("Small (3x5 or less)", min_value=0, value=0, key="insp_small_rugs")
+            st.number_input(t("insp_rug_small"), min_value=0, value=0, key="insp_small_rugs")
         with col2:
-            st.number_input("Medium (5x8)", min_value=0, value=0, key="insp_medium_rugs")
+            st.number_input(t("insp_rug_medium"), min_value=0, value=0, key="insp_medium_rugs")
         with col3:
-            st.number_input("Large (8x10+)", min_value=0, value=0, key="insp_large_rugs")
-    
+            st.number_input(t("insp_rug_large"), min_value=0, value=0, key="insp_large_rugs")
+
     # ============================================================
     # TAB 6: EQUIPMENT & FURNITURE
     # ============================================================
     with tabs[5]:
-        st.markdown("#### Equipment & Furniture Cleaning")
-        
+        st.markdown(t("insp_equipment_title"))
+
         col1, col2 = st.columns(2)
-        
+
         with col1:
-            desks = st.number_input("Desks", min_value=0, value=0, key="insp_desks")
-            computers = st.number_input("Computers/Monitors", min_value=0, value=0, key="insp_computers")
-            phones = st.number_input("Phones", min_value=0, value=0, key="insp_phones")
-            chairs = st.number_input("Chairs (dust/wipe)", min_value=0, value=0, key="insp_chairs")
-        
+            desks = st.number_input(t("insp_desks"), min_value=0, value=0, key="insp_desks")
+            computers = st.number_input(t("insp_computers"), min_value=0, value=0, key="insp_computers")
+            phones = st.number_input(t("insp_phones"), min_value=0, value=0, key="insp_phones")
+            chairs = st.number_input(t("insp_chairs"), min_value=0, value=0, key="insp_chairs")
+
         with col2:
-            tables = st.number_input("Tables", min_value=0, value=0, key="insp_tables")
-            whiteboards = st.number_input("Whiteboards", min_value=0, value=0, key="insp_whiteboards")
-            appliances = st.number_input("Appliances (fridge, microwave, etc.)", min_value=0, value=0, key="insp_appliances")
-            equipment = st.number_input("Special Equipment (machines, etc.)", min_value=0, value=0, key="insp_equipment")
-        
-        st.markdown("#### Furniture Moving")
-        move_light = st.number_input("Light furniture to move (chairs, small tables)", min_value=0, value=0, key="insp_move_light")
-        move_heavy = st.number_input("Heavy items to move (machines, large desks)", min_value=0, value=0, key="insp_move_heavy")
-        clean_under = st.checkbox("Clean under moved items", key="insp_clean_under")
-    
+            tables = st.number_input(t("insp_tables"), min_value=0, value=0, key="insp_tables")
+            whiteboards = st.number_input(t("insp_whiteboards"), min_value=0, value=0, key="insp_whiteboards")
+            appliances = st.number_input(t("insp_appliances"), min_value=0, value=0, key="insp_appliances")
+            equipment = st.number_input(t("insp_equipment"), min_value=0, value=0, key="insp_equipment")
+
+        st.markdown(t("insp_furniture_moving"))
+        move_light = st.number_input(t("insp_move_light"), min_value=0, value=0, key="insp_move_light")
+        move_heavy = st.number_input(t("insp_move_heavy"), min_value=0, value=0, key="insp_move_heavy")
+        clean_under = st.checkbox(t("insp_clean_under"), key="insp_clean_under")
+
     # ============================================================
     # TAB 7: SPECIAL CONDITIONS
     # ============================================================
     with tabs[6]:
-        st.markdown("#### Special Conditions (Adds to price)")
-        
+        st.markdown(t("insp_special_title"))
+
         col1, col2 = st.columns(2)
-        
+
         with col1:
-            high_dusting = st.checkbox("High dusting (ceilings, fans, vents)", key="insp_high_dust")
+            high_dusting = st.checkbox(t("insp_high_dusting"), key="insp_high_dust")
             if high_dusting:
-                st.number_input("Square feet for high dusting", min_value=0, value=square_feet, key="insp_high_dust_sqft")
-            
-            blind_cleaning = st.number_input("Blinds to clean", min_value=0, value=0, key="insp_blinds")
-            disinfection = st.checkbox("Disinfection (high-touch surfaces)", key="insp_disinfection")
-            odor_control = st.checkbox("Odor control treatment", key="insp_odor")
-        
+                st.number_input(t("insp_high_dust_sqft"), min_value=0, value=square_feet, key="insp_high_dust_sqft")
+
+            blind_cleaning = st.number_input(t("insp_blinds"), min_value=0, value=0, key="insp_blinds")
+            disinfection = st.checkbox(t("insp_disinfection"), key="insp_disinfection")
+            odor_control = st.checkbox(t("insp_odor"), key="insp_odor")
+
         with col2:
-            post_construction = st.checkbox("Post-construction cleaning", key="insp_post_construction")
-            emergency = st.checkbox("Emergency/Rush (less than 48hr notice)", key="insp_emergency")
-            holiday_clean = st.selectbox("Holiday/After-hours", ["No", "Yes - Holiday", "Yes - Weekend"], key="insp_holiday")
-            
-            st.checkbox("Client provides cleaning supplies", key="insp_supplies")
-            
+            post_construction = st.checkbox(t("insp_post_construction"), key="insp_post_construction")
+            emergency = st.checkbox(t("insp_emergency"), key="insp_emergency")
+            holiday_values = ["No", "Yes - Holiday", "Yes - Weekend"]
+            holiday_clean = st.selectbox(t("insp_holiday"), holiday_values,
+                                          format_func=lambda v: t(f"insp_holiday_{v}"), key="insp_holiday")
+
+            st.checkbox(t("insp_supplies_provided"), key="insp_supplies")
+
             complexity_rating = st.select_slider(
-                "Overall Complexity (1-10)",
+                t("insp_complexity"),
                 options=[1,2,3,4,5,6,7,8,9,10],
                 value=3,
                 key="insp_complexity"
@@ -6816,56 +7598,56 @@ def pre_inspection_page():
         }
     }
     
-    if st.button("💰 Generate Ballpark Estimate", type="primary", use_container_width=True, key="insp_generate_btn"):
+    if st.button(t("insp_generate_btn"), type="primary", use_container_width=True, key="insp_generate_btn"):
         st.session_state.insp_payload = inspection_data
         st.session_state.insp_estimate = calculate_inspection_estimate(inspection_data)
         st.session_state.pop("insp_saved", None)
-    
+
     if st.session_state.get("insp_estimate") and st.session_state.get("insp_payload"):
         estimate = st.session_state.insp_estimate
         saved_payload = st.session_state.insp_payload
-        
+
         st.markdown("---")
-        st.markdown("### 📋 Inspection Estimate Results")
-        st.caption("*Excludes travel mileage, tolls, and parking fees*")
-        
+        st.markdown(t("insp_results_title"))
+        st.caption(t("insp_results_caption"))
+
         col1, col2, col3 = st.columns(3)
-        
+
         with col2:
             st.markdown(f"""
             <div style="text-align: center; padding: 20px; border-radius: 16px; background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white;">
-                <h3>💰 BALLPARK ESTIMATE</h3>
+                <h3>{t("insp_ballpark")}</h3>
                 <h1 style="font-size: 48px;">${estimate['final_price']:,}</h1>
-                <p>Medium to High Range</p>
-                <small>Excludes travel & tolls</small>
+                <p>{t("insp_medium_high")}</p>
+                <small>{t("insp_excludes")}</small>
             </div>
             """, unsafe_allow_html=True)
-        
-        with st.expander("📊 Estimate Breakdown", expanded=True):
+
+        with st.expander(t("insp_breakdown"), expanded=True):
             st.markdown(f"""
             **Base Price:** ${estimate['base_price']:,}
             **Adjustments:** +${estimate['adjustments']:,}
             **Total:** ${estimate['final_price']:,}
-            
+
             ---
             **What's Included:**
             {estimate['included_summary']}
-            
+
             **Adjustments Applied:**
             {estimate['adjustment_summary']}
             """)
-        
+
         if estimate['confidence'] >= 80:
-            st.success(f"🎯 Confidence Level: {estimate['confidence']}% - This estimate is well-calibrated")
+            st.success(t("insp_confidence_high", confidence=estimate['confidence']))
         elif estimate['confidence'] >= 60:
-            st.warning(f"⚠️ Confidence Level: {estimate['confidence']}% - Consider more details")
+            st.warning(t("insp_confidence_med", confidence=estimate['confidence']))
         else:
-            st.error(f"❌ Confidence Level: {estimate['confidence']}% - More information needed for accuracy")
-        
-        if st.button("💾 Save This Inspection", key="save_inspection_btn"):
+            st.error(t("insp_confidence_low", confidence=estimate['confidence']))
+
+        if st.button(t("insp_save_btn"), key="save_inspection_btn"):
             company_id = get_current_user_company()
             if not company_id:
-                st.error("Could not determine your company. Please log in again.")
+                st.error(t("insp_company_error"))
             else:
                 conn = sqlite3.connect(DB_PATH)
                 c = conn.cursor()
@@ -6885,7 +7667,7 @@ def pre_inspection_page():
                 conn.commit()
                 conn.close()
                 st.session_state.insp_saved = True
-                st.success("Inspection saved! You can reference it later.")
+                st.success(t("insp_saved"))
 
 
 def inspections_page():
@@ -6987,13 +7769,13 @@ def get_messages(channel='general', user_id=None, limit=50):
     return df
 
 def chat_page():
-    if st.button("← Back"):
+    if st.button(t("back")):
         st.session_state.page = "dashboard"
         st.rerun()
-    st.markdown("### 💬 Team Chat")
+    st.markdown(t("chat_title"))
     with st.form("chat"):
-        msg = st.text_input("Message")
-        if st.form_submit_button("Send"):
+        msg = st.text_input(t("chat_message"))
+        if st.form_submit_button(t("chat_send")):
             if msg:
                 send_message(msg)
                 st.rerun()
@@ -7168,22 +7950,27 @@ def generate_intelligent_tasks(property_type, sqft, num_rooms, has_restrooms, nu
         {"name": "Final visual inspection", "minutes": 10, "tip": "Walk through all areas"},
     ]
 
+    # NOTE: keys must exactly match PROPERTY_TYPES (the dict the selectbox in
+    # ai_tasks_page() is built from) -- it uses emoji-prefixed labels like
+    # "🍽️ Restaurant", not plain "Restaurant". Previously these keys didn't
+    # match anything except "Warehouse", so the specialized lists below
+    # silently never triggered for any other property type.
     property_tasks = {
-        "Restaurant": [
+        "🍽️ Restaurant": [
             {"name": "Clean kitchen hood and exhaust", "minutes": 30, "tip": "Focus on grease buildup"},
             {"name": "Degrease all cooking surfaces", "minutes": 25, "tip": "Use food-safe degreaser"},
             {"name": "Sanitize food preparation areas", "minutes": 15, "tip": "Use NSF-certified sanitizer"},
             {"name": "Clean dining tables and chairs", "minutes": 20, "tip": "Wipe down all surfaces"},
             {"name": "Clean and sanitize menus", "minutes": 10, "tip": "Use food-safe wipes"}
         ],
-        "Medical/Dental": [
+        "🏥 Medical / Dental": [
             {"name": "Disinfect all exam room surfaces", "minutes": 30, "tip": "Use hospital-grade disinfectant"},
             {"name": "Clean medical equipment (exterior)", "minutes": 20, "tip": "Follow equipment manufacturer guidelines"},
             {"name": "Sanitize waiting area chairs and tables", "minutes": 15, "tip": "Focus on armrests"},
             {"name": "Biohazard waste handling", "minutes": 15, "tip": "Use proper PPE and red bags"},
             {"name": "Restock medical supplies (paper, gloves)", "minutes": 10, "tip": "Check inventory levels"}
         ],
-        "School/Daycare": [
+        "🏫 School / Daycare": [
             {"name": "Sanitize all toys and play areas", "minutes": 25, "tip": "Use child-safe disinfectant"},
             {"name": "Clean cubbies and storage areas", "minutes": 20, "tip": "Remove all items and wipe down"},
             {"name": "Disinfect changing tables", "minutes": 10, "tip": "Use appropriate sanitizer"},
@@ -7197,7 +7984,7 @@ def generate_intelligent_tasks(property_type, sqft, num_rooms, has_restrooms, nu
             {"name": "Empty large industrial trash bins", "minutes": 20, "tip": "Check dumpster placement"},
             {"name": "Clean breakroom and office areas", "minutes": 20, "tip": "Focus on employee areas"}
         ],
-        "Gym/Fitness": [
+        "🏋️ Gym / Fitness": [
             {"name": "Sanitize all exercise equipment", "minutes": 30, "tip": "Use equipment-safe disinfectant"},
             {"name": "Clean locker rooms and showers", "minutes": 35, "tip": "Check for mold in corners"},
             {"name": "Mop studio and class floors", "minutes": 20, "tip": "Use appropriate floor cleaner"},
@@ -7279,11 +8066,11 @@ def generate_equipment_list(property_type, sqft):
         "Paper towels (4 rolls)",
     ]
 
-    if property_type == "Restaurant":
+    if property_type == "🍽️ Restaurant":
         base_equipment.extend(["Degreaser sprayer", "Commercial kitchen cleaner", "Floor scrubber for kitchen"])
         base_supplies.extend(["Food-safe sanitizer", "Grease remover concentrate", "Stainless steel polish"])
 
-    if property_type == "Medical/Dental":
+    if property_type == "🏥 Medical / Dental":
         base_equipment.extend(["Hospital-grade disinfectant sprayer", "PPE kit (gloves, mask, gown)"])
         base_supplies.extend(["Medical-grade disinfectant wipes", "Biohazard waste bags", "Hand sanitizer refills"])
 
@@ -7310,19 +8097,19 @@ def generate_quality_checklist(property_type):
     ]
 
     property_specific = {
-        "Restaurant": [
+        "🍽️ Restaurant": [
             "Kitchen hood and exhaust clean",
             "Food prep surfaces sanitized",
             "No grease buildup on equipment",
             "Dining area tables and chairs clean",
         ],
-        "Medical/Dental": [
+        "🏥 Medical / Dental": [
             "Exam room surfaces disinfected",
             "Biohazard waste properly disposed",
             "Waiting area sanitized",
             "Medical equipment exteriors clean",
         ],
-        "School/Daycare": [
+        "🏫 School / Daycare": [
             "Toys and play areas sanitized",
             "Child-height surfaces disinfected",
             "Cubbies and storage clean",
@@ -7635,18 +8422,21 @@ def get_user_tickets():
     return df
 
 def support_page():
-    if st.button("← Back"):
+    if st.button(t("back")):
         st.session_state.page = "dashboard"
         st.rerun()
-    st.markdown("### 🎫 Support Tickets")
+    st.markdown(t("support_title"))
+    issue_type_map = {"Bug": "support_bug", "Feature request": "support_feature",
+                       "Data issue": "support_data_issue", "Other": "support_other"}
     with st.form("ticket"):
-        issue = st.selectbox("Type", ["Bug","Feature request","Data issue","Other"])
-        desc = st.text_area("Description")
-        steps = st.text_area("Steps to Reproduce (if bug)")
-        if st.form_submit_button("Submit"):
+        issue = st.selectbox(t("support_type"), list(issue_type_map.keys()),
+                              format_func=lambda v: t(issue_type_map[v]))
+        desc = st.text_area(t("support_description"))
+        steps = st.text_area(t("support_steps"))
+        if st.form_submit_button(t("support_submit")):
             if desc:
                 tid = create_support_ticket(issue, desc, steps)
-                st.success(f"Ticket {tid} submitted")
+                st.success(t("support_submitted", ticket_id=tid))
                 st.rerun()
     tickets = get_user_tickets()
     if not tickets.empty:
@@ -7983,10 +8773,10 @@ def internal_pricing_dashboard():
         st.warning("No expense data configured. Go to Settings > Business Expenses to add.")
 
 def my_performance_page():
-    if st.button("← Back"):
+    if st.button(t("back")):
         st.session_state.page = "dashboard"
         st.rerun()
-    st.markdown("### 🏅 My Performance")
+    st.markdown(t("perf_title"))
     uid = st.session_state.user['user_id']
     jobs, profit, hours = get_worker_performance(uid)
     conn = sqlite3.connect(DB_PATH)
@@ -7997,49 +8787,49 @@ def my_performance_page():
     years = (datetime.now() - hire).days / 365.25
     conn.close()
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Jobs Completed", jobs)
-    col2.metric("Total Profit", f"${profit:,.2f}")
-    col3.metric("Total Hours", f"{hours:.1f}")
-    col4.metric("Years of Service", f"{years:.1f}")
+    col1.metric(t("perf_jobs_completed"), jobs)
+    col2.metric(t("perf_total_profit"), f"${profit:,.2f}")
+    col3.metric(t("perf_total_hours"), f"{hours:.1f}")
+    col4.metric(t("perf_years_service"), f"{years:.1f}")
     if years >= 1.0:
-        st.success(f"🎉 Congratulations on your {int(years)}‑year anniversary!")
+        st.success(t("perf_anniversary", years=int(years)))
     badges = get_worker_badges(uid)
     if not badges.empty:
-        st.subheader("Earned Badges")
+        st.subheader(t("perf_badges"))
         st.dataframe(badges)
     conn = sqlite3.connect(DB_PATH)
     company_id = get_current_user_company()
     df = pd.read_sql_query("SELECT strftime('%Y-%m', job_date) as month, SUM(profit) as profit FROM quick_jobs WHERE user_id = ? AND company_id = ? GROUP BY month ORDER BY month", conn, params=(uid, company_id))
     conn.close()
     if not df.empty:
-        fig = px.line(df, x='month', y='profit', title="Your Monthly Profit")
+        fig = px.line(df, x='month', y='profit', title=t("perf_monthly_profit_chart"))
         st.plotly_chart(fig, use_container_width=True)
 
 def certifications_page():
-    if st.button("← Back"):
+    if st.button(t("back")):
         st.session_state.page = "dashboard"
         st.rerun()
-    st.markdown("### 📜 Certifications")
+    st.markdown(t("cert_title"))
     user_role = st.session_state.user['role']
     uid = st.session_state.user['user_id']
     if user_role == 'worker':
         certs = get_certifications_for_worker(uid)
         if certs.empty:
-            st.info("No certifications yet.")
+            st.info(t("cert_none_yet"))
         else:
             st.dataframe(certs)
-        with st.expander("➕ Add New Certification"):
+        with st.expander(t("cert_add_new")):
             with st.form("add_cert"):
-                name = st.text_input("Certification Name")
-                issuer = st.text_input("Issuing Body")
-                date_earned = st.date_input("Date Earned")
-                expiration = st.date_input("Expiration Date (optional)", value=None)
-                file = st.file_uploader("Upload Certificate (PDF/Image)", type=['pdf','png','jpg'])
-                notes = st.text_area("Notes")
-                if st.form_submit_button("Submit"):
+                name = st.text_input(t("cert_name"))
+                issuer = st.text_input(t("cert_issuer"))
+                date_earned = st.date_input(t("cert_date_earned"))
+                expiration = st.date_input(t("cert_expiration"), value=None)
+                file = st.file_uploader(t("cert_upload"), type=['pdf','png','jpg'])
+                notes = st.text_area(t("cert_notes"))
+                if st.form_submit_button(t("cert_submit")):
                     if name:
                         add_certification(uid, name, issuer, date_earned.isoformat(), expiration.isoformat() if expiration else None, file, notes)
-                        st.success("Certification added")
+                        st.success(t("cert_added"))
                         st.rerun()
     elif user_role in ['supervisor','admin','super_admin','support_staff']:
         company_id = get_current_user_company()
@@ -8054,13 +8844,13 @@ def certifications_page():
         """, conn, params=[company_id] + accessible)
         conn.close()
         if df.empty:
-            st.info("No certifications from your team.")
+            st.info(t("cert_none_from_team"))
         else:
             st.dataframe(df)
-            cert_id = st.number_input("Certification ID to verify", min_value=1, step=1)
-            if st.button("Verify Certification"):
+            cert_id = st.number_input(t("cert_verify_id"), min_value=1, step=1)
+            if st.button(t("cert_verify_btn")):
                 verify_certification(cert_id, uid)
-                st.success("Verified")
+                st.success(t("cert_verified"))
                 st.rerun()
 
 def client_login_page():
@@ -9040,7 +9830,14 @@ def main():
             }
             current = st.session_state.page
             if current in pages:
-                pages[current]()
+                try:
+                    pages[current]()
+                except Exception as e:
+                    log_error_event(type(e).__name__, str(e), page_url=current, stack_trace=traceback.format_exc())
+                    st.error("⚠️ Something went wrong loading this page. The issue has been logged.")
+                    if st.button("← Return to Dashboard"):
+                        st.session_state.page = "dashboard"
+                        st.rerun()
             else:
                 login_page()
 
