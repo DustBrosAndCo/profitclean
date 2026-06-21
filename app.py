@@ -39,724 +39,26 @@ from typing import Dict, Any, Optional, List, Tuple
 from dataclasses import dataclass, asdict
 from enum import Enum
 from integrations.calendly import CalendlyIntegration
+from constants import (
+    DB_PATH, MIN_PASSWORD_LENGTH, MAX_LOGIN_ATTEMPTS, ACCOUNT_LOCKOUT_MINUTES,
+    SESSION_EXPIRY_DAYS, SALES_TAX_RATE, BACKUP_DIR, UPLOAD_DIR,
+    AVAILABLE_INTEGRATIONS, FLORIDA_CITIES, PROPERTY_TYPES, FREQUENCIES,
+    HOLIDAY_RATES, KNOWN_TOLLS,
+)
+from enums import UserRole, TicketStatus, TicketPriority, EstimateStatus, JobStatus, EmailContext
+from i18n import TRANSLATIONS, get_user_language, t, language_selector
+from database import init_db, migrate_database
+from auth import (
+    get_current_user_company, normalize_email, hash_password, verify_password,
+    check_user_password_hash, validate_password_strength, log_audit, log_auth_event,
+    get_current_user_data, generate_session_token, hash_session_token,
+    create_user_session, validate_session_token, clear_expired_sessions,
+    authenticate_user, logout_user, get_effective_user, require_auth, require_role,
+    generate_totp_secret, get_totp_uri, verify_totp, generate_backup_codes,
+    verify_backup_code,
+)
 
 LAST_EMAIL_ERROR = None
-
-# ============================================================
-# SECURITY CONFIGURATION
-# ============================================================
-
-MIN_PASSWORD_LENGTH = 8
-MAX_LOGIN_ATTEMPTS = 5
-ACCOUNT_LOCKOUT_MINUTES = 30
-SESSION_EXPIRY_DAYS = 7
-SALES_TAX_RATE = 0.06
-
-BACKUP_DIR = os.path.join(os.path.expanduser("~"), "ProfitClean_Backups")
-UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(BACKUP_DIR, exist_ok=True)
-
-# ============================================================
-# TRANSLATIONS (i18n) -- worker-facing pages only
-# ============================================================
-
-TRANSLATIONS = {
-    "en": {
-        # Login
-        "login_title": "🧹 ProfitClean Login",
-        "login_email": "Email Address",
-        "login_password": "Password",
-        "login_remember_me": "Remember me (7 days)",
-        "login_button": "🔑 Login",
-        "login_missing_fields": "Please enter email and password",
-        "login_authenticating": "Authenticating...",
-        "login_success": "✅ Login successful!",
-        "login_new_here": "### New here?",
-        "login_create_account": "Create Account",
-        "login_forgot_password": "Forgot Password?",
-        "login_need_help": "Need help? Contact support@profitclean.com",
-        "login_client_portal": "👤 Client Portal",
-        "login_language_label": "🌐 Language / Idioma",
-        # Dashboard / sidebar menu
-        "menu_title": "### 📋 Menu",
-        "menu_dashboard": "🏠 Dashboard",
-        "menu_new_estimate": "📝 New Estimate",
-        "menu_proposal": "📄 Customer Proposal",
-        "menu_quick_job": "⚡ Quick Job",
-        "menu_clients": "👥 Clients",
-        "menu_workers": "👷 Workers",
-        "menu_schedule": "📅 Schedule",
-        "menu_pre_inspection": "🔍 Pre-Inspection",
-        "menu_profit": "💰 Profit",
-        "menu_history": "📋 History",
-        "menu_team_chat": "💬 Team Chat",
-        "menu_supplies": "📦 Supplies",
-        "menu_ai_tasks": "🤖 AI Tasks",
-        "menu_qr_tracking": "📱 QR Tracking",
-        "menu_gps_tracking": "📍 GPS Tracking",
-        "menu_my_performance": "🏅 My Performance",
-        "menu_certifications": "📜 Certifications",
-        "menu_job_templates": "📋 Job Templates",
-        "menu_backup": "💾 Backup",
-        "menu_support": "🎫 Support",
-        "menu_integrations": "🔌 Integrations",
-        "menu_settings": "⚙️ Settings",
-        "menu_edit_profile": "✏️ Edit Profile",
-        "menu_terms": "📜 Terms of Service",
-        "menu_need_help": "💬 Need Help?",
-        "menu_report_issue": "📝 Report Issue",
-        "menu_logout": "🚪 Logout",
-        "dashboard_welcome": "Welcome, {username} ({role}) | Company ID: {company_id} | Created by Dust Bros & Co.",
-        "dashboard_new_notifications": "📬 You have {count} new notifications. Check your profile to view them.",
-        "dashboard_role_override": "You are currently viewing data for company ID: {company_id} (override active).",
-        "dashboard_metric_clients": "Clients",
-        "dashboard_metric_pending": "Pending Estimates",
-        "dashboard_metric_workers": "Workers Under You",
-        "dashboard_metric_upcoming": "Upcoming Jobs",
-        "dashboard_upcoming_jobs": "### 📅 Upcoming Jobs",
-        "dashboard_no_upcoming": "No upcoming jobs scheduled",
-        "dashboard_use_sidebar": "Use sidebar to navigate.",
-        "back": "← Back",
-        # Edit Profile
-        "profile_title": "### ✏️ Edit Your Profile",
-        "profile_user_not_found": "User not found",
-        "profile_unread": "📬 You have {count} unread notifications",
-        "profile_username": "Username",
-        "profile_email": "Email",
-        "profile_role": "Role",
-        "profile_company_id": "Company ID",
-        "profile_hire_date": "Hire Date",
-        "profile_invite_code": "Your Invite Code",
-        "profile_not_set": "Not set",
-        "profile_change_password": "#### Change Password",
-        "profile_current_password": "Current Password",
-        "profile_new_password": "New Password",
-        "profile_confirm_password": "Confirm New Password",
-        "profile_save_changes": "Save Profile Changes",
-        "profile_current_password_wrong": "Current password is incorrect",
-        "profile_passwords_no_match": "New passwords do not match",
-        "profile_saved": "Profile updated",
-        "profile_language": "#### Language / Idioma",
-        "profile_language_help": "Choose the language you want to use throughout the app.",
-        "profile_language_saved": "Language preference saved!",
-        "profile_2fa_title": "#### Two‑Factor Authentication",
-        "profile_2fa_enabled": "2FA is ENABLED",
-        "profile_2fa_disable": "Disable 2FA",
-        "profile_2fa_disabled_msg": "2FA disabled",
-        "profile_2fa_disabled_info": "2FA is disabled. You can enable it.",
-        "profile_2fa_enable": "Enable 2FA",
-        "profile_notifications": "#### Notifications",
-        "profile_mark_read": "Mark Read",
-        "profile_no_notifications": "No notifications",
-        "profile_back_dashboard": "← Back to Dashboard",
-        # Quick Job
-        "quick_title": "### ⚡ Quick Job Entry",
-        "quick_date": "Date",
-        "quick_description": "Description",
-        "quick_hours": "Hours",
-        "quick_amount": "Amount Invoiced",
-        "quick_expenses": "Expenses",
-        "quick_estimated_profit": "Estimated Profit",
-        "quick_save": "Save",
-        "quick_saved": "Quick job saved!",
-        # Schedule
-        "schedule_title": "### 📅 Job Schedule",
-        "schedule_date": "Date",
-        "schedule_status": "Status",
-        "schedule_no_jobs": "No jobs",
-        "schedule_worker_unassigned": "Unassigned",
-        "schedule_worker_label": "Worker",
-        "schedule_edit": "✏️ Edit",
-        "schedule_delete": "🗑️ Delete",
-        "schedule_request_delete": "📨 Request Delete",
-        "schedule_delete_reason": "Reason for deletion request:",
-        "schedule_submit_request": "Submit Request",
-        "schedule_deletion_sent": "Deletion request sent to admin",
-        "schedule_job_deleted": "Job deleted",
-        "schedule_add_job": "➕ Add Job",
-        "schedule_client": "Client",
-        "schedule_select": "Select...",
-        "schedule_time": "Time",
-        "schedule_schedule_btn": "Schedule",
-        "schedule_scheduled": "Scheduled",
-        # Pre-Inspection
-        "insp_back_dashboard": "← Back to Dashboard",
-        "insp_login_required": "Please log in to use the pre-inspection checklist.",
-        "insp_title": "### 🔍 Pre-Inspection Checklist",
-        "insp_caption": "Quick estimate generator - fill in what you see to get a ballpark price (Medium to High range, excludes travel/tolls)",
-        "insp_tab_basics": "🏢 Property Basics",
-        "insp_tab_areas": "🧹 Areas to Clean",
-        "insp_tab_windows": "🪟 Windows & Glass",
-        "insp_tab_restrooms": "🚽 Restrooms",
-        "insp_tab_floors": "🧼 Floors",
-        "insp_tab_equipment": "🖥️ Equipment & Furniture",
-        "insp_tab_special": "🔧 Special Conditions",
-        "insp_property_info": "#### Property Information",
-        "insp_property_type": "Property Type",
-        "insp_please_specify": "Please specify",
-        "insp_sqft": "Estimated Square Feet",
-        "insp_num_floors": "Number of Floors",
-        "insp_has_elevator": "Building has elevator",
-        "insp_multi_building": "Multiple buildings on site",
-        "insp_num_buildings": "Number of buildings",
-        "insp_job_timing": "#### Job Timing",
-        "insp_frequency": "Cleaning Frequency",
-        "insp_access_time": "Access Time",
-        "insp_select_areas": "#### Select Areas That Need Cleaning",
-        "insp_check_all": "Check all that apply",
-        "insp_reception": "Reception/Waiting Area",
-        "insp_private_offices": "Private Offices",
-        "insp_workstations": "Open Workstations",
-        "insp_conference_rooms": "Conference Rooms",
-        "insp_breakroom": "Breakroom/Kitchen",
-        "insp_hallways": "Hallways/Corridors",
-        "insp_stairwells": "Stairwells",
-        "insp_storage_rooms": "Storage/Supply Rooms",
-        "insp_janitor_closet": "Janitor Closet (if provided)",
-        "insp_loading_dock": "Loading Dock/Warehouse Area",
-        "insp_exterior_entry": "Exterior Entry/Lobby",
-        "insp_sidewalk": "Sidewalk/Patio (sweep only)",
-        "insp_parking_garage": "Parking Garage (sweep)",
-        "insp_trash": "Trash/Recycling Collection",
-        "insp_window_title": "#### Window & Glass Cleaning",
-        "insp_interior_windows": "Interior Windows",
-        "insp_exterior_windows": "Exterior Windows (ground floor)",
-        "insp_high_windows": "High/Atrium Windows (need ladder)",
-        "insp_glass_doors": "Glass Doors",
-        "insp_glass_partitions": "Glass Partitions/Walls (linear ft)",
-        "insp_mirrors": "Large Mirrors",
-        "insp_window_tracks": "Window Tracks need cleaning",
-        "insp_window_screens": "Window Screens need cleaning",
-        "insp_restroom_title": "#### Restroom Details",
-        "insp_toilets": "Toilets",
-        "insp_urinals": "Urinals",
-        "insp_sinks": "Sinks",
-        "insp_rest_mirrors": "Mirrors (restroom)",
-        "insp_showers": "Showers (locker rooms)",
-        "insp_restroom_count": "Number of Restrooms",
-        "insp_deep_clean": "Deep clean required (grout, hard water stains, etc.)",
-        "insp_restock": "Restock supplies (soap, paper towels, TP)",
-        "insp_floor_title": "#### Floor Types & Conditions",
-        "insp_carpet": "Carpet (sq ft)",
-        "insp_tile": "Tile (sq ft)",
-        "insp_vinyl": "Vinyl/LVP (sq ft)",
-        "insp_hardwood": "Hardwood (sq ft)",
-        "insp_concrete": "Concrete/Polished (sq ft)",
-        "insp_floor_condition": "Floor Condition",
-        "insp_additional_floor": "#### Additional Floor Services",
-        "insp_carpet_extract": "Carpet Extraction/Deep Clean",
-        "insp_strip_wax": "Strip & Wax (tile/vinyl)",
-        "insp_floor_buff": "Daily Buff/Polish",
-        "insp_extract_sqft": "Extraction square feet",
-        "insp_area_rugs": "#### Area Rugs",
-        "insp_rug_small": "Small (3x5 or less)",
-        "insp_rug_medium": "Medium (5x8)",
-        "insp_rug_large": "Large (8x10+)",
-        "insp_equipment_title": "#### Equipment & Furniture Cleaning",
-        "insp_desks": "Desks",
-        "insp_computers": "Computers/Monitors",
-        "insp_phones": "Phones",
-        "insp_chairs": "Chairs (dust/wipe)",
-        "insp_tables": "Tables",
-        "insp_whiteboards": "Whiteboards",
-        "insp_appliances": "Appliances (fridge, microwave, etc.)",
-        "insp_equipment": "Special Equipment (machines, etc.)",
-        "insp_furniture_moving": "#### Furniture Moving",
-        "insp_move_light": "Light furniture to move (chairs, small tables)",
-        "insp_move_heavy": "Heavy items to move (machines, large desks)",
-        "insp_clean_under": "Clean under moved items",
-        "insp_special_title": "#### Special Conditions (Adds to price)",
-        "insp_high_dusting": "High dusting (ceilings, fans, vents)",
-        "insp_high_dust_sqft": "Square feet for high dusting",
-        "insp_blinds": "Blinds to clean",
-        "insp_disinfection": "Disinfection (high-touch surfaces)",
-        "insp_odor": "Odor control treatment",
-        "insp_post_construction": "Post-construction cleaning",
-        "insp_emergency": "Emergency/Rush (less than 48hr notice)",
-        "insp_holiday": "Holiday/After-hours",
-        "insp_supplies_provided": "Client provides cleaning supplies",
-        "insp_complexity": "Overall Complexity (1-10)",
-        "insp_generate_btn": "💰 Generate Ballpark Estimate",
-        "insp_results_title": "### 📋 Inspection Estimate Results",
-        "insp_results_caption": "*Excludes travel mileage, tolls, and parking fees*",
-        "insp_ballpark": "💰 BALLPARK ESTIMATE",
-        "insp_medium_high": "Medium to High Range",
-        "insp_excludes": "Excludes travel & tolls",
-        "insp_breakdown": "📊 Estimate Breakdown",
-        "insp_confidence_high": "🎯 Confidence Level: {confidence}% - This estimate is well-calibrated",
-        "insp_confidence_med": "⚠️ Confidence Level: {confidence}% - Consider more details",
-        "insp_confidence_low": "❌ Confidence Level: {confidence}% - More information needed for accuracy",
-        "insp_save_btn": "💾 Save This Inspection",
-        "insp_company_error": "Could not determine your company. Please log in again.",
-        "insp_saved": "Inspection saved! You can reference it later.",
-        # My Performance
-        "perf_title": "### 🏅 My Performance",
-        "perf_jobs_completed": "Jobs Completed",
-        "perf_total_profit": "Total Profit",
-        "perf_total_hours": "Total Hours",
-        "perf_years_service": "Years of Service",
-        "perf_anniversary": "🎉 Congratulations on your {years}‑year anniversary!",
-        "perf_badges": "Earned Badges",
-        "perf_monthly_profit_chart": "Your Monthly Profit",
-        # Certifications
-        "cert_title": "### 📜 Certifications",
-        "cert_none_yet": "No certifications yet.",
-        "cert_add_new": "➕ Add New Certification",
-        "cert_name": "Certification Name",
-        "cert_issuer": "Issuing Body",
-        "cert_date_earned": "Date Earned",
-        "cert_expiration": "Expiration Date (optional)",
-        "cert_upload": "Upload Certificate (PDF/Image)",
-        "cert_notes": "Notes",
-        "cert_submit": "Submit",
-        "cert_added": "Certification added",
-        "cert_none_from_team": "No certifications from your team.",
-        "cert_verify_id": "Certification ID to verify",
-        "cert_verify_btn": "Verify Certification",
-        "cert_verified": "Verified",
-        # Support
-        "support_title": "### 🎫 Support Tickets",
-        "support_type": "Type",
-        "support_description": "Description",
-        "support_steps": "Steps to Reproduce (if bug)",
-        "support_submit": "Submit",
-        "support_submitted": "Ticket {ticket_id} submitted",
-        "support_bug": "Bug",
-        "support_feature": "Feature request",
-        "support_data_issue": "Data issue",
-        "support_other": "Other",
-        # Team Chat
-        "chat_title": "### 💬 Team Chat",
-        "chat_message": "Message",
-        "chat_send": "Send",
-        # Pre-Inspection select option labels (display only -- underlying
-        # values stay in English since calculate_inspection_estimate()
-        # matches on these exact English strings)
-        "insp_prop_Office": "Office",
-        "insp_prop_Retail": "Retail",
-        "insp_prop_Warehouse": "Warehouse",
-        "insp_prop_Medical/Dental": "Medical/Dental",
-        "insp_prop_Restaurant": "Restaurant",
-        "insp_prop_School/Daycare": "School/Daycare",
-        "insp_prop_Hotel": "Hotel",
-        "insp_prop_Gym/Fitness": "Gym/Fitness",
-        "insp_prop_Church": "Church",
-        "insp_prop_Other": "Other",
-        "insp_freq_One-time": "One-time",
-        "insp_freq_Daily": "Daily",
-        "insp_freq_Weekly": "Weekly",
-        "insp_freq_Bi-weekly": "Bi-weekly",
-        "insp_freq_Monthly": "Monthly",
-        "insp_access_Normal business hours": "Normal business hours",
-        "insp_access_After hours (6PM-6AM)": "After hours (6PM-6AM)",
-        "insp_access_Weekend only": "Weekend only",
-        "insp_access_Very restricted window": "Very restricted window",
-        "insp_floorcond_Excellent": "Excellent",
-        "insp_floorcond_Good": "Good",
-        "insp_floorcond_Fair": "Fair",
-        "insp_floorcond_Poor": "Poor",
-        "insp_floorcond_Very Poor": "Very Poor",
-        "insp_holiday_No": "No",
-        "insp_holiday_Yes - Holiday": "Yes - Holiday",
-        "insp_holiday_Yes - Weekend": "Yes - Weekend",
-    },
-    "es": {
-        # Login
-        "login_title": "🧹 Inicio de Sesión de ProfitClean",
-        "login_email": "Correo Electrónico",
-        "login_password": "Contraseña",
-        "login_remember_me": "Recordarme (7 días)",
-        "login_button": "🔑 Iniciar Sesión",
-        "login_missing_fields": "Por favor ingrese su correo y contraseña",
-        "login_authenticating": "Autenticando...",
-        "login_success": "✅ ¡Inicio de sesión exitoso!",
-        "login_new_here": "### ¿Nuevo aquí?",
-        "login_create_account": "Crear Cuenta",
-        "login_forgot_password": "¿Olvidó su Contraseña?",
-        "login_need_help": "¿Necesita ayuda? Contacte support@profitclean.com",
-        "login_client_portal": "👤 Portal de Clientes",
-        "login_language_label": "🌐 Language / Idioma",
-        # Dashboard / sidebar menu
-        "menu_title": "### 📋 Menú",
-        "menu_dashboard": "🏠 Tablero",
-        "menu_new_estimate": "📝 Nuevo Presupuesto",
-        "menu_proposal": "📄 Propuesta para Cliente",
-        "menu_quick_job": "⚡ Trabajo Rápido",
-        "menu_clients": "👥 Clientes",
-        "menu_workers": "👷 Trabajadores",
-        "menu_schedule": "📅 Horario",
-        "menu_pre_inspection": "🔍 Pre-Inspección",
-        "menu_profit": "💰 Ganancias",
-        "menu_history": "📋 Historial",
-        "menu_team_chat": "💬 Chat del Equipo",
-        "menu_supplies": "📦 Suministros",
-        "menu_ai_tasks": "🤖 Tareas IA",
-        "menu_qr_tracking": "📱 Seguimiento QR",
-        "menu_gps_tracking": "📍 Seguimiento GPS",
-        "menu_my_performance": "🏅 Mi Desempeño",
-        "menu_certifications": "📜 Certificaciones",
-        "menu_job_templates": "📋 Plantillas de Trabajo",
-        "menu_backup": "💾 Respaldo",
-        "menu_support": "🎫 Soporte",
-        "menu_integrations": "🔌 Integraciones",
-        "menu_settings": "⚙️ Configuración",
-        "menu_edit_profile": "✏️ Editar Perfil",
-        "menu_terms": "📜 Términos de Servicio",
-        "menu_need_help": "💬 ¿Necesita Ayuda?",
-        "menu_report_issue": "📝 Reportar Problema",
-        "menu_logout": "🚪 Cerrar Sesión",
-        "dashboard_welcome": "Bienvenido, {username} ({role}) | ID de Empresa: {company_id} | Creado por Dust Bros & Co.",
-        "dashboard_new_notifications": "📬 Tiene {count} notificaciones nuevas. Revise su perfil para verlas.",
-        "dashboard_role_override": "Actualmente está viendo datos de la empresa con ID: {company_id} (anulación activa).",
-        "dashboard_metric_clients": "Clientes",
-        "dashboard_metric_pending": "Presupuestos Pendientes",
-        "dashboard_metric_workers": "Trabajadores a su Cargo",
-        "dashboard_metric_upcoming": "Trabajos Próximos",
-        "dashboard_upcoming_jobs": "### 📅 Trabajos Próximos",
-        "dashboard_no_upcoming": "No hay trabajos programados próximamente",
-        "dashboard_use_sidebar": "Use el menú lateral para navegar.",
-        "back": "← Volver",
-        # Edit Profile
-        "profile_title": "### ✏️ Editar su Perfil",
-        "profile_user_not_found": "Usuario no encontrado",
-        "profile_unread": "📬 Tiene {count} notificaciones sin leer",
-        "profile_username": "Nombre de Usuario",
-        "profile_email": "Correo Electrónico",
-        "profile_role": "Rol",
-        "profile_company_id": "ID de Empresa",
-        "profile_hire_date": "Fecha de Contratación",
-        "profile_invite_code": "Su Código de Invitación",
-        "profile_not_set": "No establecido",
-        "profile_change_password": "#### Cambiar Contraseña",
-        "profile_current_password": "Contraseña Actual",
-        "profile_new_password": "Nueva Contraseña",
-        "profile_confirm_password": "Confirmar Nueva Contraseña",
-        "profile_save_changes": "Guardar Cambios del Perfil",
-        "profile_current_password_wrong": "La contraseña actual es incorrecta",
-        "profile_passwords_no_match": "Las nuevas contraseñas no coinciden",
-        "profile_saved": "Perfil actualizado",
-        "profile_language": "#### Idioma / Language",
-        "profile_language_help": "Elija el idioma que desea usar en toda la aplicación.",
-        "profile_language_saved": "¡Preferencia de idioma guardada!",
-        "profile_2fa_title": "#### Autenticación de Dos Factores",
-        "profile_2fa_enabled": "La autenticación de dos factores está ACTIVADA",
-        "profile_2fa_disable": "Desactivar Autenticación de Dos Factores",
-        "profile_2fa_disabled_msg": "Autenticación de dos factores desactivada",
-        "profile_2fa_disabled_info": "La autenticación de dos factores está desactivada. Puede activarla.",
-        "profile_2fa_enable": "Activar Autenticación de Dos Factores",
-        "profile_notifications": "#### Notificaciones",
-        "profile_mark_read": "Marcar como Leído",
-        "profile_no_notifications": "No hay notificaciones",
-        "profile_back_dashboard": "← Volver al Tablero",
-        # Quick Job
-        "quick_title": "### ⚡ Registro Rápido de Trabajo",
-        "quick_date": "Fecha",
-        "quick_description": "Descripción",
-        "quick_hours": "Horas",
-        "quick_amount": "Monto Facturado",
-        "quick_expenses": "Gastos",
-        "quick_estimated_profit": "Ganancia Estimada",
-        "quick_save": "Guardar",
-        "quick_saved": "¡Trabajo rápido guardado!",
-        # Schedule
-        "schedule_title": "### 📅 Horario de Trabajos",
-        "schedule_date": "Fecha",
-        "schedule_status": "Estado",
-        "schedule_no_jobs": "No hay trabajos",
-        "schedule_worker_unassigned": "Sin asignar",
-        "schedule_worker_label": "Trabajador",
-        "schedule_edit": "✏️ Editar",
-        "schedule_delete": "🗑️ Eliminar",
-        "schedule_request_delete": "📨 Solicitar Eliminación",
-        "schedule_delete_reason": "Razón para la solicitud de eliminación:",
-        "schedule_submit_request": "Enviar Solicitud",
-        "schedule_deletion_sent": "Solicitud de eliminación enviada al administrador",
-        "schedule_job_deleted": "Trabajo eliminado",
-        "schedule_add_job": "➕ Agregar Trabajo",
-        "schedule_client": "Cliente",
-        "schedule_select": "Seleccionar...",
-        "schedule_time": "Hora",
-        "schedule_schedule_btn": "Programar",
-        "schedule_scheduled": "Programado",
-        # Pre-Inspection
-        "insp_back_dashboard": "← Volver al Tablero",
-        "insp_login_required": "Por favor inicie sesión para usar la lista de pre-inspección.",
-        "insp_title": "### 🔍 Lista de Pre-Inspección",
-        "insp_caption": "Generador de presupuesto rápido - complete lo que observe para obtener un precio aproximado (rango medio a alto, excluye viajes/peajes)",
-        "insp_tab_basics": "🏢 Datos de la Propiedad",
-        "insp_tab_areas": "🧹 Áreas a Limpiar",
-        "insp_tab_windows": "🪟 Ventanas y Vidrios",
-        "insp_tab_restrooms": "🚽 Baños",
-        "insp_tab_floors": "🧼 Pisos",
-        "insp_tab_equipment": "🖥️ Equipo y Muebles",
-        "insp_tab_special": "🔧 Condiciones Especiales",
-        "insp_property_info": "#### Información de la Propiedad",
-        "insp_property_type": "Tipo de Propiedad",
-        "insp_please_specify": "Por favor especifique",
-        "insp_sqft": "Pies Cuadrados Estimados",
-        "insp_num_floors": "Número de Pisos",
-        "insp_has_elevator": "El edificio tiene elevador",
-        "insp_multi_building": "Múltiples edificios en el sitio",
-        "insp_num_buildings": "Número de edificios",
-        "insp_job_timing": "#### Horario del Trabajo",
-        "insp_frequency": "Frecuencia de Limpieza",
-        "insp_access_time": "Horario de Acceso",
-        "insp_select_areas": "#### Seleccione las Áreas que Necesitan Limpieza",
-        "insp_check_all": "Marque todas las que apliquen",
-        "insp_reception": "Recepción/Sala de Espera",
-        "insp_private_offices": "Oficinas Privadas",
-        "insp_workstations": "Estaciones de Trabajo Abiertas",
-        "insp_conference_rooms": "Salas de Conferencia",
-        "insp_breakroom": "Cocina/Sala de Descanso",
-        "insp_hallways": "Pasillos/Corredores",
-        "insp_stairwells": "Escaleras",
-        "insp_storage_rooms": "Cuartos de Almacenamiento/Suministros",
-        "insp_janitor_closet": "Closet de Limpieza (si se proporciona)",
-        "insp_loading_dock": "Muelle de Carga/Área de Almacén",
-        "insp_exterior_entry": "Entrada Exterior/Vestíbulo",
-        "insp_sidewalk": "Acera/Patio (solo barrer)",
-        "insp_parking_garage": "Estacionamiento (barrer)",
-        "insp_trash": "Recolección de Basura/Reciclaje",
-        "insp_window_title": "#### Limpieza de Ventanas y Vidrios",
-        "insp_interior_windows": "Ventanas Interiores",
-        "insp_exterior_windows": "Ventanas Exteriores (primer piso)",
-        "insp_high_windows": "Ventanas Altas/Atrio (requieren escalera)",
-        "insp_glass_doors": "Puertas de Vidrio",
-        "insp_glass_partitions": "Particiones/Paredes de Vidrio (pies lineales)",
-        "insp_mirrors": "Espejos Grandes",
-        "insp_window_tracks": "Las rieles de las ventanas necesitan limpieza",
-        "insp_window_screens": "Las mallas de las ventanas necesitan limpieza",
-        "insp_restroom_title": "#### Detalles del Baño",
-        "insp_toilets": "Inodoros",
-        "insp_urinals": "Urinarios",
-        "insp_sinks": "Lavamanos",
-        "insp_rest_mirrors": "Espejos (baño)",
-        "insp_showers": "Duchas (vestidores)",
-        "insp_restroom_count": "Número de Baños",
-        "insp_deep_clean": "Se requiere limpieza profunda (lechada, manchas de agua dura, etc.)",
-        "insp_restock": "Reabastecer suministros (jabón, toallas de papel, papel higiénico)",
-        "insp_floor_title": "#### Tipos y Condiciones de Piso",
-        "insp_carpet": "Alfombra (pies cuadrados)",
-        "insp_tile": "Baldosa (pies cuadrados)",
-        "insp_vinyl": "Vinilo/LVP (pies cuadrados)",
-        "insp_hardwood": "Madera (pies cuadrados)",
-        "insp_concrete": "Concreto/Pulido (pies cuadrados)",
-        "insp_floor_condition": "Condición del Piso",
-        "insp_additional_floor": "#### Servicios Adicionales de Piso",
-        "insp_carpet_extract": "Extracción/Limpieza Profunda de Alfombra",
-        "insp_strip_wax": "Decapado y Encerado (baldosa/vinilo)",
-        "insp_floor_buff": "Pulido Diario",
-        "insp_extract_sqft": "Pies cuadrados de extracción",
-        "insp_area_rugs": "#### Alfombras de Área",
-        "insp_rug_small": "Pequeña (3x5 o menos)",
-        "insp_rug_medium": "Mediana (5x8)",
-        "insp_rug_large": "Grande (8x10+)",
-        "insp_equipment_title": "#### Limpieza de Equipo y Muebles",
-        "insp_desks": "Escritorios",
-        "insp_computers": "Computadoras/Monitores",
-        "insp_phones": "Teléfonos",
-        "insp_chairs": "Sillas (sacudir/limpiar)",
-        "insp_tables": "Mesas",
-        "insp_whiteboards": "Pizarras Blancas",
-        "insp_appliances": "Electrodomésticos (refrigerador, microondas, etc.)",
-        "insp_equipment": "Equipo Especial (máquinas, etc.)",
-        "insp_furniture_moving": "#### Movimiento de Muebles",
-        "insp_move_light": "Muebles ligeros para mover (sillas, mesas pequeñas)",
-        "insp_move_heavy": "Artículos pesados para mover (máquinas, escritorios grandes)",
-        "insp_clean_under": "Limpiar debajo de los artículos movidos",
-        "insp_special_title": "#### Condiciones Especiales (Aumentan el precio)",
-        "insp_high_dusting": "Desempolvado alto (techos, ventiladores, rejillas)",
-        "insp_high_dust_sqft": "Pies cuadrados para desempolvado alto",
-        "insp_blinds": "Persianas para limpiar",
-        "insp_disinfection": "Desinfección (superficies de alto contacto)",
-        "insp_odor": "Tratamiento de control de olores",
-        "insp_post_construction": "Limpieza post-construcción",
-        "insp_emergency": "Emergencia/Urgente (menos de 48 horas de aviso)",
-        "insp_holiday": "Días Festivos/Fuera de Horario",
-        "insp_supplies_provided": "El cliente provee los suministros de limpieza",
-        "insp_complexity": "Complejidad General (1-10)",
-        "insp_generate_btn": "💰 Generar Presupuesto Aproximado",
-        "insp_results_title": "### 📋 Resultados del Presupuesto de Inspección",
-        "insp_results_caption": "*Excluye millaje de viaje, peajes y tarifas de estacionamiento*",
-        "insp_ballpark": "💰 PRESUPUESTO APROXIMADO",
-        "insp_medium_high": "Rango Medio a Alto",
-        "insp_excludes": "Excluye viajes y peajes",
-        "insp_breakdown": "📊 Desglose del Presupuesto",
-        "insp_confidence_high": "🎯 Nivel de Confianza: {confidence}% - Este presupuesto está bien calibrado",
-        "insp_confidence_med": "⚠️ Nivel de Confianza: {confidence}% - Considere agregar más detalles",
-        "insp_confidence_low": "❌ Nivel de Confianza: {confidence}% - Se necesita más información para mayor precisión",
-        "insp_save_btn": "💾 Guardar esta Inspección",
-        "insp_company_error": "No se pudo determinar su empresa. Por favor inicie sesión de nuevo.",
-        "insp_saved": "¡Inspección guardada! Puede consultarla más tarde.",
-        # My Performance
-        "perf_title": "### 🏅 Mi Desempeño",
-        "perf_jobs_completed": "Trabajos Completados",
-        "perf_total_profit": "Ganancia Total",
-        "perf_total_hours": "Horas Totales",
-        "perf_years_service": "Años de Servicio",
-        "perf_anniversary": "🎉 ¡Felicidades por su aniversario de {years} año(s)!",
-        "perf_badges": "Insignias Obtenidas",
-        "perf_monthly_profit_chart": "Su Ganancia Mensual",
-        # Certifications
-        "cert_title": "### 📜 Certificaciones",
-        "cert_none_yet": "Aún no hay certificaciones.",
-        "cert_add_new": "➕ Agregar Nueva Certificación",
-        "cert_name": "Nombre de la Certificación",
-        "cert_issuer": "Entidad Emisora",
-        "cert_date_earned": "Fecha de Obtención",
-        "cert_expiration": "Fecha de Vencimiento (opcional)",
-        "cert_upload": "Subir Certificado (PDF/Imagen)",
-        "cert_notes": "Notas",
-        "cert_submit": "Enviar",
-        "cert_added": "Certificación agregada",
-        "cert_none_from_team": "No hay certificaciones de su equipo.",
-        "cert_verify_id": "ID de Certificación para verificar",
-        "cert_verify_btn": "Verificar Certificación",
-        "cert_verified": "Verificada",
-        # Support
-        "support_title": "### 🎫 Tickets de Soporte",
-        "support_type": "Tipo",
-        "support_description": "Descripción",
-        "support_steps": "Pasos para Reproducir (si es un error)",
-        "support_submit": "Enviar",
-        "support_submitted": "Ticket {ticket_id} enviado",
-        "support_bug": "Error",
-        "support_feature": "Solicitud de función",
-        "support_data_issue": "Problema de datos",
-        "support_other": "Otro",
-        # Team Chat
-        "chat_title": "### 💬 Chat del Equipo",
-        "chat_message": "Mensaje",
-        "chat_send": "Enviar",
-        # Pre-Inspection select option labels (display only)
-        "insp_prop_Office": "Oficina",
-        "insp_prop_Retail": "Comercio Minorista",
-        "insp_prop_Warehouse": "Almacén",
-        "insp_prop_Medical/Dental": "Médico/Dental",
-        "insp_prop_Restaurant": "Restaurante",
-        "insp_prop_School/Daycare": "Escuela/Guardería",
-        "insp_prop_Hotel": "Hotel",
-        "insp_prop_Gym/Fitness": "Gimnasio/Fitness",
-        "insp_prop_Church": "Iglesia",
-        "insp_prop_Other": "Otro",
-        "insp_freq_One-time": "Una vez",
-        "insp_freq_Daily": "Diario",
-        "insp_freq_Weekly": "Semanal",
-        "insp_freq_Bi-weekly": "Quincenal",
-        "insp_freq_Monthly": "Mensual",
-        "insp_access_Normal business hours": "Horario comercial normal",
-        "insp_access_After hours (6PM-6AM)": "Fuera de horario (6PM-6AM)",
-        "insp_access_Weekend only": "Solo fines de semana",
-        "insp_access_Very restricted window": "Ventana muy restringida",
-        "insp_floorcond_Excellent": "Excelente",
-        "insp_floorcond_Good": "Bueno",
-        "insp_floorcond_Fair": "Regular",
-        "insp_floorcond_Poor": "Malo",
-        "insp_floorcond_Very Poor": "Muy Malo",
-        "insp_holiday_No": "No",
-        "insp_holiday_Yes - Holiday": "Sí - Día Festivo",
-        "insp_holiday_Yes - Weekend": "Sí - Fin de Semana",
-    },
-}
-
-
-def get_user_language():
-    """Determine which language to render UI strings in."""
-    if st.session_state.get('client_logged_in'):
-        return st.session_state.get('lang', 'en')
-    user = st.session_state.get('user')
-    if user and user.get('language'):
-        return user['language']
-    return st.session_state.get('lang', 'en')
-
-
-def t(key, **kwargs):
-    """Translate a UI string key into the current user's language."""
-    lang = get_user_language()
-    text = TRANSLATIONS.get(lang, TRANSLATIONS['en']).get(key) or TRANSLATIONS['en'].get(key, key)
-    if kwargs:
-        try:
-            return text.format(**kwargs)
-        except Exception:
-            return text
-    return text
-
-
-def language_selector(key_suffix=""):
-    """Render a language picker. Returns the selected language code ('en' or 'es')."""
-    options = {"English": "en", "Español": "es"}
-    current_code = get_user_language()
-    current_label = "Español" if current_code == "es" else "English"
-    choice = st.selectbox(t("login_language_label"), list(options.keys()),
-                           index=list(options.keys()).index(current_label),
-                           key=f"lang_select_{key_suffix}")
-    return options[choice]
-
-# ============================================================
-# ENUMS AND DATA CLASSES
-# ============================================================
-
-class UserRole(str, Enum):
-    SUPER_ADMIN = "super_admin"
-    SUPPORT_STAFF = "support_staff"
-    ADMIN = "admin"
-    MANAGER = "manager"
-    SUPERVISOR = "supervisor"
-    WORKER = "worker"
-
-class TicketStatus(str, Enum):
-    OPEN = "open"
-    IN_PROGRESS = "in_progress"
-    RESOLVED = "resolved"
-    CLOSED = "closed"
-
-class TicketPriority(str, Enum):
-    LOW = "low"
-    NORMAL = "normal"
-    HIGH = "high"
-    URGENT = "urgent"
-
-class EstimateStatus(str, Enum):
-    DRAFT = "draft"
-    SENT = "sent"
-    APPROVED = "approved"
-    REJECTED = "rejected"
-    EXPIRED = "expired"
-
-class JobStatus(str, Enum):
-    SCHEDULED = "scheduled"
-    IN_PROGRESS = "in_progress"
-    COMPLETED = "completed"
-    CANCELLED = "cancelled"
-    RESCHEDULED = "rescheduled"
-
-@dataclass
-class EmailContext:
-    """Context data for email templates"""
-    business_name: str = ""
-    client_name: str = ""
-    client_email: str = ""
-    estimate_id: str = ""
-    amount: float = 0.0
-    property_type: str = ""
-    city: str = ""
-    date: str = ""
-    time: str = ""
-    approval_link: str = ""
-    review_link: str = ""
-    
-    def format_template(self, template: str) -> str:
-        """Safely format email template with available context"""
-        try:
-            result = template
-            for key, value in asdict(self).items():
-                placeholder = f"{{{key}}}"
-                if placeholder in result:
-                    result = result.replace(placeholder, str(value) if value else f"[{key}]")
-            return result
-        except Exception:
-            return template
 
 # ============================================================
 # PAGE CONFIGURATION
@@ -1032,978 +334,6 @@ button[kind="primary"]:active, .stFormSubmitButton button[kind="primary"]:active
 # DATABASE SETUP (ENHANCED)
 # ============================================================
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "profitclean.db")
-
-AVAILABLE_INTEGRATIONS = {
-    "calendly": {
-        "name": "Calendly",
-        "icon": "📅",
-        "description": "Auto-import booking details from Calendly",
-        "free": True,
-        "requires_oauth": True
-    },
-    "acuity": {
-        "name": "Acuity Scheduling",
-        "icon": "📆",
-        "description": "Sync appointments from Acuity",
-        "free": True,
-        "requires_oauth": True
-    },
-    "google_calendar": {
-        "name": "Google Calendar",
-        "icon": "📅",
-        "description": "Two-way calendar sync",
-        "free": True,
-        "requires_oauth": True
-    },
-    "stripe": {
-        "name": "Stripe",
-        "icon": "💳",
-        "description": "Process payments & invoices",
-        "free": False,
-        "requires_oauth": True
-    }
-}
-
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("PRAGMA foreign_keys = ON")
-
-    # Companies table
-    c.execute('''CREATE TABLE IF NOT EXISTS companies (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        subdomain TEXT UNIQUE,
-        owner_id INTEGER,
-        created_at DATETIME,
-        is_active BOOLEAN DEFAULT 1,
-        settings_json TEXT,
-        timezone TEXT DEFAULT 'America/New_York',
-        notification_email TEXT
-    )''')
-
-    # Users table (enhanced)
-    c.execute('''CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE NOT NULL,
-        email TEXT UNIQUE NOT NULL,
-        password_hash TEXT NOT NULL,
-        salt TEXT NOT NULL,
-        role TEXT DEFAULT 'worker',
-        company_id INTEGER,
-        manager_id INTEGER,
-        supervisor_id INTEGER,
-        can_manage_workers BOOLEAN DEFAULT 0,
-        is_active INTEGER DEFAULT 1,
-        login_attempts INTEGER DEFAULT 0,
-        locked_until DATETIME,
-        hire_date DATETIME,
-        last_raise_date DATETIME,
-        raise_recommended_by INTEGER,
-        raise_recommended_date DATETIME,
-        totp_secret TEXT,
-        totp_enabled INTEGER DEFAULT 0,
-        backup_codes TEXT,
-        created_at DATETIME,
-        last_login DATETIME,
-        created_ip TEXT,
-        approval_status TEXT DEFAULT 'approved',
-        approved_by INTEGER,
-        approval_date DATETIME,
-        invite_code TEXT,
-        phone TEXT,
-        address TEXT,
-        emergency_contact TEXT,
-        hourly_rate REAL,
-        language TEXT DEFAULT 'en',
-        FOREIGN KEY (company_id) REFERENCES companies(id),
-        FOREIGN KEY (manager_id) REFERENCES users(id),
-        FOREIGN KEY (supervisor_id) REFERENCES users(id),
-        FOREIGN KEY (approved_by) REFERENCES users(id)
-    )''')
-
-    # Notifications table
-    c.execute('''CREATE TABLE IF NOT EXISTS notifications (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        company_id INTEGER,
-        title TEXT,
-        message TEXT,
-        notification_type TEXT,
-        related_id INTEGER,
-        read_status INTEGER DEFAULT 0,
-        created_at DATETIME,
-        FOREIGN KEY (user_id) REFERENCES users(id),
-        FOREIGN KEY (company_id) REFERENCES companies(id)
-    )''')
-
-    # Estimate history/timeline
-    c.execute('''CREATE TABLE IF NOT EXISTS estimate_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        estimate_id INTEGER,
-        status_from TEXT,
-        status_to TEXT,
-        changed_by INTEGER,
-        notes TEXT,
-        changed_at DATETIME,
-        FOREIGN KEY (estimate_id) REFERENCES estimates(id),
-        FOREIGN KEY (changed_by) REFERENCES users(id)
-    )''')
-
-    # Client communication log
-    c.execute('''CREATE TABLE IF NOT EXISTS client_communications (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        client_id INTEGER,
-        estimate_id INTEGER,
-        communication_type TEXT,
-        subject TEXT,
-        message TEXT,
-        sent_by INTEGER,
-        sent_at DATETIME,
-        FOREIGN KEY (client_id) REFERENCES clients(id),
-        FOREIGN KEY (estimate_id) REFERENCES estimates(id),
-        FOREIGN KEY (sent_by) REFERENCES users(id)
-    )''')
-
-    # Job templates
-    c.execute('''CREATE TABLE IF NOT EXISTS job_templates (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        company_id INTEGER,
-        name TEXT,
-        description TEXT,
-        property_type TEXT,
-        estimated_hours REAL,
-        task_list TEXT,
-        created_at DATETIME,
-        FOREIGN KEY (company_id) REFERENCES companies(id)
-    )''')
-
-    # Worker availability
-    c.execute('''CREATE TABLE IF NOT EXISTS worker_availability (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        worker_id INTEGER,
-        available_date DATE,
-        time_slots TEXT,
-        is_available BOOLEAN DEFAULT 1,
-        FOREIGN KEY (worker_id) REFERENCES users(id)
-    )''')
-
-    # Performance reviews
-    c.execute('''CREATE TABLE IF NOT EXISTS performance_reviews (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        company_id INTEGER,
-        worker_id INTEGER,
-        reviewer_id INTEGER,
-        review_date DATETIME,
-        rating INTEGER,
-        feedback TEXT,
-        goals TEXT,
-        next_review_date DATE,
-        FOREIGN KEY (company_id) REFERENCES companies(id),
-        FOREIGN KEY (worker_id) REFERENCES users(id),
-        FOREIGN KEY (reviewer_id) REFERENCES users(id)
-    )''')
-
-    # Pending worker requests
-    c.execute('''CREATE TABLE IF NOT EXISTS pending_workers (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT,
-        email TEXT,
-        password_hash TEXT,
-        salt TEXT,
-        requested_manager_email TEXT,
-        company_id INTEGER,
-        requested_at DATETIME,
-        status TEXT DEFAULT 'pending',
-        FOREIGN KEY (company_id) REFERENCES companies(id)
-    )''')
-
-    # Sessions
-    c.execute('''CREATE TABLE IF NOT EXISTS sessions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        session_token TEXT UNIQUE NOT NULL,
-        expires_at DATETIME,
-        created_at DATETIME,
-        FOREIGN KEY (user_id) REFERENCES users(id)
-    )''')
-
-    # Audit log
-    c.execute('''CREATE TABLE IF NOT EXISTS audit_log (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        action TEXT,
-        details TEXT,
-        ip_address TEXT,
-        created_at DATETIME,
-        FOREIGN KEY (user_id) REFERENCES users(id)
-    )''')
-
-    # Global settings for market rates, tax, and pricing defaults
-    c.execute('''CREATE TABLE IF NOT EXISTS global_settings (
-        name TEXT PRIMARY KEY,
-        value TEXT,
-        updated_at DATETIME
-    )''')
-
-    # Business profile
-    c.execute('''CREATE TABLE IF NOT EXISTS business_profile (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        company_id INTEGER UNIQUE,
-        business_name TEXT,
-        phone TEXT,
-        email TEXT,
-        hourly_wage REAL,
-        profit_target REAL,
-        min_job_fee REAL,
-        home_city TEXT,
-        per_mile_rate REAL,
-        sales_tax_rate REAL DEFAULT 0.06,
-        monthly_rent REAL DEFAULT 0,
-        monthly_insurance REAL DEFAULT 0,
-        monthly_vehicles REAL DEFAULT 0,
-        monthly_marketing REAL DEFAULT 0,
-        monthly_software REAL DEFAULT 0,
-        monthly_admin_salary REAL DEFAULT 0,
-        desired_profit_margin REAL DEFAULT 0.20,
-        smtp_email TEXT,
-        smtp_password TEXT,
-        smtp_server TEXT,
-        smtp_port INTEGER DEFAULT 587,
-        setup_complete INTEGER DEFAULT 0,
-        logo_url TEXT,
-        business_hours TEXT,
-        cancellation_policy TEXT,
-        FOREIGN KEY (company_id) REFERENCES companies(id)
-    )''')
-
-    c.execute('''CREATE TABLE IF NOT EXISTS company_integrations (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        company_id INTEGER NOT NULL,
-        integration_type TEXT NOT NULL,
-        enabled INTEGER DEFAULT 0,
-        access_token TEXT,
-        refresh_token TEXT,
-        token_expires DATETIME,
-        settings TEXT,
-        last_sync DATETIME,
-        created_at DATETIME,
-        updated_at DATETIME,
-        FOREIGN KEY (company_id) REFERENCES companies(id),
-        UNIQUE(company_id, integration_type)
-    )''')
-
-    c.execute('''CREATE TABLE IF NOT EXISTS external_bookings (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        company_id INTEGER NOT NULL,
-        integration_type TEXT NOT NULL,
-        external_id TEXT,
-        hashed_email TEXT,
-        invitee_name TEXT,
-        start_time DATETIME,
-        end_time DATETIME,
-        service_type TEXT,
-        status TEXT,
-        raw_questions TEXT,
-        imported_at DATETIME,
-        processed INTEGER DEFAULT 0,
-        created_at DATETIME,
-        FOREIGN KEY (company_id) REFERENCES companies(id)
-    )''')
-
-    c.execute('''CREATE TABLE IF NOT EXISTS integration_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        company_id INTEGER,
-        integration_type TEXT,
-        action TEXT,
-        status TEXT,
-        message TEXT,
-        created_at DATETIME,
-        FOREIGN KEY (company_id) REFERENCES companies(id)
-    )''')
-
-    # Clients
-    c.execute('''CREATE TABLE IF NOT EXISTS clients (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        company_id INTEGER,
-        user_id INTEGER,
-        business_name TEXT,
-        contact_name TEXT,
-        phone TEXT,
-        email TEXT,
-        address TEXT,
-        city TEXT,
-        state TEXT,
-        zip TEXT,
-        lat REAL,
-        lon REAL,
-        notes TEXT,
-        created_at DATETIME,
-        updated_at DATETIME,
-        preferred_contact_method TEXT DEFAULT 'email',
-        lead_source TEXT,
-        password_hash TEXT,
-        salt TEXT,
-        portal_enabled INTEGER DEFAULT 0,
-        FOREIGN KEY (company_id) REFERENCES companies(id),
-        FOREIGN KEY (user_id) REFERENCES users(id)
-    )''')
-
-    # Client portal access tokens (for clients to set up/reset their portal password)
-    c.execute('''CREATE TABLE IF NOT EXISTS client_portal_tokens (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        client_id INTEGER NOT NULL,
-        token TEXT NOT NULL UNIQUE,
-        expires_at DATETIME NOT NULL,
-        used BOOLEAN DEFAULT 0,
-        created_at DATETIME,
-        FOREIGN KEY (client_id) REFERENCES clients(id)
-    )''')
-
-    # Estimates
-    c.execute('''CREATE TABLE IF NOT EXISTS estimates (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        company_id INTEGER,
-        user_id INTEGER,
-        client_id INTEGER,
-        client_name TEXT,
-        client_email TEXT,
-        city TEXT,
-        property_type TEXT,
-        square_feet REAL,
-        bedrooms INTEGER DEFAULT 0,
-        bathrooms INTEGER DEFAULT 0,
-        frequency TEXT,
-        complexity INTEGER,
-        travel_miles REAL,
-        toll_cost REAL,
-        add_on_window REAL DEFAULT 0,
-        add_on_carpet REAL DEFAULT 0,
-        add_on_floor REAL DEFAULT 0,
-        add_on_disinfection REAL DEFAULT 0,
-        add_on_pressure REAL DEFAULT 0,
-        add_on_trash REAL DEFAULT 0,
-        add_on_event REAL DEFAULT 0,
-        holiday_surcharge REAL DEFAULT 0,
-        emergency_premium REAL DEFAULT 0,
-        location_discount REAL DEFAULT 0,
-        contract_discount REAL DEFAULT 0,
-        subtotal REAL,
-        tax REAL,
-        estimated_price REAL,
-        lowest_price REAL,
-        fair_price REAL,
-        highest_price REAL,
-        sweet_spot_price REAL,
-        created_at DATETIME,
-        status TEXT DEFAULT 'draft',
-        approved_at DATETIME,
-        expires_at DATETIME,
-        notes TEXT,
-        follow_up_reminder DATETIME,
-        FOREIGN KEY (company_id) REFERENCES companies(id),
-        FOREIGN KEY (user_id) REFERENCES users(id),
-        FOREIGN KEY (client_id) REFERENCES clients(id)
-    )''')
-
-    # Estimate approvals
-    c.execute('''CREATE TABLE IF NOT EXISTS estimate_approvals (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        company_id INTEGER,
-        estimate_id INTEGER,
-        worker_id INTEGER,
-        requested_price REAL,
-        requested_at DATETIME,
-        status TEXT DEFAULT 'pending',
-        manager_id INTEGER,
-        approved_at DATETIME,
-        notes TEXT,
-        FOREIGN KEY (company_id) REFERENCES companies(id),
-        FOREIGN KEY (estimate_id) REFERENCES estimates(id),
-        FOREIGN KEY (worker_id) REFERENCES users(id),
-        FOREIGN KEY (manager_id) REFERENCES users(id)
-    )''')
-
-    # Scheduled jobs
-    c.execute('''CREATE TABLE IF NOT EXISTS scheduled_jobs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        company_id INTEGER,
-        user_id INTEGER,
-        client_id INTEGER,
-        client_name TEXT,
-        client_email TEXT,
-        estimate_id INTEGER,
-        assigned_worker_id INTEGER,
-        scheduled_date DATE,
-        scheduled_time TEXT,
-        status TEXT DEFAULT 'scheduled',
-        reminder_sent INTEGER DEFAULT 0,
-        completed_at DATETIME,
-        notes TEXT,
-        job_template_id INTEGER,
-        actual_hours REAL,
-        actual_cost REAL,
-        client_signature TEXT,
-        photos_before TEXT,
-        photos_after TEXT,
-        FOREIGN KEY (company_id) REFERENCES companies(id),
-        FOREIGN KEY (user_id) REFERENCES users(id),
-        FOREIGN KEY (client_id) REFERENCES clients(id),
-        FOREIGN KEY (assigned_worker_id) REFERENCES users(id),
-        FOREIGN KEY (job_template_id) REFERENCES job_templates(id)
-    )''')
-
-    # Job assignments
-    c.execute('''CREATE TABLE IF NOT EXISTS job_assignments (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        job_id INTEGER,
-        worker_id INTEGER,
-        assigned_by INTEGER,
-        assigned_at DATETIME,
-        status TEXT DEFAULT 'assigned',
-        travel_distance REAL,
-        completed_at DATETIME,
-        notes TEXT,
-        FOREIGN KEY (worker_id) REFERENCES users(id),
-        FOREIGN KEY (assigned_by) REFERENCES users(id)
-    )''')
-
-    # Inspections
-    c.execute('''CREATE TABLE IF NOT EXISTS inspections (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        company_id INTEGER,
-        user_id INTEGER,
-        client_id INTEGER,
-        client_name TEXT,
-        property_type TEXT,
-        scheduled_job_id INTEGER,
-        areas_json TEXT,
-        inspection_data TEXT,
-        status TEXT DEFAULT 'in_progress',
-        started_at DATETIME,
-        completed_at DATETIME,
-        photos TEXT,
-        recommendations TEXT,
-        FOREIGN KEY (company_id) REFERENCES companies(id),
-        FOREIGN KEY (user_id) REFERENCES users(id),
-        FOREIGN KEY (client_id) REFERENCES clients(id)
-    )''')
-
-    # Quick jobs
-    c.execute('''CREATE TABLE IF NOT EXISTS quick_jobs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        company_id INTEGER,
-        user_id INTEGER,
-        job_date DATE,
-        description TEXT,
-        hours REAL,
-        amount_invoiced REAL,
-        job_expenses REAL,
-        profit REAL,
-        created_at DATETIME,
-        FOREIGN KEY (company_id) REFERENCES companies(id),
-        FOREIGN KEY (user_id) REFERENCES users(id)
-    )''')
-
-    # Monthly expenses
-    c.execute('''CREATE TABLE IF NOT EXISTS monthly_expenses (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        company_id INTEGER,
-        user_id INTEGER,
-        month_year TEXT,
-        insurance REAL DEFAULT 0,
-        vehicle REAL DEFAULT 0,
-        software REAL DEFAULT 0,
-        advertising REAL DEFAULT 0,
-        other REAL DEFAULT 0,
-        notes TEXT,
-        FOREIGN KEY (company_id) REFERENCES companies(id),
-        FOREIGN KEY (user_id) REFERENCES users(id)
-    )''')
-
-    # Team chat
-    c.execute('''CREATE TABLE IF NOT EXISTS team_messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        company_id INTEGER,
-        user_id INTEGER,
-        username TEXT,
-        user_role TEXT,
-        message TEXT,
-        channel TEXT DEFAULT 'general',
-        is_private BOOLEAN DEFAULT 0,
-        recipient_id INTEGER,
-        read_status INTEGER DEFAULT 0,
-        created_at DATETIME,
-        attachments TEXT,
-        FOREIGN KEY (company_id) REFERENCES companies(id),
-        FOREIGN KEY (user_id) REFERENCES users(id)
-    )''')
-
-    # Supplies
-    c.execute('''CREATE TABLE IF NOT EXISTS supplies (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        company_id INTEGER,
-        user_id INTEGER,
-        name TEXT,
-        category TEXT,
-        unit TEXT,
-        current_stock REAL,
-        reorder_level REAL,
-        unit_cost REAL,
-        last_updated DATETIME,
-        supplier TEXT,
-        FOREIGN KEY (company_id) REFERENCES companies(id),
-        FOREIGN KEY (user_id) REFERENCES users(id)
-    )''')
-
-    # Supply usage
-    c.execute('''CREATE TABLE IF NOT EXISTS supply_usage (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        company_id INTEGER,
-        supply_id INTEGER,
-        job_id INTEGER,
-        quantity_used REAL,
-        used_by INTEGER,
-        used_at DATETIME,
-        FOREIGN KEY (company_id) REFERENCES companies(id),
-        FOREIGN KEY (supply_id) REFERENCES supplies(id),
-        FOREIGN KEY (used_by) REFERENCES users(id)
-    )''')
-
-    # Worker certifications
-    c.execute('''CREATE TABLE IF NOT EXISTS worker_certifications (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        company_id INTEGER,
-        worker_id INTEGER,
-        certification_name TEXT,
-        issuing_body TEXT,
-        date_earned DATE,
-        expiration_date DATE,
-        certificate_file_path TEXT,
-        notes TEXT,
-        verified_by INTEGER,
-        verified_at DATETIME,
-        created_at DATETIME,
-        FOREIGN KEY (company_id) REFERENCES companies(id),
-        FOREIGN KEY (worker_id) REFERENCES users(id),
-        FOREIGN KEY (verified_by) REFERENCES users(id)
-    )''')
-
-    # Worker badges
-    c.execute('''CREATE TABLE IF NOT EXISTS worker_badges (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        company_id INTEGER,
-        worker_id INTEGER,
-        badge_name TEXT,
-        badge_icon TEXT,
-        earned_at DATETIME,
-        FOREIGN KEY (company_id) REFERENCES companies(id),
-        FOREIGN KEY (worker_id) REFERENCES users(id)
-    )''')
-
-    # Support tickets
-    c.execute('''CREATE TABLE IF NOT EXISTS support_tickets (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        company_id INTEGER,
-        ticket_id TEXT UNIQUE,
-        user_id INTEGER,
-        user_email TEXT,
-        issue_type TEXT,
-        description TEXT,
-        steps_to_reproduce TEXT,
-        screenshot TEXT,
-        status TEXT DEFAULT 'open',
-        priority TEXT DEFAULT 'normal',
-        assigned_to INTEGER,
-        created_at DATETIME,
-        updated_at DATETIME,
-        resolved_at DATETIME,
-        resolution_notes TEXT,
-        FOREIGN KEY (company_id) REFERENCES companies(id),
-        FOREIGN KEY (user_id) REFERENCES users(id),
-        FOREIGN KEY (assigned_to) REFERENCES users(id)
-    )''')
-
-    # Support messages
-    c.execute('''CREATE TABLE IF NOT EXISTS support_messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        company_id INTEGER,
-        ticket_id INTEGER,
-        user_id INTEGER,
-        message TEXT,
-        is_staff BOOLEAN DEFAULT 0,
-        created_at DATETIME,
-        FOREIGN KEY (company_id) REFERENCES companies(id),
-        FOREIGN KEY (ticket_id) REFERENCES support_tickets(id),
-        FOREIGN KEY (user_id) REFERENCES users(id)
-    )''')
-
-    # Email templates
-    c.execute('''CREATE TABLE IF NOT EXISTS email_templates (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        company_id INTEGER,
-        name TEXT,
-        subject TEXT,
-        body TEXT,
-        is_active BOOLEAN DEFAULT 1,
-        created_at DATETIME,
-        UNIQUE(company_id, name),
-        FOREIGN KEY (company_id) REFERENCES companies(id)
-    )''')
-
-    # Error logs
-    c.execute('''CREATE TABLE IF NOT EXISTS error_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        company_id INTEGER,
-        user_id INTEGER,
-        error_type TEXT,
-        error_message TEXT,
-        page_url TEXT,
-        stack_trace TEXT,
-        created_at DATETIME,
-        FOREIGN KEY (company_id) REFERENCES companies(id),
-        FOREIGN KEY (user_id) REFERENCES users(id)
-    )''')
-
-    # Worker transfers
-    c.execute('''CREATE TABLE IF NOT EXISTS worker_transfers (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        worker_id INTEGER,
-        from_company_id INTEGER,
-        to_company_id INTEGER,
-        transferred_by INTEGER,
-        transferred_at DATETIME,
-        reason TEXT,
-        FOREIGN KEY (worker_id) REFERENCES users(id),
-        FOREIGN KEY (from_company_id) REFERENCES companies(id),
-        FOREIGN KEY (to_company_id) REFERENCES companies(id),
-        FOREIGN KEY (transferred_by) REFERENCES users(id)
-    )''')
-
-    # System health logs
-    c.execute('''CREATE TABLE IF NOT EXISTS system_health (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        metric_name TEXT,
-        metric_value TEXT,
-        recorded_at DATETIME
-    )''')
-
-    # Bulk actions history
-    c.execute('''CREATE TABLE IF NOT EXISTS bulk_actions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        action_type TEXT,
-        affected_company_ids TEXT,
-        affected_user_ids TEXT,
-        performed_by INTEGER,
-        performed_at DATETIME,
-        details TEXT,
-        FOREIGN KEY (performed_by) REFERENCES users(id)
-    )''')
-
-    # Approval requests for role-based permissions
-    c.execute('''CREATE TABLE IF NOT EXISTS approval_requests (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        company_id INTEGER NOT NULL,
-        requester_id INTEGER NOT NULL,
-        request_type TEXT NOT NULL,
-        target_type TEXT NOT NULL,
-        target_id INTEGER NOT NULL,
-        current_value TEXT,
-        requested_value TEXT,
-        reason TEXT,
-        status TEXT DEFAULT 'pending',
-        admin_notes TEXT,
-        created_at DATETIME,
-        reviewed_at DATETIME,
-        reviewed_by INTEGER,
-        FOREIGN KEY (company_id) REFERENCES companies(id),
-        FOREIGN KEY (requester_id) REFERENCES users(id),
-        FOREIGN KEY (reviewed_by) REFERENCES users(id)
-    )''')
-
-    # Activity log for worker actions
-    c.execute('''CREATE TABLE IF NOT EXISTS activity_log (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        company_id INTEGER NOT NULL,
-        user_id INTEGER NOT NULL,
-        action TEXT NOT NULL,
-        target_type TEXT,
-        target_id INTEGER,
-        details TEXT,
-        created_at DATETIME,
-        FOREIGN KEY (company_id) REFERENCES companies(id),
-        FOREIGN KEY (user_id) REFERENCES users(id)
-    )''')
-
-    # Authentication logs for security tracking
-    c.execute('''CREATE TABLE IF NOT EXISTS auth_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        email TEXT,
-        event_type TEXT NOT NULL,
-        status TEXT,
-        ip_address TEXT,
-        user_agent TEXT,
-        error_message TEXT,
-        created_at DATETIME,
-        FOREIGN KEY (user_id) REFERENCES users(id)
-    )''')
-
-    # Password reset tokens
-    c.execute('''CREATE TABLE IF NOT EXISTS password_reset_tokens (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        token TEXT NOT NULL UNIQUE,
-        verification_code TEXT,
-        expires_at DATETIME NOT NULL,
-        used BOOLEAN DEFAULT 0,
-        created_at DATETIME,
-        FOREIGN KEY (user_id) REFERENCES users(id)
-    )''')
-
-    # Estimate approval tokens
-    c.execute('''CREATE TABLE IF NOT EXISTS estimate_approval_tokens (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        estimate_id INTEGER NOT NULL,
-        company_id INTEGER NOT NULL,
-        token TEXT NOT NULL UNIQUE,
-        expires_at DATETIME NOT NULL,
-        used BOOLEAN DEFAULT 0,
-        created_at DATETIME,
-        FOREIGN KEY (estimate_id) REFERENCES estimates(id),
-        FOREIGN KEY (company_id) REFERENCES companies(id)
-    )''')
-
-    conn.commit()
-    conn.close()
-    ensure_default_global_settings()
-
-
-# ============================================================
-# DATABASE MIGRATION
-# ============================================================
-
-def migrate_database():
-    """Add missing columns to existing database"""
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    
-    # Check if invite_code column exists in users table
-    c.execute("PRAGMA table_info(users)")
-    columns = [col[1] for col in c.fetchall()]
-    
-    # Add invite_code column if it doesn't exist
-    if 'invite_code' not in columns:
-        try:
-            c.execute("ALTER TABLE users ADD COLUMN invite_code TEXT")
-            print("Added invite_code column to users table")
-        except sqlite3.OperationalError as e:
-            print(f"Could not add invite_code: {e}")
-    
-    # Generate invite codes for existing users
-    try:
-        c.execute("SELECT id FROM users WHERE invite_code IS NULL OR invite_code = ''")
-        users_without_code = c.fetchall()
-        for user in users_without_code:
-            invite_code = secrets.token_hex(4).upper()
-            c.execute("UPDATE users SET invite_code = ? WHERE id = ?", (invite_code, user[0]))
-        print(f"Generated invite codes for {len(users_without_code)} users")
-    except Exception as e:
-        print(f"Error generating invite codes: {e}")
-    
-    conn.commit()
-    conn.close()
-
-    # Email template uniqueness migration
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='email_templates'")
-    if c.fetchone():
-        c.execute("PRAGMA table_info(email_templates)")
-        existing_cols = [row[1] for row in c.fetchall()]
-        if 'is_active' not in existing_cols:
-            try:
-                c.execute("ALTER TABLE email_templates ADD COLUMN is_active BOOLEAN DEFAULT 1")
-                print('Added is_active column to email_templates')
-            except sqlite3.OperationalError as e:
-                print(f"Could not add is_active column: {e}")
-        if 'created_at' not in existing_cols:
-            try:
-                c.execute("ALTER TABLE email_templates ADD COLUMN created_at DATETIME")
-                print('Added created_at column to email_templates')
-            except sqlite3.OperationalError as e:
-                print(f"Could not add created_at column: {e}")
-
-        c.execute('''
-            DELETE FROM email_templates
-            WHERE id NOT IN (
-                SELECT MAX(id)
-                FROM email_templates
-                GROUP BY company_id, name
-            )
-        ''')
-        try:
-            c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_email_templates_company_name ON email_templates(company_id, name)")
-        except sqlite3.OperationalError as e:
-            print(f"Could not create unique index for email_templates: {e}")
-    conn.commit()
-    conn.close()
-    
-    # Worker badges migration
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='worker_badges'")
-    if c.fetchone():
-        c.execute("PRAGMA table_info(worker_badges)")
-        existing_cols = [row[1] for row in c.fetchall()]
-        if 'company_id' not in existing_cols:
-            try:
-                c.execute("ALTER TABLE worker_badges ADD COLUMN company_id INTEGER")
-                print('Added company_id column to worker_badges')
-                c.execute("""
-                    UPDATE worker_badges
-                    SET company_id = (SELECT company_id FROM users WHERE users.id = worker_badges.worker_id)
-                """)
-                print('Populated company_id for existing worker_badges')
-            except sqlite3.OperationalError as e:
-                print(f"Could not add company_id column to worker_badges: {e}")
-        if 'badge_icon' not in existing_cols:
-            try:
-                c.execute("ALTER TABLE worker_badges ADD COLUMN badge_icon TEXT")
-                print('Added badge_icon column to worker_badges')
-            except sqlite3.OperationalError as e:
-                print(f"Could not add badge_icon column to worker_badges: {e}")
-    conn.commit()
-    conn.close()
-
-    # Ensure integration tables exist for older databases and add missing company_integrations columns
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='company_integrations'")
-    if not c.fetchone():
-        c.execute('''CREATE TABLE IF NOT EXISTS company_integrations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            company_id INTEGER NOT NULL,
-            integration_type TEXT NOT NULL,
-            enabled INTEGER DEFAULT 0,
-            access_token TEXT,
-            refresh_token TEXT,
-            token_expires DATETIME,
-            settings TEXT,
-            last_sync DATETIME,
-            created_at DATETIME,
-            updated_at DATETIME,
-            FOREIGN KEY (company_id) REFERENCES companies(id),
-            UNIQUE(company_id, integration_type)
-        )''')
-        print('Created company_integrations table')
-
-    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='external_bookings'")
-    if not c.fetchone():
-        c.execute('''CREATE TABLE IF NOT EXISTS external_bookings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            company_id INTEGER NOT NULL,
-            integration_type TEXT NOT NULL,
-            external_id TEXT,
-            hashed_email TEXT,
-            invitee_name TEXT,
-            start_time DATETIME,
-            end_time DATETIME,
-            service_type TEXT,
-            status TEXT,
-            raw_questions TEXT,
-            imported_at DATETIME,
-            processed INTEGER DEFAULT 0,
-            created_at DATETIME,
-            FOREIGN KEY (company_id) REFERENCES companies(id)
-        )''')
-        print('Created external_bookings table')
-
-    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='integration_logs'")
-    if not c.fetchone():
-        c.execute('''CREATE TABLE IF NOT EXISTS integration_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            company_id INTEGER,
-            integration_type TEXT,
-            action TEXT,
-            status TEXT,
-            message TEXT,
-            created_at DATETIME,
-            FOREIGN KEY (company_id) REFERENCES companies(id)
-        )''')
-        print('Created integration_logs table')
-
-    c.execute("PRAGMA table_info(company_integrations)")
-    existing_columns = [row[1] for row in c.fetchall()]
-    if 'token_expires' not in existing_columns:
-        try:
-            c.execute("ALTER TABLE company_integrations ADD COLUMN token_expires DATETIME")
-            print('Added token_expires column to company_integrations')
-        except sqlite3.OperationalError:
-            pass
-    if 'settings' not in existing_columns:
-        try:
-            c.execute("ALTER TABLE company_integrations ADD COLUMN settings TEXT")
-            print('Added settings column to company_integrations')
-        except sqlite3.OperationalError:
-            pass
-    if 'last_sync' not in existing_columns:
-        try:
-            c.execute("ALTER TABLE company_integrations ADD COLUMN last_sync DATETIME")
-            print('Added last_sync column to company_integrations')
-        except sqlite3.OperationalError:
-            pass
-    if 'updated_at' not in existing_columns:
-        try:
-            c.execute("ALTER TABLE company_integrations ADD COLUMN updated_at DATETIME")
-            print('Added updated_at column to company_integrations')
-        except sqlite3.OperationalError:
-            pass
-    conn.commit()
-    conn.close()
-
-    # Client portal password migration
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("PRAGMA table_info(clients)")
-    client_columns = [col[1] for col in c.fetchall()]
-    for col_name, col_def in [("password_hash", "TEXT"), ("salt", "TEXT"), ("portal_enabled", "INTEGER DEFAULT 0")]:
-        if col_name not in client_columns:
-            try:
-                c.execute(f"ALTER TABLE clients ADD COLUMN {col_name} {col_def}")
-                print(f"Added {col_name} column to clients")
-            except sqlite3.OperationalError:
-                pass
-
-    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='client_portal_tokens'")
-    if not c.fetchone():
-        c.execute('''CREATE TABLE IF NOT EXISTS client_portal_tokens (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            client_id INTEGER NOT NULL,
-            token TEXT NOT NULL UNIQUE,
-            expires_at DATETIME NOT NULL,
-            used BOOLEAN DEFAULT 0,
-            created_at DATETIME,
-            FOREIGN KEY (client_id) REFERENCES clients(id)
-        )''')
-        print('Created client_portal_tokens table')
-    conn.commit()
-    conn.close()
-
-    # Language preference migration
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("PRAGMA table_info(users)")
-    user_columns = [col[1] for col in c.fetchall()]
-    if 'language' not in user_columns:
-        try:
-            c.execute("ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'en'")
-            print("Added language column to users")
-        except sqlite3.OperationalError:
-            pass
-    conn.commit()
-    conn.close()
 # ============================================================
 # PERMISSION SYSTEM
 # ============================================================
@@ -2137,34 +467,43 @@ def approve_request(request_id: int, admin_id: int, admin_notes: str = "") -> tu
     requested_value = request[7]
     company_id = request[1]
     requester_id = request[2]
-    
+
+    # The acting admin must belong to the same company as the request --
+    # otherwise an admin could approve (and execute) a request that targets
+    # another company's scheduled_jobs by passing in a foreign request_id.
+    c.execute("SELECT company_id FROM users WHERE id = ?", (admin_id,))
+    admin_row = c.fetchone()
+    if not admin_row or admin_row[0] != company_id:
+        conn.close()
+        return False, "Not authorized to approve this request"
+
     # Execute the approved action
     success = False
     if request_type == 'delete_event' and target_type == 'scheduled_job':
-        c.execute("DELETE FROM scheduled_jobs WHERE id = ?", (target_id,))
+        c.execute("DELETE FROM scheduled_jobs WHERE id = ? AND company_id = ?", (target_id, company_id))
         success = True
     elif request_type == 'move_event' and target_type == 'scheduled_job':
         # Parse requested_value (e.g., "2024-01-15|10:00 AM")
         if requested_value:
             try:
                 new_date, new_time = requested_value.split('|')
-                c.execute("UPDATE scheduled_jobs SET scheduled_date = ?, scheduled_time = ? WHERE id = ?",
-                          (new_date, new_time, target_id))
+                c.execute("UPDATE scheduled_jobs SET scheduled_date = ?, scheduled_time = ? WHERE id = ? AND company_id = ?",
+                          (new_date, new_time, target_id, company_id))
                 success = True
             except ValueError:
                 success = False
     elif request_type == 'edit_event' and target_type == 'scheduled_job':
         if requested_value:
-            c.execute("UPDATE scheduled_jobs SET notes = ? WHERE id = ?",
-                      (requested_value, target_id))
+            c.execute("UPDATE scheduled_jobs SET notes = ? WHERE id = ? AND company_id = ?",
+                      (requested_value, target_id, company_id))
             success = True
-    
+
     # Update request status
     c.execute("""
         UPDATE approval_requests
         SET status = 'approved', reviewed_at = ?, reviewed_by = ?, admin_notes = ?
-        WHERE id = ?
-    """, (datetime.now().isoformat(), admin_id, admin_notes, request_id))
+        WHERE id = ? AND company_id = ?
+    """, (datetime.now().isoformat(), admin_id, admin_notes, request_id, company_id))
     
     conn.commit()
     conn.close()
@@ -2188,12 +527,18 @@ def reject_request(request_id: int, admin_id: int, reason: str) -> bool:
     # Get requester info for notification
     c.execute("SELECT requester_id, company_id FROM approval_requests WHERE id = ?", (request_id,))
     request = c.fetchone()
-    
+
+    c.execute("SELECT company_id FROM users WHERE id = ?", (admin_id,))
+    admin_row = c.fetchone()
+    if not request or not admin_row or admin_row[0] != request[1]:
+        conn.close()
+        return False
+
     c.execute("""
         UPDATE approval_requests
         SET status = 'rejected', reviewed_at = ?, reviewed_by = ?, admin_notes = ?
-        WHERE id = ?
-    """, (datetime.now().isoformat(), admin_id, reason, request_id))
+        WHERE id = ? AND company_id = ?
+    """, (datetime.now().isoformat(), admin_id, reason, request_id, request[1]))
     
     conn.commit()
     conn.close()
@@ -2274,11 +619,11 @@ def get_user_notifications(user_id: int, limit: int = 20) -> pd.DataFrame:
     conn.close()
     return df
 
-def mark_notification_read(notification_id: int):
+def mark_notification_read(notification_id: int, user_id: int):
     """Mark a notification as read"""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("UPDATE notifications SET read_status = 1 WHERE id = ?", (notification_id,))
+    c.execute("UPDATE notifications SET read_status = 1 WHERE id = ? AND user_id = ?", (notification_id, user_id))
     conn.commit()
     conn.close()
 
@@ -2601,20 +946,6 @@ If you did not request this, please ignore this email.
 # MULTI-TENANT & SUPPORT HELPERS
 # ============================================================
 
-def get_current_user_company():
-    if 'user' not in st.session_state or not st.session_state.user:
-        return None
-    if 'company_id' in st.session_state.user:
-        return st.session_state.user['company_id']
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT company_id FROM users WHERE id = ?", (st.session_state.user['user_id'],))
-    row = c.fetchone()
-    conn.close()
-    company_id = row[0] if row else None
-    if company_id:
-        st.session_state.user['company_id'] = company_id
-    return company_id
 
 
 def get_company_integration(company_id: int, integration_type: str):
@@ -3012,95 +1343,6 @@ def user_belongs_to_hierarchy(current_user_id, target_user_id):
     return target_user_id in get_descendant_user_ids(current_user_id)
 
 
-def normalize_email(email):
-    return email.strip().lower() if isinstance(email, str) else email
-
-
-# ============================================================
-# SECURITY FUNCTIONS
-# ============================================================
-
-def hash_password(pwd):
-    salt = bcrypt.gensalt(rounds=12)
-    hashed = bcrypt.hashpw(pwd.encode('utf-8'), salt)
-    return hashed.decode('utf-8'), salt.decode('utf-8')
-
-def verify_password(pwd, hashed):
-    return bcrypt.checkpw(pwd.encode('utf-8'), hashed.encode('utf-8'))
-
-def check_user_password_hash(user_id):
-    """Debug function to inspect stored password hashes."""
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT id, username, email, password_hash FROM users WHERE id = ?", (user_id,))
-    user = c.fetchone()
-    conn.close()
-
-    if user:
-        # Removed sensitive debug logging for security
-        pass
-
-
-def reset_user_password(email, new_password, reset_code=None):
-    """Reset user password and verify new hash."""
-    valid, msg = validate_password_strength(new_password)
-    if not valid:
-        return False, msg
-
-    email = normalize_email(email)
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT id, username FROM users WHERE lower(email) = ?", (email,))
-    user = c.fetchone()
-
-    if not user:
-        conn.close()
-        return False, "User not found"
-
-    user_id, username = user
-    hashed, salt = hash_password(new_password)
-    c.execute("UPDATE users SET password_hash = ?, salt = ? WHERE id = ?", (hashed, salt, user_id))
-    conn.commit()
-    conn.close()
-    log_audit(user_id, "password_reset", f"Password reset for user {username}")
-    return True, "Password reset successfully"
-
-
-def validate_password_strength(pwd):
-    if len(pwd) < MIN_PASSWORD_LENGTH:
-        return False, f"Password must be at least {MIN_PASSWORD_LENGTH} characters"
-    if not re.search(r"[A-Z]", pwd):
-        return False, "Must contain uppercase letter"
-    if not re.search(r"[a-z]", pwd):
-        return False, "Must contain lowercase letter"
-    if not re.search(r"\d", pwd):
-        return False, "Must contain a number"
-    if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", pwd):
-        return False, "Must contain a special character"
-    return True, "Strong password"
-
-def log_audit(user_id, action, details, ip=None):
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("INSERT INTO audit_log (user_id, action, details, ip_address, created_at) VALUES (?,?,?,?,?)",
-                  (user_id, action, details, ip, datetime.now().isoformat()))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"Audit log error: {e}")
-
-
-def log_auth_event(user_id, email, event_type, status, ip_address=None, user_agent=None, error_message=None):
-    """Log authentication events for security tracking"""
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("""
-        INSERT INTO auth_logs (user_id, email, event_type, status, ip_address, user_agent, error_message, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (user_id, email, event_type, status, ip_address, user_agent, error_message, datetime.now().isoformat()))
-    conn.commit()
-    conn.close()
 
 
 def request_password_reset(email):
@@ -3113,13 +1355,26 @@ def request_password_reset(email):
     # Find user
     c.execute("SELECT id, username, email, totp_secret, totp_enabled FROM users WHERE email = ?", (email,))
     user = c.fetchone()
-    
+
     if not user:
         conn.close()
+        log_auth_event(None, email, "password_reset_request", "failure", error_message="No account with this email")
         return False, "If an account exists with this email, you will receive reset instructions."
-    
+
     user_id, username, user_email, totp_secret, totp_enabled = user
-    
+
+    # Rate limit: at most 3 reset requests per hour per account
+    one_hour_ago = (datetime.now() - timedelta(hours=1)).isoformat()
+    c.execute("""
+        SELECT COUNT(*) FROM password_reset_tokens
+        WHERE user_id = ? AND created_at > ?
+    """, (user_id, one_hour_ago))
+    recent_requests = c.fetchone()[0]
+    if recent_requests >= 3:
+        conn.close()
+        log_auth_event(user_id, email, "password_reset_request", "failure", error_message="Rate limit exceeded")
+        return False, "Too many reset requests. Please try again later."
+
     # Generate reset token (expires in 1 hour)
     reset_token = secrets.token_urlsafe(32)
     expires_at = datetime.now() + timedelta(hours=1)
@@ -3154,11 +1409,14 @@ def request_password_reset(email):
         
         # Send 2FA code via email
         send_2fa_code_email(user_email, twofa_code)
-        
+
+        log_auth_event(user_id, email, "password_reset_request", "success", error_message="2FA code sent")
         return True, "A 2FA verification code has been sent to your email."
     else:
         # Send reset link directly
         send_password_reset_email(user_email, reset_link)
+
+        log_auth_event(user_id, email, "password_reset_request", "success", error_message="Reset link sent")
         return True, "Password reset link has been sent to your email."
 
 
@@ -3190,6 +1448,7 @@ def reset_password_with_2fa(token, twofa_code, new_password):
     # Verify 2FA code
     if stored_code and stored_code != twofa_code:
         conn.close()
+        log_auth_event(user_id, None, "password_reset", "failure", error_message="Invalid 2FA verification code")
         return False, "Invalid 2FA verification code."
     
     # Validate new password
@@ -3389,34 +1648,40 @@ This link will expire in 24 hours. If you did not request this, please ignore th
 
 
 def authenticate_client(email: str, password: str):
-    """Authenticate a client for the client portal. Returns (success, client_dict_or_error_message)."""
+    """Authenticate a client for the client portal. Returns (success, client_dict_or_error_message).
+
+    Email is not unique across companies, so a single email may match multiple
+    client rows (different companies). The password is used to disambiguate:
+    each candidate row is checked, and the first one whose password matches wins.
+    This avoids silently logging the client into the wrong company's record.
+    """
     email = normalize_email(email)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    # Note: email lookup is global across companies (matches existing client_login_page
-    # behavior) - if multiple companies have a client with the same email, the first
-    # match wins. Clients are scoped by company_id after login.
     c.execute("SELECT id, business_name, company_id, password_hash, portal_enabled FROM clients WHERE email = ?", (email,))
-    client = c.fetchone()
+    candidates = c.fetchall()
     conn.close()
 
-    if not client:
+    if not candidates:
         return False, "Invalid email or password"
 
-    client_id, business_name, company_id, password_hash, portal_enabled = client
+    any_portal_set_up = False
+    for client_id, business_name, company_id, password_hash, portal_enabled in candidates:
+        if not portal_enabled or not password_hash:
+            continue
+        any_portal_set_up = True
+        if verify_password(password, password_hash):
+            return True, {
+                "client_id": client_id,
+                "business_name": business_name,
+                "company_id": company_id,
+                "email": email,
+            }
 
-    if not portal_enabled or not password_hash:
+    if not any_portal_set_up:
         return False, "PORTAL_NOT_SET_UP"
 
-    if not verify_password(password, password_hash):
-        return False, "Invalid email or password"
-
-    return True, {
-        "client_id": client_id,
-        "business_name": business_name,
-        "company_id": company_id,
-        "email": email,
-    }
+    return False, "Invalid email or password"
 
 
 def get_business_name():
@@ -3433,20 +1698,6 @@ def get_business_name():
     except:
         return "ProfitClean"
 
-def get_current_user_data():
-    if 'user' not in st.session_state:
-        return None
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("PRAGMA table_info(users)")
-    columns = [col[1] for col in c.fetchall()]
-    if 'invite_code' in columns:
-        c.execute("SELECT id, username, email, role, company_id, manager_id, supervisor_id, hire_date, totp_enabled, invite_code FROM users WHERE id = ?", (st.session_state.user['user_id'],))
-    else:
-        c.execute("SELECT id, username, email, role, company_id, manager_id, supervisor_id, hire_date, totp_enabled, NULL as invite_code FROM users WHERE id = ?", (st.session_state.user['user_id'],))
-    row = c.fetchone()
-    conn.close()
-    return row
 
 def get_company_settings():
     company_id = get_current_user_company()
@@ -3573,39 +1824,6 @@ def get_job_templates(company_id: int) -> pd.DataFrame:
     df = pd.read_sql_query("SELECT * FROM job_templates WHERE company_id = ? ORDER BY name", conn, params=(company_id,))
     conn.close()
     return df
-# ============================================================
-# FLORIDA PRICING DATA
-# ============================================================
-
-FLORIDA_CITIES = [
-    "Orlando", "Miami", "Tampa", "Jacksonville", "Cocoa Beach", 
-    "Daytona Beach", "Naples", "Ocala", "Gainesville", "Tallahassee",
-    "St. Petersburg", "Fort Myers", "Sarasota", "Pensacola", "Lakeland"
-]
-
-PROPERTY_TYPES = {
-    "Office Standard": {"multiplier": 1.0, "base_rate": 0.14, "icon": "🏢"},
-    "Retail Store": {"multiplier": 1.2, "base_rate": 0.14, "icon": "🛍️"},
-    "Warehouse": {"multiplier": 0.8, "base_rate": 0.12, "icon": "📦"},
-    "🏥 Medical / Dental": {"multiplier": 1.6, "base_rate": 0.14, "icon": "🏥"},
-    "🏭 Industrial": {"multiplier": 1.2, "base_rate": 0.12, "icon": "🏭"},
-    "🏫 School / Daycare": {"multiplier": 1.4, "base_rate": 0.13, "icon": "🏫"},
-    "🏨 Hotel / Motel": {"multiplier": 1.5, "base_rate": 0.14, "icon": "🏨"},
-    "🍽️ Restaurant": {"multiplier": 2.2, "base_rate": 0.14, "icon": "🍽️"},
-    "⛽ Gas Station / C-Store": {"multiplier": 1.9, "base_rate": 0.16, "icon": "⛽"},
-    "🏢 High-Rise": {"multiplier": 1.3, "base_rate": 0.14, "icon": "🏙️"},
-    "⛪ Church": {"multiplier": 1.2, "base_rate": 0.13, "icon": "⛪"},
-    "🛍️ Shopping Mall": {"multiplier": 1.3, "base_rate": 0.14, "icon": "🛍️"},
-    "🏋️ Gym / Fitness": {"multiplier": 1.6, "base_rate": 0.14, "icon": "🏋️"},
-    "🏗️ Post-Construction": {"multiplier": 2.5, "base_rate": 0.18, "icon": "🏗️"},
-    "🎪 Event Venue": {"multiplier": 1.5, "base_rate": 0.14, "icon": "🎪"},
-    "🏠 Airbnb / Short-Term Rental": {"multiplier": 1.0, "pricing_model": "bedroom", "base_rate": 45, "icon": "🏠"},
-}
-
-FREQUENCIES = {"Daily": 0.85, "Weekly": 1.0, "Bi-Weekly": 1.35, "Monthly": 1.75, "One-Time": 2.0, "🏠 Per Checkout": 1.0}
-HOLIDAY_RATES = {"New Year's Day": 0.25, "Memorial Day": 0.25, "Independence Day": 0.25, "Labor Day": 0.25, "Thanksgiving": 0.35, "Christmas Eve": 0.50, "Christmas Day": 0.50, "New Year's Eve": 0.35}
-KNOWN_TOLLS = {("orlando","miami"):17.00, ("miami","orlando"):17.00, ("orlando","tampa"):8.50, ("tampa","orlando"):8.50, ("orlando","cocoa beach"):5.50, ("cocoa beach","orlando"):5.50}
-
 def estimate_toll(origin, dest):
     key = (origin.lower(), dest.lower())
     return KNOWN_TOLLS.get(key, 5.00)
@@ -4063,163 +2281,6 @@ def deny_worker_request(request_id, company_id):
     return True
 
 
-# ============================================================
-# SESSION MANAGEMENT (Persistent Login Fix)
-# ============================================================
-
-def generate_session_token():
-    return secrets.token_urlsafe(32)
-
-def create_user_session(user_id: int, expires_days: int = 7) -> str:
-    """Create a persistent session in the database"""
-    token = generate_session_token()
-    expires_at = datetime.now() + timedelta(days=expires_days)
-    
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("""
-        INSERT INTO sessions (user_id, session_token, expires_at, created_at)
-        VALUES (?, ?, ?, ?)
-    """, (user_id, token, expires_at.isoformat(), datetime.now().isoformat()))
-    conn.commit()
-    conn.close()
-    return token
-
-def validate_session_token(token: str):
-    """Validate session and return user data"""
-    if not token:
-        return None
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("""
-        SELECT u.id, u.username, u.email, u.role, u.company_id,
-               u.manager_id, u.supervisor_id, u.totp_enabled, u.language
-        FROM sessions s
-        JOIN users u ON s.user_id = u.id
-        WHERE s.session_token = ?
-          AND s.expires_at > datetime('now')
-          AND u.is_active = 1
-    """, (token,))
-    row = c.fetchone()
-    conn.close()
-
-    if row:
-        return {
-            "user_id": row[0],
-            "username": row[1],
-            "email": row[2],
-            "role": row[3],
-            "company_id": row[4],
-            "manager_id": row[5],
-            "supervisor_id": row[6],
-            "totp_enabled": bool(row[7]),
-            "language": row[8] or "en"
-        }
-    return None
-
-def clear_expired_sessions():
-    """Cleanup old sessions (run periodically)"""
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("DELETE FROM sessions WHERE expires_at < datetime('now')")
-    conn.commit()
-    conn.close()
-
-
-# ============================================================
-# AUTHENTICATION FUNCTIONS
-# ============================================================
-
-def authenticate_user(email: str, password: str, ip_address=None, user_agent=None):
-    """Enhanced authentication with persistent sessions"""
-    email = normalize_email(email)
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    
-    log_auth_event(None, email, "login_attempt", "pending", ip_address, user_agent)
-    
-    # Get user
-    c.execute("""
-        SELECT id, username, password_hash, role, company_id,
-               manager_id, supervisor_id, totp_enabled, is_active, locked_until, language
-        FROM users WHERE lower(email) = ?
-    """, (email,))
-    user = c.fetchone()
-
-    if not user:
-        conn.close()
-        log_auth_event(None, email, "login_attempt", "failed", ip_address, user_agent, "User not found")
-        return False, "Invalid email or password"
-
-    uid, uname, pwd_hash, role, company_id, mgr_id, sup_id, totp_enabled, is_active, locked_until, language = user
-    
-    if not is_active:
-        conn.close()
-        log_auth_event(uid, email, "login_attempt", "failed", ip_address, user_agent, "Account inactive")
-        return False, "Account is inactive. Contact your administrator."
-    
-    # Check lockout (super_admin is exempt -- there's exactly one such account,
-    # and locking out the only person who can administer the whole platform
-    # is a worse outcome than leaving it open to brute-force lockout abuse)
-    if role != UserRole.SUPER_ADMIN.value and locked_until and datetime.fromisoformat(locked_until) > datetime.now():
-        conn.close()
-        return False, f"Account locked until {locked_until}. Try again later."
-
-    # Verify password
-    if not verify_password(password, pwd_hash):
-        # Increment failed attempts (tracked for audit even for super_admin, just never locks them out)
-        c.execute("UPDATE users SET login_attempts = login_attempts + 1 WHERE id = ?", (uid,))
-        if role != UserRole.SUPER_ADMIN.value and c.execute("SELECT login_attempts FROM users WHERE id = ?", (uid,)).fetchone()[0] >= MAX_LOGIN_ATTEMPTS:
-            lock_until = datetime.now() + timedelta(minutes=ACCOUNT_LOCKOUT_MINUTES)
-            c.execute("UPDATE users SET locked_until = ? WHERE id = ?", (lock_until.isoformat(), uid))
-        conn.commit()
-        conn.close()
-        log_auth_event(uid, email, "login_attempt", "failed", ip_address, user_agent, "Invalid password")
-        return False, "Invalid email or password"
-    
-    # Success - reset attempts
-    c.execute("UPDATE users SET login_attempts = 0, locked_until = NULL, last_login = ? WHERE id = ?", 
-              (datetime.now().isoformat(), uid))
-    conn.commit()
-    conn.close()
-    
-    # Create persistent session
-    session_token = create_user_session(uid, SESSION_EXPIRY_DAYS)
-    
-    log_auth_event(uid, email, "login_success", "success", ip_address, user_agent)
-    
-    user_data = {
-        "user_id": uid,
-        "username": uname,
-        "email": email,
-        "role": role,
-        "company_id": company_id,
-        "manager_id": mgr_id,
-        "supervisor_id": sup_id,
-        "totp_enabled": bool(totp_enabled),
-        "language": language or "en",
-        "session_token": session_token
-    }
-
-    return True, user_data
-
-def logout_user():
-    """Clear current session"""
-    if "session_token" in st.session_state:
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("DELETE FROM sessions WHERE session_token = ?", (st.session_state.session_token,))
-        conn.commit()
-        conn.close()
-    for key in list(st.session_state.keys()):
-        if key not in ["page"]:  # preserve page if needed
-            del st.session_state[key]
-
-
-def get_effective_user():
-    if st.session_state.get('original_user'):
-        return st.session_state.original_user
-    return st.session_state.get('user')
 
 
 def set_global_setting(name, value):
@@ -4485,76 +2546,6 @@ def delete_user_profile(user_id):
         conn.close()
 
 
-# ============================================================
-# DECORATORS FOR ROUTE PROTECTION
-# ============================================================
-
-def require_auth(func):
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        if 'user' not in st.session_state or not st.session_state.user:
-            st.warning("🔒 Please log in")
-            st.session_state.page = "login"
-            st.rerun()
-            return
-        return func(*args, **kwargs)
-    return wrapper
-
-def require_role(allowed_roles):
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            if 'user' not in st.session_state:
-                st.warning("Please log in")
-                st.session_state.page = "login"
-                st.rerun()
-                return
-            role = st.session_state.user.get('role')
-            original = st.session_state.get('original_user')
-            effective_role = original.get('role') if original and original.get('role') else role
-            if effective_role not in allowed_roles:
-                st.error(f"Access denied. Required role: {allowed_roles}")
-                return
-            return func(*args, **kwargs)
-        return wrapper
-    return decorator
-
-
-# ============================================================
-# 2FA (TOTP) FUNCTIONS
-# ============================================================
-
-def generate_totp_secret():
-    return pyotp.random_base32()
-
-def get_totp_uri(secret, email):
-    return pyotp.totp.TOTP(secret).provisioning_uri(name=email, issuer_name="ProfitClean")
-
-def verify_totp(secret, code):
-    totp = pyotp.TOTP(secret)
-    return totp.verify(code)
-
-def generate_backup_codes(count=8):
-    codes = [secrets.token_hex(4) for _ in range(count)]
-    hashed_codes = [bcrypt.hashpw(c.encode(), bcrypt.gensalt()).decode() for c in codes]
-    return codes, hashed_codes
-
-def verify_backup_code(user_id, code):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT backup_codes FROM users WHERE id = ?", (user_id,))
-    row = c.fetchone()
-    if row and row[0]:
-        stored_codes = json.loads(row[0])
-        for i, hashed in enumerate(stored_codes):
-            if bcrypt.checkpw(code.encode(), hashed.encode()):
-                stored_codes.pop(i)
-                c.execute("UPDATE users SET backup_codes = ? WHERE id = ?", (json.dumps(stored_codes), user_id))
-                conn.commit()
-                conn.close()
-                return True
-    conn.close()
-    return False
 
 
 # ============================================================
@@ -4645,6 +2636,7 @@ def get_all_clients():
 def add_client(business, contact, phone, email, address, city, state, zipc, lat, lon, notes):
     company_id = get_current_user_company()
     uid = st.session_state.user['user_id']
+    email = normalize_email(email)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("INSERT INTO clients (company_id, user_id, business_name, contact_name, phone, email, address, city, state, zip, lat, lon, notes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -4655,17 +2647,20 @@ def add_client(business, contact, phone, email, address, city, state, zipc, lat,
     return cid
 
 def update_client(cid, business, contact, phone, email, address, city, state, zipc, lat, lon, notes):
+    company_id = get_current_user_company()
+    email = normalize_email(email)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("UPDATE clients SET business_name=?, contact_name=?, phone=?, email=?, address=?, city=?, state=?, zip=?, lat=?, lon=?, notes=?, updated_at=? WHERE id=?",
-              (business, contact, phone, email, address, city, state, zipc, lat, lon, notes, datetime.now().isoformat(), cid))
+    c.execute("UPDATE clients SET business_name=?, contact_name=?, phone=?, email=?, address=?, city=?, state=?, zip=?, lat=?, lon=?, notes=?, updated_at=? WHERE id=? AND company_id=?",
+              (business, contact, phone, email, address, city, state, zipc, lat, lon, notes, datetime.now().isoformat(), cid, company_id))
     conn.commit()
     conn.close()
 
 def delete_client(cid):
+    company_id = get_current_user_company()
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("DELETE FROM clients WHERE id = ?", (cid,))
+    c.execute("DELETE FROM clients WHERE id = ? AND company_id = ?", (cid, company_id))
     conn.commit()
     conn.close()
 
@@ -4829,7 +2824,7 @@ def approve_sweet_spot(request_id, manager_id):
     if row:
         est_id, price = row
         c.execute("UPDATE estimates SET estimated_price = ?, status = 'sent' WHERE id = ? AND company_id = ?", (price, est_id, company_id))
-        c.execute("UPDATE estimate_approvals SET status = 'approved', approved_at = ? WHERE id = ?", (datetime.now().isoformat(), request_id))
+        c.execute("UPDATE estimate_approvals SET status = 'approved', approved_at = ? WHERE id = ? AND company_id = ?", (datetime.now().isoformat(), request_id, company_id))
         add_estimate_history_entry(est_id, "draft", "sent", manager_id, f"Sweet spot approved at ${price:,.2f}")
         conn.commit()
         log_audit(manager_id, "sweet_spot_approved", f"Approved sweet spot for estimate {est_id} in company {company_id}")
@@ -5269,14 +3264,22 @@ def edit_profile_page():
     st.markdown(t("profile_2fa_title"))
     if totp_enabled:
         st.success(t("profile_2fa_enabled"))
+        disable_pwd = st.text_input(t("profile_2fa_disable_confirm_password"), type="password", key="disable_2fa_password")
         if st.button(t("profile_2fa_disable")):
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
-            c.execute("UPDATE users SET totp_enabled = 0, totp_secret = NULL WHERE id = ?", (uid,))
-            conn.commit()
-            conn.close()
-            st.success(t("profile_2fa_disabled_msg"))
-            st.rerun()
+            c.execute("SELECT password_hash FROM users WHERE id = ?", (uid,))
+            row = c.fetchone()
+            if not row or not verify_password(disable_pwd, row[0]):
+                conn.close()
+                st.error(t("profile_2fa_disable_wrong_password"))
+            else:
+                c.execute("UPDATE users SET totp_enabled = 0, totp_secret = NULL WHERE id = ?", (uid,))
+                conn.commit()
+                conn.close()
+                log_audit(uid, "disable_2fa", "User disabled two-factor authentication")
+                st.success(t("profile_2fa_disabled_msg"))
+                st.rerun()
     else:
         st.info(t("profile_2fa_disabled_info"))
         if st.button(t("profile_2fa_enable")):
@@ -5304,7 +3307,7 @@ def edit_profile_page():
                 with col2:
                     if notif['read_status'] == 0:
                         if st.button(t("profile_mark_read"), key=f"mark_{notif['id']}"):
-                            mark_notification_read(notif['id'])
+                            mark_notification_read(notif['id'], st.session_state.user['user_id'])
                             st.rerun()
                 st.markdown("---")
     else:
@@ -6832,8 +4835,8 @@ def schedule_page():
                             if st.form_submit_button("💾 Save Changes"):
                                 conn = sqlite3.connect(DB_PATH)
                                 c = conn.cursor()
-                                c.execute("UPDATE scheduled_jobs SET scheduled_date = ?, scheduled_time = ?, status = ?, notes = ? WHERE id = ?",
-                                          (e_date.isoformat(), e_time, e_status, e_notes, job['id']))
+                                c.execute("UPDATE scheduled_jobs SET scheduled_date = ?, scheduled_time = ?, status = ?, notes = ? WHERE id = ? AND company_id = ?",
+                                          (e_date.isoformat(), e_time, e_status, e_notes, job['id'], company_id))
                                 conn.commit()
                                 conn.close()
                                 log_activity(company_id, user_id, 'edit_job', 'scheduled_job', job['id'], f"Edited job for {job['client_name']}")
@@ -6870,7 +4873,7 @@ def schedule_page():
                             if st.confirm(f"Delete job for {job['client_name']}?"):
                                 conn = sqlite3.connect(DB_PATH)
                                 c = conn.cursor()
-                                c.execute("DELETE FROM scheduled_jobs WHERE id = ?", (job['id'],))
+                                c.execute("DELETE FROM scheduled_jobs WHERE id = ? AND company_id = ?", (job['id'], company_id))
                                 conn.commit()
                                 conn.close()
                                 log_activity(company_id, user_id, 'delete_job', 'scheduled_job', job['id'], f"Deleted job for {job['client_name']}")
@@ -8508,7 +6511,16 @@ def settings_page():
         for i, col in enumerate(select_columns):
             col_name = col.split(' as ')[0] if ' as ' in col else col
             row_dict[col_name] = row[i]
-        
+
+        # The stored value is encrypted; decrypt it for display so the form
+        # doesn't re-encrypt an already-encrypted blob when saved unchanged.
+        if row_dict.get('smtp_password'):
+            try:
+                from encryption_manager import encryption
+                row_dict['smtp_password'] = encryption.decrypt(row_dict['smtp_password'])
+            except Exception:
+                pass
+
         with st.form("settings"):
             bname = st.text_input("Business Name", row_dict.get('business_name', ''))
             phone = st.text_input("Phone", row_dict.get('phone', ''))
@@ -8907,12 +6919,14 @@ def client_login_page():
                 conn = sqlite3.connect(DB_PATH)
                 c = conn.cursor()
                 c.execute("SELECT id, business_name, company_id FROM clients WHERE email = ?", (normalize_email(setup_email),))
-                client = c.fetchone()
+                matching_clients = c.fetchall()
                 conn.close()
                 # Always show the same message whether or not the email matches, so this
                 # form can't be used to enumerate which emails exist as clients.
-                if client:
-                    client_id, business_name, company_id = client
+                # The same email can belong to clients of different companies, so send a
+                # separate, correctly-labeled setup link for each match rather than only
+                # the first one found.
+                for client_id, business_name, company_id in matching_clients:
                     setup_token = generate_client_portal_token(client_id)
                     base_url = os.getenv('APP_BASE_URL', 'https://profitclean-c4s6mqoafikfejkdfuwgvx.streamlit.app')
                     setup_link = f"{base_url}?page=client_set_password&token={setup_token}"
@@ -9771,6 +7785,7 @@ def parse_query_param(params, key):
 def main():
     # First, initialize database and run migrations
     init_db()
+    ensure_default_global_settings()
     migrate_database()
     clear_expired_sessions()   # Clean old sessions on startup
     

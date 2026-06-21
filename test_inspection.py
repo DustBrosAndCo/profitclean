@@ -20,6 +20,10 @@ class SessionState(dict):
 
 st_mock = MagicMock()
 st_mock.session_state = SessionState()
+# See test_smoke.py for why this is needed: a bare MagicMock doesn't raise
+# KeyError on subscript access, which breaks encryption_manager's
+# st.secrets["ENCRYPTION_KEY"] lookup.
+st_mock.secrets = {}
 sys.modules["streamlit"] = st_mock
 
 TEST_DB = os.path.join(tempfile.gettempdir(), "profitclean_test_inspection.db")
@@ -27,9 +31,16 @@ if os.path.exists(TEST_DB):
     os.remove(TEST_DB)
 
 import app  # noqa: E402
+import database  # noqa: E402
+import auth  # noqa: E402
 
 app.DB_PATH = TEST_DB
+# See test_smoke.py: database.py and auth.py get DB_PATH from constants.py
+# independently of app.py, so each needs the test-DB override patched separately.
+database.DB_PATH = TEST_DB
+auth.DB_PATH = TEST_DB
 app.init_db()
+app.ensure_default_global_settings()
 app.migrate_database()
 
 passed = 0

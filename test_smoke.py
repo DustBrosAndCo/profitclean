@@ -18,6 +18,12 @@ class SessionState(dict):
 
 st_mock = MagicMock()
 st_mock.session_state = SessionState()
+# A bare MagicMock doesn't raise KeyError on subscript access, so
+# encryption_manager's `st.secrets["ENCRYPTION_KEY"]` lookup (wrapped in a
+# try/except KeyError) silently "succeeds" with a fake key and crashes
+# Fernet(...). A real empty dict makes that lookup raise KeyError as expected,
+# falling through to the env var / key file checks.
+st_mock.secrets = {}
 sys.modules["streamlit"] = st_mock
 
 # Use isolated test database
@@ -26,9 +32,16 @@ if os.path.exists(TEST_DB):
     os.remove(TEST_DB)
 
 import app  # noqa: E402
+import database  # noqa: E402
+import auth  # noqa: E402
 
 app.DB_PATH = TEST_DB
+# app.py imports DB_PATH from constants.py; database.py and auth.py do too,
+# but each gets its own independent binding, so each needs patching separately.
+database.DB_PATH = TEST_DB
+auth.DB_PATH = TEST_DB
 app.init_db()
+app.ensure_default_global_settings()
 
 passed = 0
 failed = 0
