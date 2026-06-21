@@ -3337,16 +3337,18 @@ def authenticate_user(email: str, password: str, ip_address=None, user_agent=Non
         log_auth_event(uid, email, "login_attempt", "failed", ip_address, user_agent, "Account inactive")
         return False, "Account is inactive. Contact your administrator."
     
-    # Check lockout
-    if locked_until and datetime.fromisoformat(locked_until) > datetime.now():
+    # Check lockout (super_admin is exempt -- there's exactly one such account,
+    # and locking out the only person who can administer the whole platform
+    # is a worse outcome than leaving it open to brute-force lockout abuse)
+    if role != UserRole.SUPER_ADMIN.value and locked_until and datetime.fromisoformat(locked_until) > datetime.now():
         conn.close()
         return False, f"Account locked until {locked_until}. Try again later."
-    
+
     # Verify password
     if not verify_password(password, pwd_hash):
-        # Increment failed attempts
+        # Increment failed attempts (tracked for audit even for super_admin, just never locks them out)
         c.execute("UPDATE users SET login_attempts = login_attempts + 1 WHERE id = ?", (uid,))
-        if c.execute("SELECT login_attempts FROM users WHERE id = ?", (uid,)).fetchone()[0] >= MAX_LOGIN_ATTEMPTS:
+        if role != UserRole.SUPER_ADMIN.value and c.execute("SELECT login_attempts FROM users WHERE id = ?", (uid,)).fetchone()[0] >= MAX_LOGIN_ATTEMPTS:
             lock_until = datetime.now() + timedelta(minutes=ACCOUNT_LOCKOUT_MINUTES)
             c.execute("UPDATE users SET locked_until = ? WHERE id = ?", (lock_until.isoformat(), uid))
         conn.commit()
