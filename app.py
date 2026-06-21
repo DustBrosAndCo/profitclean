@@ -8588,7 +8588,14 @@ def settings_page():
                 monthly_software = st.number_input("Monthly Software/Subscriptions", min_value=0, value=int(row_dict.get('monthly_software', 0)), step=50)
                 monthly_admin_salary = st.number_input("Monthly Admin Salary", min_value=0, value=int(row_dict.get('monthly_admin_salary', 0)), step=500)
             
-            desired_profit_margin = st.slider("Desired Profit Margin", min_value=0.05, max_value=0.50, value=float(row_dict.get('desired_profit_margin', 0.20)), step=0.05, format="%.0f%%")
+            # Streamlit's slider `format` just printf-formats the raw value -- it
+            # doesn't multiply by 100. With min/max as fractions (0.05-0.50), this
+            # rendered as "0%" for every position. Slide in whole percent instead
+            # and convert to the fraction the rest of the app expects.
+            desired_profit_margin_pct = st.slider("Desired Profit Margin", min_value=5, max_value=50,
+                                                   value=int(round(float(row_dict.get('desired_profit_margin', 0.20)) * 100)),
+                                                   step=5, format="%d%%")
+            desired_profit_margin = desired_profit_margin_pct / 100.0
             
             if st.form_submit_button("Save"):
                 conn = sqlite3.connect(DB_PATH)
