@@ -4640,7 +4640,7 @@ def dashboard():
             ("⚙️ Settings", "settings"),
             ("✏️ Edit Profile", "edit_profile"),
             ("📜 Terms of Service", "terms"),
-            ("🧪 Test Approval Link", "test_approval"),
+
         ]
         effective_role = get_effective_user()['role'] if get_effective_user() else user['role']
         if effective_role in ['super_admin', 'admin', 'manager']:
