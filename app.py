@@ -150,78 +150,203 @@ st.markdown("""
 
 st.markdown("""
 <style>
+/* ---------- Design tokens ---------- */
+:root {
+    --pc-navy: #0F172A;
+    --pc-navy-light: #1E3A5F;
+    --pc-teal: #2DD4BF;
+    --pc-teal-dark: #0F766E;
+    --pc-green: #10b981;
+    --pc-green-dark: #059669;
+    --pc-amber: #f59e0b;
+    --pc-amber-light: #fef3c7;
+    --pc-purple: #8b5cf6;
+    --pc-red: #ef4444;
+    --pc-border: #e2e8f0;
+    --pc-bg-soft: #f8fafc;
+    --pc-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+    --pc-shadow-hover: 0 8px 24px rgba(15, 23, 42, 0.12);
+    --pc-radius: 16px;
+    --pc-radius-sm: 10px;
+}
+
+/* ---------- Global typography ---------- */
+html, body, [class*="css"] {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+h1, h2, h3 {
+    font-weight: 700 !important;
+    color: var(--pc-navy) !important;
+    letter-spacing: -0.02em;
+}
+
+/* Main app background */
+.stApp {
+    background: linear-gradient(180deg, #fafbfc 0%, #f4f6f8 100%);
+}
+
+/* ---------- Sidebar ---------- */
+section[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, var(--pc-navy) 0%, var(--pc-navy-light) 100%);
+}
+section[data-testid="stSidebar"] * {
+    color: #f1f5f9 !important;
+}
+section[data-testid="stSidebar"] .stButton button {
+    background: rgba(255,255,255,0.06) !important;
+    border: 1px solid rgba(255,255,255,0.10) !important;
+    color: #f1f5f9 !important;
+    text-align: left !important;
+    justify-content: flex-start !important;
+    border-radius: var(--pc-radius-sm) !important;
+    margin: 3px 0 !important;
+    transition: all 0.18s ease;
+}
+section[data-testid="stSidebar"] .stButton button:hover {
+    background: rgba(45, 212, 191, 0.18) !important;
+    border-color: var(--pc-teal) !important;
+    transform: translateX(3px);
+}
+section[data-testid="stSidebar"] hr {
+    border-color: rgba(255,255,255,0.12);
+}
+
+/* ---------- Cards & metrics ---------- */
 .metric-card {
-    background: linear-gradient(135deg, #1E3A5F 0%, #0F172A 100%);
-    border-radius: 16px;
-    padding: 1.25rem;
+    background: linear-gradient(135deg, var(--pc-navy-light) 0%, var(--pc-navy) 100%);
+    border-radius: var(--pc-radius);
+    padding: 1.4rem;
     color: white;
     text-align: center;
+    box-shadow: var(--pc-shadow);
 }
-.metric-value { font-size: 2rem; font-weight: 700; }
+.metric-value { font-size: 2.1rem; font-weight: 800; }
 
 .price-card {
-    background: linear-gradient(135deg, #2DD4BF 0%, #0F766E 100%);
+    background: linear-gradient(135deg, var(--pc-teal) 0%, var(--pc-teal-dark) 100%);
     border-radius: 20px;
     padding: 2rem;
     color: white;
     text-align: center;
+    box-shadow: var(--pc-shadow-hover);
 }
 .price-value { font-size: 3rem; font-weight: 800; }
 
 .card {
     background: white;
-    border-radius: 16px;
-    padding: 1rem;
+    border-radius: var(--pc-radius);
+    padding: 1.25rem;
     margin-bottom: 1rem;
-    border: 1px solid #e2e8f0;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    border: 1px solid var(--pc-border);
+    box-shadow: var(--pc-shadow);
+    transition: box-shadow 0.2s ease;
 }
+.card:hover { box-shadow: var(--pc-shadow-hover); }
+
 .internal-card {
-    background: #fef3c7;
-    border-radius: 16px;
-    padding: 1rem;
-    border-left: 4px solid #f59e0b;
+    background: var(--pc-amber-light);
+    border-radius: var(--pc-radius);
+    padding: 1.1rem;
+    border-left: 4px solid var(--pc-amber);
 }
 .worker-card {
     background: #f0fdf4;
-    border-radius: 16px;
-    padding: 1rem;
+    border-radius: var(--pc-radius);
+    padding: 1.1rem;
     border: 1px solid #bbf7d0;
 }
-.pricing-tier-low { background: #fef3c7; border-radius: 16px; padding: 1rem; text-align: center; }
-.pricing-tier-fair { background: #d1fae5; border-radius: 16px; padding: 1rem; text-align: center; }
-.pricing-tier-high { background: #ede9fe; border-radius: 16px; padding: 1rem; text-align: center; }
 
+/* Pricing tiers — unified look */
+.pricing-tier-low, .pricing-tier-fair, .pricing-tier-high {
+    border-radius: var(--pc-radius);
+    padding: 1.25rem;
+    text-align: center;
+    box-shadow: var(--pc-shadow);
+    transition: transform 0.18s ease;
+}
+.pricing-tier-low:hover, .pricing-tier-fair:hover, .pricing-tier-high:hover {
+    transform: translateY(-3px);
+}
+.pricing-tier-low { background: var(--pc-amber-light); }
+.pricing-tier-fair { background: #d1fae5; }
+.pricing-tier-high { background: #ede9fe; }
+
+/* ---------- Buttons ---------- */
 .stButton button {
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 8px;
-    font-weight: 500;
-    border-radius: 12px;
-    transition: all 0.2s ease;
+    font-weight: 600;
+    border-radius: var(--pc-radius-sm);
+    transition: all 0.18s ease;
+    border: 1px solid transparent;
 }
 .stButton button:hover {
     transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    box-shadow: var(--pc-shadow-hover);
 }
-.css-1l02z5j button, .css-1l02z5j a {
-    justify-content: flex-start !important;
-    text-align: left !important;
-    padding: 12px 16px !important;
-    border-radius: 12px !important;
-    margin: 4px 0 !important;
-}
-.css-1l02z5j button i, .css-1l02z5j a i {
-    width: 24px;
-    margin-right: 12px;
-    text-align: center;
-    font-size: 1.1rem;
+/* Primary (form submit / type="primary") buttons get the brand gradient */
+button[kind="primary"], .stFormSubmitButton button[kind="primary"] {
+    background: linear-gradient(135deg, var(--pc-green) 0%, var(--pc-green-dark) 100%) !important;
+    color: white !important;
+    border: none !important;
 }
 
-/* Notification badge */
+/* ---------- Inputs ---------- */
+.stTextInput input, .stNumberInput input, .stTextArea textarea, .stSelectbox > div {
+    border-radius: var(--pc-radius-sm) !important;
+    border: 1px solid var(--pc-border) !important;
+}
+.stTextInput input:focus, .stNumberInput input:focus, .stTextArea textarea:focus {
+    border-color: var(--pc-teal) !important;
+    box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.15) !important;
+}
+
+/* ---------- Tabs ---------- */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 4px;
+    border-bottom: 2px solid var(--pc-border);
+}
+.stTabs [data-baseweb="tab"] {
+    border-radius: var(--pc-radius-sm) var(--pc-radius-sm) 0 0;
+    padding: 10px 18px;
+    font-weight: 600;
+}
+.stTabs [aria-selected="true"] {
+    background: var(--pc-bg-soft);
+    color: var(--pc-teal-dark) !important;
+}
+
+/* ---------- Metrics (st.metric) ---------- */
+[data-testid="stMetric"] {
+    background: white;
+    border: 1px solid var(--pc-border);
+    border-radius: var(--pc-radius);
+    padding: 0.9rem 1rem;
+    box-shadow: var(--pc-shadow);
+}
+[data-testid="stMetricLabel"] { font-weight: 600; color: #64748b; }
+[data-testid="stMetricValue"] { color: var(--pc-navy); font-weight: 800; }
+
+/* ---------- Expanders ---------- */
+.streamlit-expanderHeader {
+    border-radius: var(--pc-radius-sm) !important;
+    font-weight: 600 !important;
+    background: var(--pc-bg-soft) !important;
+}
+
+/* ---------- Dataframes ---------- */
+[data-testid="stDataFrame"] {
+    border-radius: var(--pc-radius-sm);
+    overflow: hidden;
+    border: 1px solid var(--pc-border);
+}
+
+/* ---------- Notification badge ---------- */
 .notification-badge {
-    background-color: #ef4444;
+    background-color: var(--pc-red);
     color: white;
     border-radius: 50%;
     padding: 2px 6px;
@@ -229,16 +354,25 @@ st.markdown("""
     margin-left: 5px;
 }
 
-/* Timeline styling */
+/* ---------- Timeline ---------- */
 .timeline-item {
-    border-left: 3px solid #10b981;
+    border-left: 3px solid var(--pc-green);
     padding-left: 15px;
     margin-bottom: 15px;
 }
 
-.status-approved { color: #10b981; font-weight: bold; }
-.status-pending { color: #f59e0b; font-weight: bold; }
-.status-rejected { color: #ef4444; font-weight: bold; }
+.status-approved { color: var(--pc-green); font-weight: 700; }
+.status-pending { color: var(--pc-amber); font-weight: 700; }
+.status-rejected { color: var(--pc-red); font-weight: 700; }
+
+/* ---------- Login page polish ---------- */
+.stForm {
+    background: white;
+    border-radius: var(--pc-radius);
+    padding: 1.5rem;
+    border: 1px solid var(--pc-border);
+    box-shadow: var(--pc-shadow);
+}
 </style>
 """, unsafe_allow_html=True)
 
