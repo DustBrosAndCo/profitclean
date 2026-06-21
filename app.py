@@ -845,6 +845,11 @@ section[data-testid="stSidebar"] .stButton button:hover {
     border-color: var(--pc-teal) !important;
     transform: translateX(3px);
 }
+section[data-testid="stSidebar"] .stButton button:active {
+    background: rgba(45, 212, 191, 0.32) !important;
+    transform: translateX(3px) scale(0.97);
+    transition: all 0.05s ease !important;
+}
 section[data-testid="stSidebar"] hr {
     border-color: rgba(255,255,255,0.12);
 }
@@ -924,11 +929,21 @@ section[data-testid="stSidebar"] hr {
     transform: translateY(-1px);
     box-shadow: var(--pc-shadow-hover);
 }
+/* Instant press feedback on every button -- a quick scale-down + inset shadow
+   so clicking feels acknowledged immediately, before the rerun even starts. */
+.stButton button:active {
+    transform: scale(0.96) !important;
+    box-shadow: inset 0 2px 5px rgba(0,0,0,0.15) !important;
+    transition: all 0.05s ease !important;
+}
 /* Primary (form submit / type="primary") buttons get the brand gradient */
 button[kind="primary"], .stFormSubmitButton button[kind="primary"] {
     background: linear-gradient(135deg, var(--pc-green) 0%, var(--pc-green-dark) 100%) !important;
     color: white !important;
     border: none !important;
+}
+button[kind="primary"]:active, .stFormSubmitButton button[kind="primary"]:active {
+    background: linear-gradient(135deg, var(--pc-green-dark) 0%, #065f46 100%) !important;
 }
 
 /* ---------- Inputs ---------- */
