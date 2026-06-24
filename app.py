@@ -7442,7 +7442,7 @@ def admin_companies_page():
                                 hashed, salt = hash_password(password_reset)
                                 conn = sqlite3.connect(DB_PATH)
                                 c = conn.cursor()
-                                c.execute("UPDATE users SET password_hash = ?, salt = ? WHERE id = ?", (hashed, salt, selected_user))
+                                c.execute("UPDATE users SET password_hash = ?, salt = ?, login_attempts = 0, locked_until = NULL WHERE id = ?", (hashed, salt, selected_user))
                                 conn.commit()
                                 conn.close()
                                 log_audit(current_user['user_id'], "reset_password", f"Reset password for user {selected_user}")
