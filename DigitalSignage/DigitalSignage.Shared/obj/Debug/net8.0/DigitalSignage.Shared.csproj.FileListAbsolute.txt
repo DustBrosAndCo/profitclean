@@ -1,0 +1,12 @@
+D:\DBAPP\DigitalSignage\DigitalSignage.Shared\bin\Debug\net8.0\DigitalSignage.Shared.deps.json
+D:\DBAPP\DigitalSignage\DigitalSignage.Shared\bin\Debug\net8.0\DigitalSignage.Shared.dll
+D:\DBAPP\DigitalSignage\DigitalSignage.Shared\bin\Debug\net8.0\DigitalSignage.Shared.pdb
+D:\DBAPP\DigitalSignage\DigitalSignage.Shared\obj\Debug\net8.0\DigitalSignage.Shared.GeneratedMSBuildEditorConfig.editorconfig
+D:\DBAPP\DigitalSignage\DigitalSignage.Shared\obj\Debug\net8.0\DigitalSignage.Shared.AssemblyInfoInputs.cache
+D:\DBAPP\DigitalSignage\DigitalSignage.Shared\obj\Debug\net8.0\DigitalSignage.Shared.AssemblyInfo.cs
+D:\DBAPP\DigitalSignage\DigitalSignage.Shared\obj\Debug\net8.0\DigitalSignage.Shared.csproj.CoreCompileInputs.cache
+D:\DBAPP\DigitalSignage\DigitalSignage.Shared\obj\Debug\net8.0\DigitalSignage.Shared.sourcelink.json
+D:\DBAPP\DigitalSignage\DigitalSignage.Shared\obj\Debug\net8.0\DigitalSignage.Shared.dll
+D:\DBAPP\DigitalSignage\DigitalSignage.Shared\obj\Debug\net8.0\refint\DigitalSignage.Shared.dll
+D:\DBAPP\DigitalSignage\DigitalSignage.Shared\obj\Debug\net8.0\DigitalSignage.Shared.pdb
+D:\DBAPP\DigitalSignage\DigitalSignage.Shared\obj\Debug\net8.0\ref\DigitalSignage.Shared.dll

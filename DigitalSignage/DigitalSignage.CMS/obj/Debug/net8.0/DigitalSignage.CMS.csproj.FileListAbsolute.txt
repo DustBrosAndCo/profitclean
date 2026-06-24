@@ -1,0 +1,9 @@
+D:\DBAPP\DigitalSignage\DigitalSignage.CMS\obj\Debug\net8.0\DigitalSignage.CMS.csproj.AssemblyReference.cache
+D:\DBAPP\DigitalSignage\DigitalSignage.CMS\obj\Debug\net8.0\DigitalSignage.CMS.GeneratedMSBuildEditorConfig.editorconfig
+D:\DBAPP\DigitalSignage\DigitalSignage.CMS\obj\Debug\net8.0\DigitalSignage.CMS.AssemblyInfoInputs.cache
+D:\DBAPP\DigitalSignage\DigitalSignage.CMS\obj\Debug\net8.0\DigitalSignage.CMS.AssemblyInfo.cs
+D:\DBAPP\DigitalSignage\DigitalSignage.CMS\obj\Debug\net8.0\DigitalSignage.CMS.csproj.CoreCompileInputs.cache
+D:\DBAPP\DigitalSignage\DigitalSignage.CMS\obj\Debug\net8.0\DigitalSignage.CMS.MvcApplicationPartsAssemblyInfo.cache
+D:\DBAPP\DigitalSignage\DigitalSignage.CMS\obj\Debug\net8.0\DigitalSignage.CMS.RazorAssemblyInfo.cache
+D:\DBAPP\DigitalSignage\DigitalSignage.CMS\obj\Debug\net8.0\DigitalSignage.CMS.RazorAssemblyInfo.cs
+D:\DBAPP\DigitalSignage\DigitalSignage.CMS\obj\Debug\net8.0\DigitalSignage.CMS.sourcelink.json
