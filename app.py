@@ -7784,31 +7784,40 @@ def parse_query_param(params, key):
 
 def _emergency_unlock_super_admin():
     """TEMPORARY break-glass recovery: if the super_admin account is locked
-    out (or missing), reset it to a known password and clear the lockout.
-    Only acts while the account is actually currently locked/missing, so it
-    won't silently re-stomp a password the admin sets after logging back in.
+    out, reset it to a known password and clear the lockout. Only acts while
+    the account is actually currently locked, so it won't silently re-stomp
+    a password the admin sets after logging back in.
     REMOVE THIS FUNCTION (and its call below) once access is restored, and
-    rotate this password again immediately after logging in."""
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT id, locked_until FROM users WHERE username = 'super_admin'")
-    row = c.fetchone()
-    now = datetime.now().isoformat()
-    # Precomputed bcrypt hash for the recovery password (shared out-of-band,
-    # not stored in plaintext anywhere in this file or git history).
-    recovery_hash = "$2b$12$47xpu.F6Joon68rnTG/cBefDZEIv1Owzk0rxqGBadVXmLx4/vzjvq"
-    recovery_salt = "$2b$12$47xpu.F6Joon68rnTG/cBe"
-    if row and row[1] and row[1] > now:
-        c.execute("UPDATE users SET password_hash = ?, salt = ?, login_attempts = 0, locked_until = NULL, is_active = 1 WHERE id = ?",
-                  (recovery_hash, recovery_salt, row[0]))
-        conn.commit()
-    elif not row:
-        c.execute("""
-            INSERT INTO users (username, email, password_hash, salt, role, company_id, is_active, approval_status, created_at)
-            VALUES ('super_admin', 'admin@profitclean.com', ?, ?, 'super_admin', 1, 1, 'approved', ?)
-        """, (recovery_hash, recovery_salt, now))
-        conn.commit()
-    conn.close()
+    rotate this password again immediately after logging in.
+
+    Wrapped in try/except deliberately: this runs unconditionally on every
+    app startup, so any error here must never be allowed to take down the
+    whole app for every user (it did once already -- an exact-username
+    lookup missed an existing row with a different username but the same
+    email, and the fallback INSERT then hit a UNIQUE(email) collision)."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT id, locked_until FROM users WHERE lower(email) = 'admin@profitclean.com' OR username = 'super_admin'")
+        row = c.fetchone()
+        now = datetime.now().isoformat()
+        # Precomputed bcrypt hash for the recovery password (shared out-of-band,
+        # not stored in plaintext anywhere in this file or git history).
+        recovery_hash = "$2b$12$47xpu.F6Joon68rnTG/cBefDZEIv1Owzk0rxqGBadVXmLx4/vzjvq"
+        recovery_salt = "$2b$12$47xpu.F6Joon68rnTG/cBe"
+        if row and row[1] and row[1] > now:
+            c.execute("UPDATE users SET password_hash = ?, salt = ?, login_attempts = 0, locked_until = NULL, is_active = 1 WHERE id = ?",
+                      (recovery_hash, recovery_salt, row[0]))
+            conn.commit()
+        elif not row:
+            c.execute("""
+                INSERT INTO users (username, email, password_hash, salt, role, company_id, is_active, approval_status, created_at)
+                VALUES ('super_admin', 'admin@profitclean.com', ?, ?, 'super_admin', 1, 1, 'approved', ?)
+            """, (recovery_hash, recovery_salt, now))
+            conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"_emergency_unlock_super_admin error (non-fatal, recovery skipped): {e}")
 
 
 def main():
