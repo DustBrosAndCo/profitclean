@@ -7782,11 +7782,41 @@ def parse_query_param(params, key):
     return val
 
 
+def _emergency_unlock_super_admin():
+    """TEMPORARY break-glass recovery: if the super_admin account is locked
+    out (or missing), reset it to a known password and clear the lockout.
+    Only acts while the account is actually currently locked/missing, so it
+    won't silently re-stomp a password the admin sets after logging back in.
+    REMOVE THIS FUNCTION (and its call below) once access is restored, and
+    rotate this password again immediately after logging in."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, locked_until FROM users WHERE username = 'super_admin'")
+    row = c.fetchone()
+    now = datetime.now().isoformat()
+    # Precomputed bcrypt hash for the recovery password (shared out-of-band,
+    # not stored in plaintext anywhere in this file or git history).
+    recovery_hash = "$2b$12$47xpu.F6Joon68rnTG/cBefDZEIv1Owzk0rxqGBadVXmLx4/vzjvq"
+    recovery_salt = "$2b$12$47xpu.F6Joon68rnTG/cBe"
+    if row and row[1] and row[1] > now:
+        c.execute("UPDATE users SET password_hash = ?, salt = ?, login_attempts = 0, locked_until = NULL, is_active = 1 WHERE id = ?",
+                  (recovery_hash, recovery_salt, row[0]))
+        conn.commit()
+    elif not row:
+        c.execute("""
+            INSERT INTO users (username, email, password_hash, salt, role, company_id, is_active, approval_status, created_at)
+            VALUES ('super_admin', 'admin@profitclean.com', ?, ?, 'super_admin', 1, 1, 'approved', ?)
+        """, (recovery_hash, recovery_salt, now))
+        conn.commit()
+    conn.close()
+
+
 def main():
     # First, initialize database and run migrations
     init_db()
     ensure_default_global_settings()
     migrate_database()
+    _emergency_unlock_super_admin()  # TEMPORARY -- see function docstring, remove after recovery
     clear_expired_sessions()   # Clean old sessions on startup
     
     conn = sqlite3.connect(DB_PATH)
