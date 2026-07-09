@@ -1,3 +1,7 @@
+# Nested deployment checkout of the same repo -- must never be tracked as a
+# gitlink again (it was, historically, and pointed at itself).
+/profitclean/
+
 # Python
 __pycache__/
 *.py[cod]
