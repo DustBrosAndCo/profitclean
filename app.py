@@ -7861,7 +7861,10 @@ def main():
     conn.close()
 
     if company_count == 0:
-        setup_wizard()
+        if st.session_state.get("page") == "login":
+            login_page()
+        else:
+            setup_wizard()
     else:
         if "page" not in st.session_state:
             st.session_state.page = "login"
