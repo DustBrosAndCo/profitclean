@@ -24,6 +24,7 @@ from urllib.parse import urlencode
 from io import BytesIO
 import base64
 import hashlib
+import hmac
 from datetime import datetime, date, timedelta
 from encryption_manager import encryption
 from functools import wraps
@@ -43,7 +44,7 @@ from constants import (
     DB_PATH, MIN_PASSWORD_LENGTH, MAX_LOGIN_ATTEMPTS, ACCOUNT_LOCKOUT_MINUTES,
     SESSION_EXPIRY_DAYS, SALES_TAX_RATE, BACKUP_DIR, UPLOAD_DIR,
     AVAILABLE_INTEGRATIONS, FLORIDA_CITIES, PROPERTY_TYPES, FREQUENCIES,
-    HOLIDAY_RATES, KNOWN_TOLLS,
+    HOLIDAY_RATES, KNOWN_TOLLS, MAX_RESET_CODE_ATTEMPTS,
 )
 from enums import UserRole, TicketStatus, TicketPriority, EstimateStatus, JobStatus, EmailContext
 from i18n import TRANSLATIONS, get_user_language, t, language_selector
@@ -1438,25 +1439,36 @@ def reset_password_with_2fa(token, twofa_code, new_password):
     
     # Verify token
     c.execute("""
-        SELECT user_id, expires_at, verification_code, used 
-        FROM password_reset_tokens 
+        SELECT user_id, expires_at, verification_code, used, attempts
+        FROM password_reset_tokens
         WHERE token = ? AND used = 0
     """, (token,))
     token_data = c.fetchone()
-    
+
     if not token_data:
         conn.close()
         return False, "Invalid or expired reset token."
-    
-    user_id, expires_at, stored_code, used = token_data
-    
+
+    user_id, expires_at, stored_code, used, attempts = token_data
+
     # Check expiration
     if datetime.fromisoformat(expires_at) < datetime.now():
         conn.close()
         return False, "Reset link has expired. Please request a new one."
-    
-    # Verify 2FA code
-    if stored_code and stored_code != twofa_code:
+
+    # Throttle verification attempts so a stolen/guessed token can't be
+    # brute-forced against all 1,000,000 possible 6-digit codes.
+    if (attempts or 0) >= MAX_RESET_CODE_ATTEMPTS:
+        c.execute("UPDATE password_reset_tokens SET used = 1 WHERE token = ?", (token,))
+        conn.commit()
+        conn.close()
+        log_auth_event(user_id, None, "password_reset", "failure", error_message="Too many verification attempts")
+        return False, "Too many attempts. Please request a new reset link."
+
+    # Verify 2FA code (constant-time compare to avoid a timing side-channel)
+    if stored_code and not hmac.compare_digest(stored_code, twofa_code or ""):
+        c.execute("UPDATE password_reset_tokens SET attempts = attempts + 1 WHERE token = ?", (token,))
+        conn.commit()
         conn.close()
         log_auth_event(user_id, None, "password_reset", "failure", error_message="Invalid 2FA verification code")
         return False, "Invalid 2FA verification code."
@@ -2690,16 +2702,6 @@ def schedule_job(client_id, client_name, client_email, estimate_id, worker_id, d
     
     return job_id
 
-def update_job_status(job_id, status):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    if status == "completed":
-        c.execute("UPDATE scheduled_jobs SET status = ?, completed_at = ? WHERE id = ?", (status, datetime.now().isoformat(), job_id))
-    else:
-        c.execute("UPDATE scheduled_jobs SET status = ? WHERE id = ?", (status, job_id))
-    conn.commit()
-    conn.close()
-
 def get_scheduled_jobs(date_filter=None, status_filter=None):
     company_id = get_current_user_company()
     uid = st.session_state.user['user_id']
@@ -3268,11 +3270,16 @@ def edit_profile_page():
                 params.append(uid)
                 conn = sqlite3.connect(DB_PATH)
                 c = conn.cursor()
-                c.execute(f"UPDATE users SET {', '.join(updates)} WHERE id = ?", params)
-                conn.commit()
-                conn.close()
-                st.success(t("profile_saved"))
-                st.rerun()
+                try:
+                    c.execute(f"UPDATE users SET {', '.join(updates)} WHERE id = ?", params)
+                    conn.commit()
+                    st.success(t("profile_saved"))
+                    st.rerun()
+                except sqlite3.IntegrityError:
+                    conn.rollback()
+                    st.error("That username or email is already in use. Please choose another.")
+                finally:
+                    conn.close()
 
     st.markdown("---")
     st.markdown(t("profile_language"))

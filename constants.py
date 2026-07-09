@@ -11,6 +11,7 @@ MAX_LOGIN_ATTEMPTS = 5
 ACCOUNT_LOCKOUT_MINUTES = 30
 SESSION_EXPIRY_DAYS = 7
 SALES_TAX_RATE = 0.06
+MAX_RESET_CODE_ATTEMPTS = 5
 
 BACKUP_DIR = os.path.join(os.path.expanduser("~"), "ProfitClean_Backups")
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")

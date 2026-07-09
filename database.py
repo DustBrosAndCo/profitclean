@@ -695,6 +695,7 @@ def init_db():
         user_id INTEGER NOT NULL,
         token TEXT NOT NULL UNIQUE,
         verification_code TEXT,
+        attempts INTEGER DEFAULT 0,
         expires_at DATETIME NOT NULL,
         used BOOLEAN DEFAULT 0,
         created_at DATETIME,
@@ -962,6 +963,20 @@ def migrate_database():
         try:
             c.execute("ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'en'")
             print("Added language column to users")
+        except sqlite3.OperationalError:
+            pass
+    conn.commit()
+    conn.close()
+
+    # Password reset attempt-throttling migration
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("PRAGMA table_info(password_reset_tokens)")
+    reset_token_columns = [col[1] for col in c.fetchall()]
+    if 'attempts' not in reset_token_columns:
+        try:
+            c.execute("ALTER TABLE password_reset_tokens ADD COLUMN attempts INTEGER DEFAULT 0")
+            print("Added attempts column to password_reset_tokens")
         except sqlite3.OperationalError:
             pass
     conn.commit()
