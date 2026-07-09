@@ -1414,11 +1414,14 @@ def request_password_reset(email):
         conn.commit()
         conn.close()
         
-        # Send 2FA code via email
+        # Send 2FA code and the reset token/link via email. The "Set New
+        # Password" form requires both the token and the code, so the token
+        # must reach the user here too, not just the code.
         send_2fa_code_email(user_email, twofa_code)
+        send_password_reset_email(user_email, reset_link)
 
-        log_auth_event(user_id, email, "password_reset_request", "success", error_message="2FA code sent")
-        return True, "A 2FA verification code has been sent to your email."
+        log_auth_event(user_id, email, "password_reset_request", "success", error_message="2FA code and reset link sent")
+        return True, "A reset link and 2FA verification code have been sent to your email."
     else:
         # Send reset link directly
         send_password_reset_email(user_email, reset_link)
@@ -2931,7 +2934,6 @@ def setup_wizard():
                         admin_email,
                         admin_username,
                         admin_password,
-                        bypass_duplicate_email=True,
                     )
                     if success:
                         conn = sqlite3.connect(DB_PATH)
@@ -2942,9 +2944,10 @@ def setup_wizard():
                             try:
                                 from encryption_manager import encryption
                                 encrypted_password = encryption.encrypt(smtp_password)
-                            except Exception:
-                                encrypted_password = smtp_password
-                        c.execute("UPDATE business_profile SET business_name=?, phone=?, hourly_wage=?, min_job_fee=?, home_city=?, per_mile_rate=?, sales_tax_rate=?, smtp_email=?, smtp_password=?, smtp_server=?, smtp_port=?, setup_complete=1 WHERE company_id=?", 
+                            except Exception as e:
+                                print(f"SMTP password encryption failed, not storing: {e}")
+                                st.warning("Could not securely save the SMTP password. Please re-enter it later from Settings.")
+                        c.execute("UPDATE business_profile SET business_name=?, phone=?, hourly_wage=?, min_job_fee=?, home_city=?, per_mile_rate=?, sales_tax_rate=?, smtp_email=?, smtp_password=?, smtp_server=?, smtp_port=?, setup_complete=1 WHERE company_id=?",
                                   (business_name, phone, hourly_wage, min_job_fee, home_city, 0.65, SALES_TAX_RATE, smtp_email, encrypted_password, smtp_server, smtp_port, result))
                         conn.commit()
                         
@@ -3152,7 +3155,6 @@ def create_account_page():
                         email,
                         name,
                         password,
-                        bypass_duplicate_email=True,
                     )
                     if success:
                         conn = sqlite3.connect(DB_PATH)
@@ -3565,16 +3567,28 @@ def debug_logs_page():
     
     st.markdown("### 🔍 Authentication Logs")
     st.caption("Troubleshoot login issues")
-    
+
     conn = sqlite3.connect(DB_PATH)
-    
-    # Get logs
-    logs_df = pd.read_sql_query("""
-        SELECT id, user_id, email, event_type, status, error_message, created_at
-        FROM auth_logs 
-        ORDER BY created_at DESC 
-        LIMIT 100
-    """, conn)
+
+    # Get logs. Non-super_admins only see logs for their own company's users --
+    # otherwise a tenant admin could see every other tenant's emails/login activity.
+    if st.session_state.user.get('role') == 'super_admin':
+        logs_df = pd.read_sql_query("""
+            SELECT id, user_id, email, event_type, status, error_message, created_at
+            FROM auth_logs
+            ORDER BY created_at DESC
+            LIMIT 100
+        """, conn)
+    else:
+        company_id = get_current_user_company()
+        logs_df = pd.read_sql_query("""
+            SELECT a.id, a.user_id, a.email, a.event_type, a.status, a.error_message, a.created_at
+            FROM auth_logs a
+            JOIN users u ON a.user_id = u.id
+            WHERE u.company_id = ?
+            ORDER BY a.created_at DESC
+            LIMIT 100
+        """, conn, params=(company_id,))
     conn.close()
     
     if logs_df.empty:
@@ -6611,8 +6625,9 @@ def settings_page():
                         try:
                             from encryption_manager import encryption
                             encrypted_password = encryption.encrypt(smtp_password)
-                        except Exception:
-                            encrypted_password = smtp_password
+                        except Exception as e:
+                            print(f"SMTP password encryption failed, not storing: {e}")
+                            st.warning("Could not securely save the SMTP password. Please re-enter it later from Settings.")
                     c.execute("UPDATE business_profile SET smtp_email=?, smtp_password=?, smtp_server=?, smtp_port=? WHERE company_id=?",
                               (smtp_email, encrypted_password, smtp_server, smtp_port, company_id))
                     conn.commit()
@@ -6712,9 +6727,10 @@ def settings_page():
                     try:
                         from encryption_manager import encryption
                         encrypted_password = encryption.encrypt(smtp_password)
-                    except Exception:
-                        encrypted_password = smtp_password
-                
+                    except Exception as e:
+                        print(f"SMTP password encryption failed, not storing: {e}")
+                        st.warning("Could not securely save the SMTP password. Please re-enter it later from Settings.")
+
                 c.execute("""
                     UPDATE business_profile 
                     SET business_name=?, phone=?, email=?, hourly_wage=?, min_job_fee=?, home_city=?, 
@@ -7078,10 +7094,19 @@ def terms_page():
 
 @require_role(['super_admin', 'support_staff'])
 def admin_companies_page():
+    if 'user' not in st.session_state or not st.session_state.user:
+        st.warning("🔒 Please log in")
+        st.session_state.page = "login"
+        st.rerun()
+        return
+    if st.session_state.user.get('role') not in ['super_admin', 'support_staff']:
+        st.error("Access denied")
+        return
+
     if st.button("← Back to Dashboard"):
         st.session_state.page = "dashboard"
         st.rerun()
-    
+
     current_user = get_effective_user()
     st.markdown("### 🏢 Super Admin Dashboard")
     if st.session_state.get('original_user'):
@@ -7808,50 +7833,11 @@ def parse_query_param(params, key):
     return val
 
 
-def _emergency_unlock_super_admin():
-    """TEMPORARY break-glass recovery: if the super_admin account is locked
-    out, reset it to a known password and clear the lockout. Only acts while
-    the account is actually currently locked, so it won't silently re-stomp
-    a password the admin sets after logging back in.
-    REMOVE THIS FUNCTION (and its call below) once access is restored, and
-    rotate this password again immediately after logging in.
-
-    Wrapped in try/except deliberately: this runs unconditionally on every
-    app startup, so any error here must never be allowed to take down the
-    whole app for every user (it did once already -- an exact-username
-    lookup missed an existing row with a different username but the same
-    email, and the fallback INSERT then hit a UNIQUE(email) collision)."""
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("SELECT id, locked_until FROM users WHERE lower(email) = 'admin@profitclean.com' OR username = 'super_admin'")
-        row = c.fetchone()
-        now = datetime.now().isoformat()
-        # Precomputed bcrypt hash for the recovery password (shared out-of-band,
-        # not stored in plaintext anywhere in this file or git history).
-        recovery_hash = "$2b$12$47xpu.F6Joon68rnTG/cBefDZEIv1Owzk0rxqGBadVXmLx4/vzjvq"
-        recovery_salt = "$2b$12$47xpu.F6Joon68rnTG/cBe"
-        if row and row[1] and row[1] > now:
-            c.execute("UPDATE users SET password_hash = ?, salt = ?, login_attempts = 0, locked_until = NULL, is_active = 1 WHERE id = ?",
-                      (recovery_hash, recovery_salt, row[0]))
-            conn.commit()
-        elif not row:
-            c.execute("""
-                INSERT INTO users (username, email, password_hash, salt, role, company_id, is_active, approval_status, created_at)
-                VALUES ('super_admin', 'admin@profitclean.com', ?, ?, 'super_admin', 1, 1, 'approved', ?)
-            """, (recovery_hash, recovery_salt, now))
-            conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"_emergency_unlock_super_admin error (non-fatal, recovery skipped): {e}")
-
-
 def main():
     # First, initialize database and run migrations
     init_db()
     ensure_default_global_settings()
     migrate_database()
-    _emergency_unlock_super_admin()  # TEMPORARY -- see function docstring, remove after recovery
     clear_expired_sessions()   # Clean old sessions on startup
     
     conn = sqlite3.connect(DB_PATH)
