@@ -2918,11 +2918,7 @@ def setup_wizard():
             smtp_password = st.text_input("SMTP Password", type="password")
             smtp_server = st.text_input("SMTP Server (optional)", placeholder="smtp.gmail.com")
             smtp_port = st.number_input("SMTP Port", value=587)
-            bypass_duplicate_email = st.checkbox(
-                "Bypass duplicate email check (use if needed)",
-                value=False,
-                help="Continue setup even if the admin email already exists in the database.",
-            )
+            st.caption("Need to stop here and sign in instead?")
             if st.form_submit_button("Create My Company"):
                 if admin_password != confirm_password:
                     st.error("Passwords do not match")
@@ -2935,7 +2931,7 @@ def setup_wizard():
                         admin_email,
                         admin_username,
                         admin_password,
-                        bypass_duplicate_email=bypass_duplicate_email,
+                        bypass_duplicate_email=True,
                     )
                     if success:
                         conn = sqlite3.connect(DB_PATH)
@@ -2969,6 +2965,10 @@ def setup_wizard():
         if st.button("Go to Login"):
             st.session_state.page = "login"
             st.rerun()
+
+    if st.button("Skip setup and go to login"):
+        st.session_state.page = "login"
+        st.rerun()
 
 def login_page():
     lang_choice = language_selector(key_suffix="login")
@@ -3140,11 +3140,6 @@ def create_account_page():
             home_city = st.selectbox("Home Base City", FLORIDA_CITIES)
             hourly_wage = st.number_input("Base Hourly Wage", min_value=10.0, value=15.0, step=0.5)
             min_job_fee = st.number_input("Minimum Job Fee", min_value=50, value=150, step=25)
-            bypass_duplicate_email = st.checkbox(
-                "Bypass duplicate email check (use if needed)",
-                value=False,
-                help="Continue setup even if the email already exists in the database.",
-            )
             if st.form_submit_button("Create My Company"):
                 if password != confirm:
                     st.error("Passwords do not match")
@@ -3157,7 +3152,7 @@ def create_account_page():
                         email,
                         name,
                         password,
-                        bypass_duplicate_email=bypass_duplicate_email,
+                        bypass_duplicate_email=True,
                     )
                     if success:
                         conn = sqlite3.connect(DB_PATH)
