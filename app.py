@@ -7840,7 +7840,58 @@ def parse_query_param(params, key):
     return val
 
 
+def _run_full_reset_if_requested():
+    """One-time production reset, explicitly triggered by an owner-set
+    Streamlit secret (CONFIRM_FULL_RESET) that is never committed to git.
+    Wipes the entire database and creates a single fresh super_admin
+    account. Self-disables via a marker row in global_settings, so it
+    cannot re-run on a later restart even if the secret is left in place.
+    REMOVE THIS FUNCTION AND ITS CALL below once the reset is confirmed
+    and the CONFIRM_FULL_RESET secret has been cleared from Streamlit
+    Cloud settings.
+    """
+    try:
+        confirm = st.secrets.get("CONFIRM_FULL_RESET")
+    except Exception:
+        confirm = None
+    if confirm != "WIPE-PROFITCLEAN-NOW":
+        return
+
+    if os.path.exists(DB_PATH):
+        already_done = False
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='global_settings'")
+            if c.fetchone():
+                c.execute("SELECT 1 FROM global_settings WHERE name = 'full_reset_completed'")
+                already_done = c.fetchone() is not None
+            conn.close()
+        except Exception:
+            already_done = False
+        if already_done:
+            return
+        os.remove(DB_PATH)
+
+    init_db()
+    success, result = create_company(
+        "Dust Bros and Co", "dustbros", "dustbrosco@gmail.com",
+        "Elvis Gonzalez", "1qaz@WSX3edc$RFV",
+    )
+    if not success:
+        return
+
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE users SET role = 'super_admin' WHERE company_id = ?", (result,))
+    c.execute("INSERT INTO global_settings (name, value, updated_at) VALUES ('full_reset_completed', ?, ?)",
+              ("done", datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+
+
 def main():
+    _run_full_reset_if_requested()
     # First, initialize database and run migrations
     init_db()
     ensure_default_global_settings()
