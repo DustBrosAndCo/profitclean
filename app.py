@@ -1224,7 +1224,7 @@ def calendly_callback_page():
     calendly_oauth_page()
 
 
-def create_company(company_name, subdomain, owner_email, owner_username, owner_password):
+def create_company(company_name, subdomain, owner_email, owner_username, owner_password, bypass_duplicate_email=False):
     owner_email = normalize_email(owner_email)
     owner_username = owner_username.strip()
     conn = sqlite3.connect(DB_PATH)
@@ -1233,10 +1233,15 @@ def create_company(company_name, subdomain, owner_email, owner_username, owner_p
     if c.fetchone():
         conn.close()
         return False, "Subdomain already taken"
+
+    duplicate_email = False
     c.execute("SELECT id FROM users WHERE lower(email) = ?", (owner_email,))
     if c.fetchone():
-        conn.close()
-        return False, "Email already registered"
+        duplicate_email = True
+        if not bypass_duplicate_email:
+            conn.close()
+            return False, "Email already registered"
+
     c.execute("INSERT INTO companies (name, subdomain, created_at, is_active) VALUES (?,?,?,?)",
               (company_name, subdomain, datetime.now().isoformat(), 1))
     company_id = c.lastrowid
@@ -1245,10 +1250,12 @@ def create_company(company_name, subdomain, owner_email, owner_username, owner_p
     # Use configuration value for super admin email instead of hardcoded
     super_admin_email = os.getenv('SUPER_ADMIN_EMAIL', 'admin@profitclean.com')
     owner_role = "super_admin" if owner_email == super_admin_email else "admin"
+
+    fallback_email = f"{owner_email.split('@')[0]}+{company_id}@{owner_email.split('@', 1)[1]}" if duplicate_email else owner_email
     c.execute("""
         INSERT INTO users (username, email, password_hash, salt, role, company_id, can_manage_workers, is_active, approval_status, created_at, hire_date, invite_code)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (owner_username, owner_email, hashed, salt, owner_role, company_id, 1, 1, "approved", datetime.now().isoformat(), datetime.now().isoformat(), invite_code))
+    """, (owner_username, fallback_email, hashed, salt, owner_role, company_id, 1, 1, "approved", datetime.now().isoformat(), datetime.now().isoformat(), invite_code))
     owner_id = c.lastrowid
     c.execute("UPDATE companies SET owner_id = ? WHERE id = ?", (owner_id, company_id))
     c.execute("INSERT INTO business_profile (company_id, business_name, phone, email, hourly_wage, profit_target, min_job_fee, home_city, per_mile_rate, sales_tax_rate, setup_complete) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -2911,13 +2918,25 @@ def setup_wizard():
             smtp_password = st.text_input("SMTP Password", type="password")
             smtp_server = st.text_input("SMTP Server (optional)", placeholder="smtp.gmail.com")
             smtp_port = st.number_input("SMTP Port", value=587)
+            bypass_duplicate_email = st.checkbox(
+                "Bypass duplicate email check (use if needed)",
+                value=False,
+                help="Continue setup even if the admin email already exists in the database.",
+            )
             if st.form_submit_button("Create My Company"):
                 if admin_password != confirm_password:
                     st.error("Passwords do not match")
                 elif not all([business_name, subdomain, admin_username, admin_email, admin_password]):
                     st.error("Please fill all required fields")
                 else:
-                    success, result = create_company(business_name, subdomain, admin_email, admin_username, admin_password)
+                    success, result = create_company(
+                        business_name,
+                        subdomain,
+                        admin_email,
+                        admin_username,
+                        admin_password,
+                        bypass_duplicate_email=bypass_duplicate_email,
+                    )
                     if success:
                         conn = sqlite3.connect(DB_PATH)
                         c = conn.cursor()
@@ -3121,13 +3140,25 @@ def create_account_page():
             home_city = st.selectbox("Home Base City", FLORIDA_CITIES)
             hourly_wage = st.number_input("Base Hourly Wage", min_value=10.0, value=15.0, step=0.5)
             min_job_fee = st.number_input("Minimum Job Fee", min_value=50, value=150, step=25)
+            bypass_duplicate_email = st.checkbox(
+                "Bypass duplicate email check (use if needed)",
+                value=False,
+                help="Continue setup even if the email already exists in the database.",
+            )
             if st.form_submit_button("Create My Company"):
                 if password != confirm:
                     st.error("Passwords do not match")
                 elif not all([name, email, password, business_name, subdomain, phone]):
                     st.error("All fields required")
                 else:
-                    success, result = create_company(business_name, subdomain, email, name, password)
+                    success, result = create_company(
+                        business_name,
+                        subdomain,
+                        email,
+                        name,
+                        password,
+                        bypass_duplicate_email=bypass_duplicate_email,
+                    )
                     if success:
                         conn = sqlite3.connect(DB_PATH)
                         c = conn.cursor()
