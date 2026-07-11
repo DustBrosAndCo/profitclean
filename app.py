@@ -7897,44 +7897,7 @@ def parse_query_param(params, key):
     return val
 
 
-def _run_full_wipe_if_requested():
-    """One-time production wipe, explicitly triggered by an owner-set
-    Streamlit secret (CONFIRM_WIPE_ONLY) that is never committed to git.
-    Deletes the database file entirely -- no account is recreated -- so
-    the app falls back to the empty-state setup wizard on the next load,
-    letting a human create the first company through the normal UI.
-
-    Self-disables via a marker FILE (not a DB row, since the DB itself
-    gets deleted) so it cannot wipe again on a later restart even if the
-    secret is left in place.
-
-    REMOVE THIS FUNCTION AND ITS CALL below once setup is confirmed
-    working and the CONFIRM_WIPE_ONLY secret has been cleared from
-    Streamlit Cloud settings.
-    """
-    marker_path = os.path.join(os.path.dirname(os.path.abspath(DB_PATH)), ".wipe_completed_marker")
-    if os.path.exists(marker_path):
-        return
-
-    try:
-        confirm = st.secrets.get("CONFIRM_WIPE_ONLY")
-    except Exception:
-        confirm = None
-    if confirm != "WIPE-PROFITCLEAN-EMPTY":
-        return
-
-    if os.path.exists(DB_PATH):
-        os.remove(DB_PATH)
-
-    try:
-        with open(marker_path, "w") as f:
-            f.write(datetime.now().isoformat())
-    except OSError:
-        pass
-
-
 def main():
-    _run_full_wipe_if_requested()
     # First, initialize database and run migrations
     init_db()
     ensure_default_global_settings()
