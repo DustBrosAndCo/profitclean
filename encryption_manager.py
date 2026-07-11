@@ -2,15 +2,17 @@ import os
 import base64
 from cryptography.fernet import Fernet
 import streamlit as st
+from constants import DATA_DIR
 
 
 class EncryptionManager:
     """Handle encryption of sensitive integration tokens"""
 
-    # Store the key file alongside this module, not relative to the process's
-    # current working directory, so it's found consistently regardless of
-    # where the app is launched from.
-    KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".encryption_key")
+    # Store the key file in DATA_DIR (a persistent volume in production, see
+    # constants.py) rather than alongside this module -- the container's own
+    # filesystem doesn't survive restarts, and losing this key permanently
+    # orphans every previously-encrypted SMTP password / OAuth token.
+    KEY_FILE = os.path.join(DATA_DIR, ".encryption_key")
 
     def __init__(self):
         self.key = self._get_encryption_key()

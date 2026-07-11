@@ -1,6 +1,14 @@
 import os
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "profitclean.db")
+# All persistent state (database, uploads, backups, encryption key) lives
+# under DATA_DIR. Defaults to alongside the source code, matching the
+# original behavior for local dev. In production, set PROFITCLEAN_DATA_DIR
+# to a mounted persistent volume (e.g. Fly.io) so this survives restarts --
+# the container's own filesystem does not.
+DATA_DIR = os.environ.get("PROFITCLEAN_DATA_DIR", os.path.dirname(__file__))
+os.makedirs(DATA_DIR, exist_ok=True)
+
+DB_PATH = os.path.join(DATA_DIR, "profitclean.db")
 
 # ============================================================
 # SECURITY CONFIGURATION
@@ -13,8 +21,8 @@ SESSION_EXPIRY_DAYS = 7
 SALES_TAX_RATE = 0.06
 MAX_RESET_CODE_ATTEMPTS = 5
 
-BACKUP_DIR = os.path.join(os.path.expanduser("~"), "ProfitClean_Backups")
-UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
+BACKUP_DIR = os.path.join(DATA_DIR, "ProfitClean_Backups")
+UPLOAD_DIR = os.path.join(DATA_DIR, "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(BACKUP_DIR, exist_ok=True)
 

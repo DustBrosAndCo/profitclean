@@ -8061,6 +8061,7 @@ def _run_platform_admin_setup_if_requested():
         confirm = st.secrets.get("CONFIRM_PLATFORM_ADMIN_SETUP")
     except Exception:
         confirm = None
+    confirm = confirm or os.environ.get("CONFIRM_PLATFORM_ADMIN_SETUP")
     if confirm != "SETUP-PLATFORM-ADMIN":
         return
 
