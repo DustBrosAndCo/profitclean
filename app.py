@@ -2988,18 +2988,6 @@ def login_page():
 
     st.markdown(f"# {t('login_title')}")
 
-    # Temporary diagnostic for the one-time production reset -- shows exactly
-    # what _run_full_reset_if_requested() did, since there's no server/log
-    # access available otherwise. Remove alongside that function.
-    _reset_marker_path, _ = _reset_marker_paths()
-    if os.path.exists(_reset_marker_path):
-        with st.expander("Setup diagnostic (remove after use)"):
-            try:
-                with open(_reset_marker_path) as f:
-                    st.code(f.read())
-            except OSError as e:
-                st.write(f"Could not read marker file: {e}")
-
     # If already logged in via session_state
     if st.session_state.get("user"):
         user = validate_session_token(st.session_state.get("session_token"))
@@ -7909,90 +7897,7 @@ def parse_query_param(params, key):
     return val
 
 
-def _reset_marker_paths():
-    base = os.path.dirname(os.path.abspath(DB_PATH))
-    return os.path.join(base, ".reset_v2_marker"), os.path.join(base, ".reset_v2_lock")
-
-
-def _run_full_reset_if_requested():
-    """One-time production reset, explicitly triggered by an owner-set
-    Streamlit secret (CONFIRM_FULL_RESET_V2) that is never committed to
-    git. Wipes the database and creates a single fresh super_admin
-    account (dustbrosco@gmail.com). Guarded by an atomic lock file
-    (O_CREAT|O_EXCL) so concurrent Streamlit reruns can't race the
-    wipe-and-recreate against each other, and self-disables via a
-    result marker file so it never repeats even if the secret is left
-    set. Writes a diagnostic result (success or the exact exception) to
-    that marker file, which login_page() surfaces in an expander -- the
-    only way to see what happened without shell/log access to the
-    container.
-
-    REMOVE THIS FUNCTION, ITS CALL BELOW, AND THE DIAGNOSTIC EXPANDER IN
-    login_page() once login is confirmed working.
-    """
-    marker_path, lock_path = _reset_marker_paths()
-    if os.path.exists(marker_path):
-        return
-
-    try:
-        confirm = st.secrets.get("CONFIRM_FULL_RESET_V2")
-    except Exception:
-        confirm = None
-    if confirm != "RESET-PROFITCLEAN-V2":
-        return
-
-    try:
-        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        os.close(fd)
-    except FileExistsError:
-        return  # another concurrent rerun is already handling this
-
-    lines = [f"Started at {datetime.now().isoformat()}"]
-    try:
-        if os.path.exists(DB_PATH):
-            os.remove(DB_PATH)
-            lines.append("Removed existing database file.")
-        else:
-            lines.append("No existing database file found.")
-
-        init_db()
-        lines.append("init_db() completed.")
-
-        success, result = create_company(
-            "Dust Bros and Co", "dustbros", "dustbrosco@gmail.com",
-            "Elvis Gonzalez", "1qaz@WSX3edc$RFV",
-            make_super_admin=True,
-        )
-        lines.append(f"create_company() -> success={success}, result={result}")
-
-        if success:
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            c.execute("SELECT password_hash, role FROM users WHERE company_id = ?", (result,))
-            row = c.fetchone()
-            conn.close()
-            if row:
-                lines.append(f"Created user role={row[1]}, password_hash_present={bool(row[0])}")
-                verified = verify_password("1qaz@WSX3edc$RFV", row[0])
-                lines.append(f"Self-check: verify_password('1qaz@WSX3edc$RFV', stored_hash) = {verified}")
-            else:
-                lines.append("WARNING: no user row found for the new company_id.")
-    except Exception as e:
-        lines.append(f"ERROR: {type(e).__name__}: {e}")
-    finally:
-        try:
-            with open(marker_path, "w") as f:
-                f.write("\n".join(lines))
-        except OSError:
-            pass
-        try:
-            os.remove(lock_path)
-        except OSError:
-            pass
-
-
 def main():
-    _run_full_reset_if_requested()
     # First, initialize database and run migrations
     init_db()
     ensure_default_global_settings()
