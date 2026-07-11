@@ -2988,6 +2988,19 @@ def login_page():
 
     st.markdown(f"# {t('login_title')}")
 
+    # Temporary diagnostic for the one-time platform-admin setup -- shows
+    # exactly what _run_platform_admin_setup_if_requested() did (including
+    # the generated password), since there's no server/log access available
+    # otherwise. Remove alongside that function.
+    _platform_admin_marker_path, _ = _platform_admin_marker_paths()
+    if os.path.exists(_platform_admin_marker_path):
+        with st.expander("Platform admin setup diagnostic (remove after use)"):
+            try:
+                with open(_platform_admin_marker_path) as f:
+                    st.code(f.read())
+            except OSError as e:
+                st.write(f"Could not read marker file: {e}")
+
     # If already logged in via session_state
     if st.session_state.get("user"):
         user = validate_session_token(st.session_state.get("session_token"))
@@ -3139,47 +3152,139 @@ def create_account_page():
                     else:
                         st.error("Invalid invite code")
     else:
-        with st.form("create_company"):
-            st.markdown("#### Your Account")
-            name = st.text_input("Full Name *")
-            email = st.text_input("Email *")
-            password = st.text_input("Password *", type="password")
-            confirm = st.text_input("Confirm Password *", type="password")
-            st.markdown("#### Your Company")
-            business_name = st.text_input("Company Name *")
-            subdomain = st.text_input("Subdomain *", help="This will be your unique URL: yourcompany.profitclean.com")
-            phone = st.text_input("Phone *")
-            home_city = st.selectbox("Home Base City", FLORIDA_CITIES)
-            hourly_wage = st.number_input("Base Hourly Wage", min_value=10.0, value=15.0, step=0.5)
-            min_job_fee = st.number_input("Minimum Job Fee", min_value=50, value=150, step=25)
-            if st.form_submit_button("Create My Company"):
-                if password != confirm:
-                    st.error("Passwords do not match")
-                elif not all([name, email, password, business_name, subdomain, phone]):
-                    st.error("All fields required")
-                else:
-                    success, result = create_company(
-                        business_name,
-                        subdomain,
-                        email,
-                        name,
-                        password,
-                    )
-                    if success:
-                        conn = sqlite3.connect(DB_PATH)
-                        c = conn.cursor()
-                        c.execute("UPDATE business_profile SET business_name=?, phone=?, hourly_wage=?, min_job_fee=?, home_city=?, per_mile_rate=?, sales_tax_rate=?, setup_complete=1 WHERE company_id=?", 
-                                  (business_name, phone, hourly_wage, min_job_fee, home_city, 0.65, SALES_TAX_RATE, result))
-                        conn.commit()
-                        conn.close()
-                        st.success("Company created successfully! Please log in.")
-                        st.session_state.page = "login"
-                        st.rerun()
-                    else:
-                        st.error(result)
+        render_start_company_wizard()
+
     if st.button("← Back to Login"):
+        st.session_state.pop("signup_wizard_step", None)
+        st.session_state.pop("signup_wizard_data", None)
         st.session_state.page = "login"
         st.rerun()
+
+
+def render_start_company_wizard():
+    """Guided, multi-step version of "Start my own cleaning company",
+    replacing what used to be a single dense form. Each step asks one
+    focused question so a first-time user isn't confronted with ten
+    fields at once, and can go back to fix something without losing the
+    rest of what they've entered.
+    """
+    step = st.session_state.get("signup_wizard_step", 1)
+    data = st.session_state.setdefault("signup_wizard_data", {})
+    total_steps = 4
+
+    st.progress((step - 1) / total_steps)
+    st.caption(f"Step {step} of {total_steps}")
+
+    if step == 1:
+        st.subheader("👋 Let's create your login")
+        st.caption("This is what you'll use to sign in to ProfitClean.")
+        name = st.text_input("Full Name *", data.get("name", ""), key="wiz_name")
+        email = st.text_input("Email *", data.get("email", ""), key="wiz_email")
+        password = st.text_input("Password *", type="password", key="wiz_password")
+        confirm = st.text_input("Confirm Password *", type="password", key="wiz_confirm")
+        st.caption("At least 8 characters, with an uppercase letter, a number, and a special character.")
+        if st.button("Next →", use_container_width=True, key="wiz_next_1"):
+            if not all([name, email, password, confirm]):
+                st.error("Please fill in all fields")
+            elif password != confirm:
+                st.error("Passwords do not match")
+            else:
+                valid, msg = validate_password_strength(password)
+                if not valid:
+                    st.error(msg)
+                else:
+                    data.update(name=name, email=email, password=password)
+                    st.session_state.signup_wizard_step = 2
+                    st.rerun()
+
+    elif step == 2:
+        st.subheader("🏢 Tell us about your business")
+        business_name = st.text_input("Company Name *", data.get("business_name", ""), key="wiz_business_name")
+        subdomain = st.text_input(
+            "Subdomain *", data.get("subdomain", ""), key="wiz_subdomain",
+            help="This will be your unique URL: yourcompany.profitclean.com",
+        )
+        phone = st.text_input("Phone *", data.get("phone", ""), key="wiz_phone")
+        default_city_index = FLORIDA_CITIES.index(data["home_city"]) if data.get("home_city") in FLORIDA_CITIES else 0
+        home_city = st.selectbox("Home Base City", FLORIDA_CITIES, index=default_city_index, key="wiz_home_city")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("← Back", use_container_width=True, key="wiz_back_2"):
+                st.session_state.signup_wizard_step = 1
+                st.rerun()
+        with col2:
+            if st.button("Next →", use_container_width=True, key="wiz_next_2"):
+                if not all([business_name, subdomain, phone]):
+                    st.error("Please fill in all fields")
+                else:
+                    data.update(business_name=business_name, subdomain=subdomain, phone=phone, home_city=home_city)
+                    st.session_state.signup_wizard_step = 3
+                    st.rerun()
+
+    elif step == 3:
+        st.subheader("💰 Set your starting prices")
+        st.caption("Just a starting point -- you can change these anytime in Settings.")
+        hourly_wage = st.number_input(
+            "Base Hourly Wage", min_value=10.0, value=float(data.get("hourly_wage", 15.0)), step=0.5, key="wiz_hourly_wage",
+            help="What you pay your team per hour, before overhead and profit.",
+        )
+        min_job_fee = st.number_input(
+            "Minimum Job Fee", min_value=50, value=int(data.get("min_job_fee", 150)), step=25, key="wiz_min_job_fee",
+            help="The lowest price you'll charge for any single job, no matter how small.",
+        )
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("← Back", use_container_width=True, key="wiz_back_3"):
+                st.session_state.signup_wizard_step = 2
+                st.rerun()
+        with col2:
+            if st.button("Next →", use_container_width=True, key="wiz_next_3"):
+                data.update(hourly_wage=hourly_wage, min_job_fee=min_job_fee)
+                st.session_state.signup_wizard_step = 4
+                st.rerun()
+
+    elif step == 4:
+        st.subheader("✅ Review & create your account")
+        st.markdown(f"""
+- **Name:** {data.get('name')}
+- **Email:** {data.get('email')}
+- **Company:** {data.get('business_name')}
+- **Subdomain:** {data.get('subdomain')}.profitclean.com
+- **Phone:** {data.get('phone')}
+- **Home City:** {data.get('home_city')}
+- **Base Hourly Wage:** ${data.get('hourly_wage', 0):.2f}
+- **Minimum Job Fee:** ${data.get('min_job_fee', 0):.2f}
+""")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("← Back", use_container_width=True, key="wiz_back_4"):
+                st.session_state.signup_wizard_step = 3
+                st.rerun()
+        with col2:
+            if st.button("Create My Account", use_container_width=True, key="wiz_create"):
+                success, result = create_company(
+                    data["business_name"],
+                    data["subdomain"],
+                    data["email"],
+                    data["name"],
+                    data["password"],
+                )
+                if success:
+                    conn = sqlite3.connect(DB_PATH)
+                    c = conn.cursor()
+                    c.execute(
+                        "UPDATE business_profile SET business_name=?, phone=?, hourly_wage=?, min_job_fee=?, home_city=?, per_mile_rate=?, sales_tax_rate=?, setup_complete=1 WHERE company_id=?",
+                        (data["business_name"], data["phone"], data["hourly_wage"], data["min_job_fee"], data["home_city"], 0.65, SALES_TAX_RATE, result),
+                    )
+                    conn.commit()
+                    conn.close()
+                    st.session_state.pop("signup_wizard_step", None)
+                    st.session_state.pop("signup_wizard_data", None)
+                    st.success("Account created! Please log in.")
+                    st.session_state.page = "login"
+                    st.rerun()
+                else:
+                    st.error(result)
 
 def setup_2fa_page():
     st.markdown("### 🔐 Set Up Two‑Factor Authentication")
@@ -7897,7 +8002,103 @@ def parse_query_param(params, key):
     return val
 
 
+def _platform_admin_marker_paths():
+    base = os.path.dirname(os.path.abspath(DB_PATH))
+    return os.path.join(base, ".platform_admin_marker"), os.path.join(base, ".platform_admin_lock")
+
+
+def _run_platform_admin_setup_if_requested():
+    """One-time production migration, explicitly triggered by an owner-set
+    Streamlit secret (CONFIRM_PLATFORM_ADMIN_SETUP) that is never
+    committed to git.
+
+    Removes the temporary bootstrap account/company
+    (dustbrosco@gmail.com / "Dust Bros and Co") created during initial
+    recovery, freeing that email and subdomain so the owner can
+    re-register it normally as a regular tenant admin through the
+    public signup wizard. Creates a dedicated platform-only super_admin
+    account (admin@profitclean.com) under its own "ProfitClean
+    Platform" company, with a freshly generated password that is never
+    hardcoded -- it's written only to the diagnostic marker file that
+    login_page() surfaces, never to git.
+
+    Guarded by an atomic lock file (O_CREAT|O_EXCL) against concurrent
+    Streamlit reruns, and self-disables via a result marker file so it
+    can't repeat even if the secret is left set.
+
+    REMOVE THIS FUNCTION, ITS CALL BELOW, AND THE DIAGNOSTIC EXPANDER IN
+    login_page() once the new super_admin login is confirmed working.
+    """
+    marker_path, lock_path = _platform_admin_marker_paths()
+    if os.path.exists(marker_path):
+        return
+
+    try:
+        confirm = st.secrets.get("CONFIRM_PLATFORM_ADMIN_SETUP")
+    except Exception:
+        confirm = None
+    if confirm != "SETUP-PLATFORM-ADMIN":
+        return
+
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.close(fd)
+    except FileExistsError:
+        return  # another concurrent rerun is already handling this
+
+    lines = [f"Started at {datetime.now().isoformat()}"]
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT id, company_id FROM users WHERE lower(email) = 'dustbrosco@gmail.com'")
+        old_user = c.fetchone()
+        if old_user:
+            old_user_id, old_company_id = old_user
+            c.execute("DELETE FROM users WHERE id = ?", (old_user_id,))
+            c.execute("DELETE FROM business_profile WHERE company_id = ?", (old_company_id,))
+            c.execute("DELETE FROM companies WHERE id = ?", (old_company_id,))
+            conn.commit()
+            lines.append(f"Removed bootstrap user id={old_user_id} and company id={old_company_id} (frees dustbrosco@gmail.com and its subdomain for reuse).")
+        else:
+            lines.append("No existing dustbrosco@gmail.com account found (nothing to remove).")
+        conn.close()
+
+        new_password = secrets.token_urlsafe(12) + "A1!"
+        success, result = create_company(
+            "ProfitClean Platform", "platform-admin", "admin@profitclean.com",
+            "Platform Admin", new_password,
+            make_super_admin=True,
+        )
+        lines.append(f"create_company() -> success={success}, result={result}")
+
+        if success:
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("SELECT password_hash, role FROM users WHERE company_id = ?", (result,))
+            row = c.fetchone()
+            conn.close()
+            if row:
+                verified = verify_password(new_password, row[0])
+                lines.append(f"Created user role={row[1]}, self-check verify_password = {verified}")
+                lines.append(f"NEW SUPER ADMIN LOGIN -- email: admin@profitclean.com | password: {new_password}")
+            else:
+                lines.append("WARNING: no user row found for the new company_id.")
+    except Exception as e:
+        lines.append(f"ERROR: {type(e).__name__}: {e}")
+    finally:
+        try:
+            with open(marker_path, "w") as f:
+                f.write("\n".join(lines))
+        except OSError:
+            pass
+        try:
+            os.remove(lock_path)
+        except OSError:
+            pass
+
+
 def main():
+    _run_platform_admin_setup_if_requested()
     # First, initialize database and run migrations
     init_db()
     ensure_default_global_settings()
