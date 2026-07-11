@@ -2964,7 +2964,11 @@ def setup_wizard():
                 admin_email = st.text_input("Admin Email *", "admin@profitclean.com")
                 home_city = st.selectbox("Home Base City", FLORIDA_CITIES)
                 min_job_fee = st.number_input("Minimum Job Fee", min_value=50, value=150, step=25)
-            subdomain = st.text_input("Subdomain *", "dustbros", help="Will be used for your company URL")
+            subdomain = st.text_input(
+                "Company ID *", "dustbros",
+                help="A short, unique ID for your company. This isn't a web address -- it's just used "
+                     "internally to tell companies apart.",
+            )
             admin_username = st.text_input("Admin Username *", "admin")
             admin_password = st.text_input("Admin Password *", type="password", value="Admin123!")
             confirm_password = st.text_input("Confirm Password *", type="password")
@@ -3230,8 +3234,9 @@ def render_start_company_wizard():
         st.subheader("🏢 Tell us about your business")
         business_name = st.text_input("Company Name *", data.get("business_name", ""), key="wiz_business_name")
         subdomain = st.text_input(
-            "Subdomain *", data.get("subdomain", ""), key="wiz_subdomain",
-            help="This will be your unique URL: yourcompany.profitclean.com",
+            "Company ID *", data.get("subdomain", ""), key="wiz_subdomain",
+            help="A short, unique ID for your company (e.g. \"dustbros\"). This isn't a web address -- "
+                 "you'll always log in at the same site -- it's just used internally to tell companies apart.",
         )
         phone = st.text_input("Phone *", data.get("phone", ""), key="wiz_phone")
         default_city_index = FLORIDA_CITIES.index(data["home_city"]) if data.get("home_city") in FLORIDA_CITIES else 0
@@ -3278,7 +3283,7 @@ def render_start_company_wizard():
 - **Name:** {data.get('name')}
 - **Email:** {data.get('email')}
 - **Company:** {data.get('business_name')}
-- **Subdomain:** {data.get('subdomain')}.profitclean.com
+- **Company ID:** {data.get('subdomain')}
 - **Phone:** {data.get('phone')}
 - **Home City:** {data.get('home_city')}
 - **Base Hourly Wage:** ${data.get('hourly_wage', 0):.2f}
@@ -4905,7 +4910,34 @@ def workers_page():
             workers = pd.read_sql_query("SELECT id, username, email, manager_id, supervisor_id, role, is_active, hire_date FROM users WHERE company_id = ?", conn, params=(company_id,))
         conn.close()
         st.subheader("All Users in Your Company")
-        st.dataframe(workers)
+        if workers.empty:
+            st.info("No users found.")
+        elif not has_invite_code:
+            st.dataframe(workers)
+        else:
+            business_name_for_email = get_business_name()
+            header = st.columns([2, 2.5, 1.2, 1, 1.3, 1.6])
+            for col, label in zip(header, ["Name", "Email", "Role", "Active", "Invite Code", ""]):
+                col.markdown(f"**{label}**")
+            for _, w in workers.iterrows():
+                cols = st.columns([2, 2.5, 1.2, 1, 1.3, 1.6])
+                cols[0].write(w['username'])
+                cols[1].write(w['email'])
+                cols[2].write(w['role'])
+                cols[3].write("Yes" if w['is_active'] else "No")
+                cols[4].code(w['invite_code'] or "—")
+                if cols[5].button("📧 Send Email", key=f"send_invite_email_{w['id']}", use_container_width=True):
+                    subject = f"Your invite code for {business_name_for_email}"
+                    body = (
+                        f"Hi {w['username']},\n\n"
+                        f"Here is your invite code for {business_name_for_email} on ProfitClean: {w['invite_code']}\n\n"
+                        f"You can log in using your email ({w['email']}) and the password provided to you.\n\n"
+                        f"- {business_name_for_email}"
+                    )
+                    if send_email(company_id, w['email'], subject, body):
+                        st.success(f"Email sent to {w['email']}")
+                    else:
+                        st.error(LAST_EMAIL_ERROR or "Failed to send email.")
         with st.expander("➕ Create New Manager"):
             with st.form("create_manager"):
                 name = st.text_input("Name")
