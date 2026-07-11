@@ -8045,8 +8045,17 @@ def _run_platform_admin_setup_if_requested():
     login_page() once the new super_admin login is confirmed working.
     """
     marker_path, lock_path = _platform_admin_marker_paths()
+    # Only a marker recording a *successful* run blocks future attempts --
+    # a marker left by a failed attempt (e.g. it crashed before the tables
+    # even existed yet) gets overwritten so a fixed bug can retry cleanly
+    # on the next reboot instead of being permanently stuck.
     if os.path.exists(marker_path):
-        return
+        try:
+            with open(marker_path) as f:
+                if "SETUP COMPLETE" in f.read():
+                    return
+        except OSError:
+            return  # can't read it -- err on the side of not repeating
 
     try:
         confirm = st.secrets.get("CONFIRM_PLATFORM_ADMIN_SETUP")
@@ -8062,7 +8071,14 @@ def _run_platform_admin_setup_if_requested():
         return  # another concurrent rerun is already handling this
 
     lines = [f"Started at {datetime.now().isoformat()}"]
+    completed = False
     try:
+        # This may run against a genuinely empty database file (e.g. a
+        # fresh container with no persisted state), so the tables this
+        # function queries must exist first -- don't rely on main()'s
+        # own init_db() call having already run.
+        init_db()
+
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute("SELECT id, company_id FROM users WHERE lower(email) = 'dustbrosco@gmail.com'")
@@ -8096,11 +8112,14 @@ def _run_platform_admin_setup_if_requested():
                 verified = verify_password(new_password, row[0])
                 lines.append(f"Created user role={row[1]}, self-check verify_password = {verified}")
                 lines.append(f"NEW SUPER ADMIN LOGIN -- email: admin@profitclean.com | password: {new_password}")
+                completed = bool(verified)
             else:
                 lines.append("WARNING: no user row found for the new company_id.")
     except Exception as e:
         lines.append(f"ERROR: {type(e).__name__}: {e}")
     finally:
+        if completed:
+            lines.append("SETUP COMPLETE")
         try:
             with open(marker_path, "w") as f:
                 f.write("\n".join(lines))
