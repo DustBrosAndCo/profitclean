@@ -90,7 +90,12 @@ st.markdown("""
 
 st.markdown("""
 <style>
-/* ---------- Design tokens ---------- */
+/* ---------- Design tokens ----------
+   --pc-navy / --pc-navy-light are the brand's dark decorative surfaces
+   (sidebar, metric-card gradient) -- these are deliberately dark in both
+   light and dark mode, so they're kept separate from --pc-text (page
+   text, which DOES need to flip for dark mode) and --pc-card-bg / --pc-bg-page
+   (surfaces that also need to flip). */
 :root {
     --pc-navy: #0F172A;
     --pc-navy-light: #1E3A5F;
@@ -100,15 +105,39 @@ st.markdown("""
     --pc-green-dark: #059669;
     --pc-amber: #f59e0b;
     --pc-amber-light: #fef3c7;
+    --pc-amber-text: #78350f;
     --pc-purple: #8b5cf6;
     --pc-red: #ef4444;
+
+    --pc-text: #0F172A;
+    --pc-text-muted: #64748b;
     --pc-border: #e2e8f0;
     --pc-bg-soft: #f8fafc;
+    --pc-bg-page-1: #fafbfc;
+    --pc-bg-page-2: #f4f6f8;
+    --pc-card-bg: #ffffff;
+    --pc-green-soft-bg: #f0fdf4;
+    --pc-green-soft-border: #bbf7d0;
+    --pc-fair-bg: #d1fae5;
+    --pc-fair-text: #065f46;
+    --pc-high-bg: #ede9fe;
+    --pc-high-text: #4c1d95;
+
     --pc-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
     --pc-shadow-hover: 0 8px 24px rgba(15, 23, 42, 0.12);
     --pc-radius: 16px;
     --pc-radius-sm: 10px;
 }
+
+/* Note: deliberately a single fixed theme, not an auto light/dark switch.
+   Streamlit's native widgets (buttons, inputs, the toolbar) are themed
+   server-side via .streamlit/config.toml and do not respond to the
+   visitor's browser color-scheme preference -- only our own CSS below
+   would. Mixing a responsive custom theme with a static native one
+   produces exactly the inconsistent half-themed look this replaced
+   (e.g. secondary buttons staying light while the page background goes
+   dark), so this app intentionally commits to one consistent brand
+   theme for every visitor instead. */
 
 /* ---------- Global typography ---------- */
 html, body, [class*="css"] {
@@ -117,13 +146,13 @@ html, body, [class*="css"] {
 
 h1, h2, h3 {
     font-weight: 700 !important;
-    color: var(--pc-navy) !important;
+    color: var(--pc-text) !important;
     letter-spacing: -0.02em;
 }
 
 /* Main app background */
 .stApp {
-    background: linear-gradient(180deg, #fafbfc 0%, #f4f6f8 100%);
+    background: linear-gradient(180deg, var(--pc-bg-page-1) 0%, var(--pc-bg-page-2) 100%);
 }
 
 /* ---------- Sidebar ---------- */
@@ -156,6 +185,13 @@ section[data-testid="stSidebar"] .stButton button:active {
 section[data-testid="stSidebar"] hr {
     border-color: rgba(255,255,255,0.12);
 }
+section[data-testid="stSidebar"] .stMarkdown p {
+    color: #94a3b8 !important;
+    font-weight: 700;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
 
 /* ---------- Cards & metrics ---------- */
 .metric-card {
@@ -179,7 +215,8 @@ section[data-testid="stSidebar"] hr {
 .price-value { font-size: 3rem; font-weight: 800; }
 
 .card {
-    background: white;
+    background: var(--pc-card-bg);
+    color: var(--pc-text);
     border-radius: var(--pc-radius);
     padding: 1.25rem;
     margin-bottom: 1rem;
@@ -191,15 +228,17 @@ section[data-testid="stSidebar"] hr {
 
 .internal-card {
     background: var(--pc-amber-light);
+    color: var(--pc-amber-text);
     border-radius: var(--pc-radius);
     padding: 1.1rem;
     border-left: 4px solid var(--pc-amber);
 }
 .worker-card {
-    background: #f0fdf4;
+    background: var(--pc-green-soft-bg);
+    color: var(--pc-text);
     border-radius: var(--pc-radius);
     padding: 1.1rem;
-    border: 1px solid #bbf7d0;
+    border: 1px solid var(--pc-green-soft-border);
 }
 
 /* Pricing tiers — unified look */
@@ -213,9 +252,9 @@ section[data-testid="stSidebar"] hr {
 .pricing-tier-low:hover, .pricing-tier-fair:hover, .pricing-tier-high:hover {
     transform: translateY(-3px);
 }
-.pricing-tier-low { background: var(--pc-amber-light); }
-.pricing-tier-fair { background: #d1fae5; }
-.pricing-tier-high { background: #ede9fe; }
+.pricing-tier-low { background: var(--pc-amber-light); color: var(--pc-amber-text); }
+.pricing-tier-fair { background: var(--pc-fair-bg); color: var(--pc-fair-text); }
+.pricing-tier-high { background: var(--pc-high-bg); color: var(--pc-high-text); }
 
 /* ---------- Buttons ---------- */
 .stButton button {
@@ -276,14 +315,14 @@ button[kind="primary"]:active, .stFormSubmitButton button[kind="primary"]:active
 
 /* ---------- Metrics (st.metric) ---------- */
 [data-testid="stMetric"] {
-    background: white;
+    background: var(--pc-card-bg);
     border: 1px solid var(--pc-border);
     border-radius: var(--pc-radius);
     padding: 0.9rem 1rem;
     box-shadow: var(--pc-shadow);
 }
-[data-testid="stMetricLabel"] { font-weight: 600; color: #64748b; }
-[data-testid="stMetricValue"] { color: var(--pc-navy); font-weight: 800; }
+[data-testid="stMetricLabel"] { font-weight: 600; color: var(--pc-text-muted); }
+[data-testid="stMetricValue"] { color: var(--pc-text); font-weight: 800; }
 
 /* ---------- Expanders ---------- */
 .streamlit-expanderHeader {
@@ -322,7 +361,7 @@ button[kind="primary"]:active, .stFormSubmitButton button[kind="primary"]:active
 
 /* ---------- Login page polish ---------- */
 .stForm {
-    background: white;
+    background: var(--pc-card-bg);
     border-radius: var(--pc-radius);
     padding: 1.5rem;
     border: 1px solid var(--pc-border);
