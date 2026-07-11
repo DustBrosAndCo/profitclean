@@ -1225,7 +1225,7 @@ def calendly_callback_page():
     calendly_oauth_page()
 
 
-def create_company(company_name, subdomain, owner_email, owner_username, owner_password, bypass_duplicate_email=False):
+def create_company(company_name, subdomain, owner_email, owner_username, owner_password, bypass_duplicate_email=False, make_super_admin=False):
     owner_email = normalize_email(owner_email)
     owner_username = owner_username.strip()
     conn = sqlite3.connect(DB_PATH)
@@ -1248,9 +1248,11 @@ def create_company(company_name, subdomain, owner_email, owner_username, owner_p
     company_id = c.lastrowid
     hashed, salt = hash_password(owner_password)
     invite_code = secrets.token_hex(4).upper()
-    # Use configuration value for super admin email instead of hardcoded
-    super_admin_email = os.getenv('SUPER_ADMIN_EMAIL', 'admin@profitclean.com')
-    owner_role = "super_admin" if owner_email == super_admin_email else "admin"
+    # super_admin can only be granted by the caller explicitly (the true
+    # first-run bootstrap in setup_wizard, gated on company_count == 0) --
+    # never derived from the email the caller typed, which any public
+    # signup visitor controls.
+    owner_role = "super_admin" if make_super_admin else "admin"
 
     fallback_email = f"{owner_email.split('@')[0]}+{company_id}@{owner_email.split('@', 1)[1]}" if duplicate_email else owner_email
     c.execute("""
@@ -1495,9 +1497,13 @@ def reset_password_with_2fa(token, twofa_code, new_password):
     
     conn.commit()
     conn.close()
-    
+
+    # Invalidate any existing sessions (e.g. a stolen/leaked token) now that
+    # the password has changed.
+    force_logout_sessions(user_id)
+
     log_auth_event(user_id, None, "password_reset", "success", None, None, "Password reset via 2FA")
-    
+
     return True, "Password reset successfully. Please log in with your new password."
 
 
@@ -2936,6 +2942,7 @@ def setup_wizard():
                         admin_email,
                         admin_username,
                         admin_password,
+                        make_super_admin=(company_count == 0),
                     )
                     if success:
                         conn = sqlite3.connect(DB_PATH)
@@ -3247,6 +3254,7 @@ def edit_profile_page():
             if new_email != email:
                 updates.append("email = ?")
                 params.append(new_email)
+            password_changed = False
             if new_pwd:
                 conn = sqlite3.connect(DB_PATH)
                 c = conn.cursor()
@@ -3266,6 +3274,7 @@ def edit_profile_page():
                         updates.append("password_hash = ?")
                         updates.append("salt = ?")
                         params.extend([hashed, salt])
+                        password_changed = True
             if updates:
                 params.append(uid)
                 conn = sqlite3.connect(DB_PATH)
@@ -3273,8 +3282,20 @@ def edit_profile_page():
                 try:
                     c.execute(f"UPDATE users SET {', '.join(updates)} WHERE id = ?", params)
                     conn.commit()
-                    st.success(t("profile_saved"))
-                    st.rerun()
+                    if password_changed:
+                        # A changed password should invalidate any other active
+                        # sessions (e.g. a stolen/leaked token) -- including this
+                        # one, so the user logs back in with the new password.
+                        force_logout_sessions(uid)
+                        for key in list(st.session_state.keys()):
+                            if key not in ["page"]:
+                                del st.session_state[key]
+                        st.session_state.page = "login"
+                        st.success("Password changed. Please log in again with your new password.")
+                        st.rerun()
+                    else:
+                        st.success(t("profile_saved"))
+                        st.rerun()
                 except sqlite3.IntegrityError:
                     conn.rollback()
                     st.error("That username or email is already in use. Please choose another.")
@@ -4795,7 +4816,7 @@ def workers_page():
             with col2:
                 if st.button("Refresh List"):
                     st.rerun()
-    else:
+    elif user['role'] in ('manager', 'supervisor'):
         st.subheader("Your Workers")
         workers = get_all_workers_for_manager(user['user_id'], company_id)
         st.dataframe(workers)
@@ -4846,6 +4867,8 @@ def workers_page():
                     st.rerun()
         else:
             st.info("No sweet‑spot requests pending")
+    else:
+        st.info("This page is for managers and supervisors. Contact your manager if you need to invite a worker.")
 
 def schedule_page():
     if st.button(t("back")):
@@ -6269,23 +6292,47 @@ def restore_from_backup(backup_file):
     return restore_personal_backup_data(backup)
 
 
+PERSONAL_BACKUP_TABLES = [
+    "clients", "estimates", "quick_jobs", "monthly_expenses", "scheduled_jobs",
+    "inspections", "supplies", "team_messages", "support_tickets",
+]
+
+
 def restore_personal_backup_data(backup_data):
-    """Restore a user-scoped backup (create_backup format)."""
-    user_id = backup_data.get('user_id') or st.session_state.user['user_id']
-    company_id = backup_data.get('company_id') or get_current_user_company()
+    """Restore a user-scoped backup (create_backup format).
+
+    Deliberately ignores any user_id/company_id/table names claimed inside
+    the uploaded file -- always restores into the *current session's* own
+    company and accessible-user scope. Trusting file-supplied identifiers
+    here would let any logged-in user (any role) upload a crafted backup
+    naming a different company_id/user_id and overwrite another tenant's
+    data.
+    """
+    user_id = st.session_state.user['user_id']
+    role = st.session_state.user['role']
+    company_id = get_current_user_company()
     if not company_id:
         return False
+    accessible = get_accessible_user_ids(user_id, role, company_id)
+
     data = backup_data.get("data", {})
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     for table, rows in data.items():
+        if table not in PERSONAL_BACKUP_TABLES:
+            continue
         try:
-            c.execute(f"DELETE FROM {table} WHERE company_id = ? AND user_id = ?", (company_id, user_id))
+            placeholders = ','.join(['?' for _ in accessible])
+            c.execute(f"DELETE FROM {table} WHERE company_id = ? AND user_id IN ({placeholders})", [company_id] + accessible)
             for row in rows or []:
+                row = dict(row)
+                row['company_id'] = company_id
+                if row.get('user_id') not in accessible:
+                    row['user_id'] = user_id
                 columns = [col for col in row.keys() if col != 'id']
-                placeholders = ','.join(['?' for _ in columns])
+                col_placeholders = ','.join(['?' for _ in columns])
                 values = [row[col] for col in columns]
-                c.execute(f"INSERT INTO {table} ({','.join(columns)}) VALUES ({placeholders})", values)
+                c.execute(f"INSERT INTO {table} ({','.join(columns)}) VALUES ({col_placeholders})", values)
         except Exception as e:
             print(f"Personal restore error on {table}: {e}")
     conn.commit()
@@ -6351,8 +6398,8 @@ def upload_backup():
                 )
             else:
                 role = st.session_state.user.get('role')
-                if role not in ('super_admin', 'admin'):
-                    st.error("Only administrators can restore full system backups.")
+                if role != 'super_admin':
+                    st.error("Only a super admin can restore full system backups.")
                     return
                 st.warning(
                     "⚠️ This will REPLACE ALL data in the database with this backup. "
@@ -7471,24 +7518,27 @@ def admin_companies_page():
                 st.markdown(f"**Manage {target_user['username']} ({target_user['email']}) | {target_user['role']} | {company_name}**")
                 col1, col2 = st.columns(2)
                 with col1:
-                    new_role = st.selectbox(
-                        "Change Role",
-                        ["worker", "supervisor", "manager", "admin", "support_staff", "super_admin"],
-                        index=["worker", "supervisor", "manager", "admin", "support_staff", "super_admin"].index(target_user['role']) if target_user['role'] in ["worker", "supervisor", "manager", "admin", "support_staff", "super_admin"] else 0,
-                        key="admin_change_role"
-                    )
-                    if st.button("Update Role", key="admin_update_role"):
-                        if new_role != target_user['role']:
-                            conn = sqlite3.connect(DB_PATH)
-                            c = conn.cursor()
-                            c.execute("UPDATE users SET role = ? WHERE id = ?", (new_role, selected_user))
-                            conn.commit()
-                            conn.close()
-                            log_audit(current_user['user_id'], "change_role", f"Changed role for user {selected_user} to {new_role}")
-                            st.success("User role updated")
-                            st.rerun()
-                        else:
-                            st.info("Role is already set to that value")
+                    if current_user['role'] != 'super_admin':
+                        st.caption("Only a super admin can change a user's role.")
+                    else:
+                        new_role = st.selectbox(
+                            "Change Role",
+                            ["worker", "supervisor", "manager", "admin", "support_staff", "super_admin"],
+                            index=["worker", "supervisor", "manager", "admin", "support_staff", "super_admin"].index(target_user['role']) if target_user['role'] in ["worker", "supervisor", "manager", "admin", "support_staff", "super_admin"] else 0,
+                            key="admin_change_role"
+                        )
+                        if st.button("Update Role", key="admin_update_role"):
+                            if new_role != target_user['role']:
+                                conn = sqlite3.connect(DB_PATH)
+                                c = conn.cursor()
+                                c.execute("UPDATE users SET role = ? WHERE id = ?", (new_role, selected_user))
+                                conn.commit()
+                                conn.close()
+                                log_audit(current_user['user_id'], "change_role", f"Changed role for user {selected_user} to {new_role}")
+                                st.success("User role updated")
+                                st.rerun()
+                            else:
+                                st.info("Role is already set to that value")
                 with col2:
                     password_reset = st.text_input("New Password", type="password", key="admin_new_password")
                     if st.button("Reset Password", key="admin_reset_password"):
@@ -7705,22 +7755,25 @@ def admin_companies_page():
 
             st.markdown("---")
             st.markdown("#### Restore Backup")
-            uploaded = st.file_uploader("Upload full system backup JSON", type=['json'], key="admin_restore_backup")
-            if uploaded:
-                try:
-                    backup_data = json.load(uploaded)
-                    if backup_data.get('data') and backup_data.get('backup_date'):
-                        if st.button("Restore Backup", use_container_width=True, key="admin_restore_confirm"):
-                            ok = restore_full_system_backup_data(backup_data)
-                            if ok:
-                                st.success("✅ System backup restored. Refresh the app.")
-                                log_audit(current_user['user_id'], "restore_system_backup", "Restored full system backup")
-                            else:
-                                st.error("Failed to restore backup.")
-                    else:
-                        st.error("Uploaded file is not a valid full system backup.")
-                except Exception as e:
-                    st.error(f"Failed to read backup file: {e}")
+            if current_user['role'] != 'super_admin':
+                st.info("Only a super admin can restore a full system backup.")
+            else:
+                uploaded = st.file_uploader("Upload full system backup JSON", type=['json'], key="admin_restore_backup")
+                if uploaded:
+                    try:
+                        backup_data = json.load(uploaded)
+                        if backup_data.get('data') and backup_data.get('backup_date'):
+                            if st.button("Restore Backup", use_container_width=True, key="admin_restore_confirm"):
+                                ok = restore_full_system_backup_data(backup_data)
+                                if ok:
+                                    st.success("✅ System backup restored. Refresh the app.")
+                                    log_audit(current_user['user_id'], "restore_system_backup", "Restored full system backup")
+                                else:
+                                    st.error("Failed to restore backup.")
+                        else:
+                            st.error("Uploaded file is not a valid full system backup.")
+                    except Exception as e:
+                        st.error(f"Failed to read backup file: {e}")
         
         with col2:
             if st.button("Clean Up Old Sessions", use_container_width=True):
