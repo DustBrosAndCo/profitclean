@@ -4956,6 +4956,11 @@ def workers_page():
         st.markdown("#### Manage Worker")
         if not workers.empty:
             sel_worker = st.selectbox("Select worker to manage", workers['id'].tolist(), format_func=lambda x: f"{workers[workers['id']==x]['username'].iloc[0]} ({x})")
+            sel_is_active = bool(workers[workers['id'] == sel_worker]['is_active'].iloc[0])
+            if sel_is_active:
+                st.success("🟢 Active")
+            else:
+                st.error("🔴 Disabled")
             # NOTE: "Transfer Worker" used to live here, letting a single
             # company's admin move a worker into ANY active company (the
             # destination list was every company in the system, not just
@@ -4964,21 +4969,25 @@ def workers_page():
             # so it has been moved to the super_admin view below.
             col1, col2 = st.columns([2,1])
             with col1:
-                if st.button("Deactivate Worker"):
+                toggle_label = "Deactivate Worker" if sel_is_active else "Activate Worker"
+                if st.button(toggle_label):
                     conn = sqlite3.connect(DB_PATH)
                     c = conn.cursor()
                     try:
-                        c.execute("UPDATE users SET is_active = 0 WHERE id = ?", (sel_worker,))
+                        new_status = 0 if sel_is_active else 1
+                        action = 'deactivate_worker' if sel_is_active else 'activate_worker'
+                        detail_verb = 'deactivated' if sel_is_active else 'activated'
+                        c.execute("UPDATE users SET is_active = ? WHERE id = ?", (new_status, sel_worker))
                         c.execute("INSERT INTO audit_log (user_id, action, details, created_at) VALUES (?,?,?,?)",
-                                  (st.session_state.user['user_id'], 'deactivate_worker', f'Worker {sel_worker} deactivated', datetime.now().isoformat()))
+                                  (st.session_state.user['user_id'], action, f'Worker {sel_worker} {detail_verb}', datetime.now().isoformat()))
                         conn.commit()
                         conn.close()
-                        st.success("Worker deactivated")
+                        st.success("Worker deactivated" if sel_is_active else "Worker activated")
                         st.rerun()
                     except Exception as e:
                         conn.rollback()
                         conn.close()
-                        st.error(f"Failed to deactivate: {e}")
+                        st.error(f"Failed to update: {e}")
             with col2:
                 if st.button("Refresh List"):
                     st.rerun()
