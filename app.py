@@ -7540,23 +7540,27 @@ def admin_companies_page():
                             else:
                                 st.info("Role is already set to that value")
                 with col2:
-                    password_reset = st.text_input("New Password", type="password", key="admin_new_password")
-                    if st.button("Reset Password", key="admin_reset_password"):
-                        if password_reset:
-                            valid, msg = validate_password_strength(password_reset)
-                            if not valid:
-                                st.error(msg)
+                    if current_user['role'] != 'super_admin':
+                        st.caption("Only a super admin can reset another user's password.")
+                    else:
+                        password_reset = st.text_input("New Password", type="password", key="admin_new_password")
+                        if st.button("Reset Password", key="admin_reset_password"):
+                            if password_reset:
+                                valid, msg = validate_password_strength(password_reset)
+                                if not valid:
+                                    st.error(msg)
+                                else:
+                                    hashed, salt = hash_password(password_reset)
+                                    conn = sqlite3.connect(DB_PATH)
+                                    c = conn.cursor()
+                                    c.execute("UPDATE users SET password_hash = ?, salt = ?, login_attempts = 0, locked_until = NULL WHERE id = ?", (hashed, salt, selected_user))
+                                    conn.commit()
+                                    conn.close()
+                                    force_logout_sessions(selected_user)
+                                    log_audit(current_user['user_id'], "reset_password", f"Reset password for user {selected_user}")
+                                    st.success("Password reset successfully")
                             else:
-                                hashed, salt = hash_password(password_reset)
-                                conn = sqlite3.connect(DB_PATH)
-                                c = conn.cursor()
-                                c.execute("UPDATE users SET password_hash = ?, salt = ?, login_attempts = 0, locked_until = NULL WHERE id = ?", (hashed, salt, selected_user))
-                                conn.commit()
-                                conn.close()
-                                log_audit(current_user['user_id'], "reset_password", f"Reset password for user {selected_user}")
-                                st.success("Password reset successfully")
-                        else:
-                            st.error("Enter a new password")
+                                st.error("Enter a new password")
 
                 st.markdown("#### Activation")
                 if target_user['is_active']:
