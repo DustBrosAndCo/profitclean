@@ -2904,6 +2904,19 @@ def verify_certification(cert_id, verifier_id):
 def setup_wizard():
     st.title("🧹 ProfitClean")
     st.caption("Created by Dust Bros & Co.")
+
+    # Temporary diagnostic for the one-time platform-admin setup -- see
+    # _run_platform_admin_setup_if_requested() for details. Remove alongside
+    # that function.
+    _platform_admin_marker_path, _ = _platform_admin_marker_paths()
+    if os.path.exists(_platform_admin_marker_path):
+        with st.expander("Platform admin setup diagnostic (remove after use)"):
+            try:
+                with open(_platform_admin_marker_path) as f:
+                    st.code(f.read())
+            except OSError as e:
+                st.write(f"Could not read marker file: {e}")
+
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT COUNT(*) FROM companies")
@@ -2911,6 +2924,9 @@ def setup_wizard():
     conn.close()
     if company_count == 0:
         st.info("Welcome! Let's set up your company.")
+        if st.button("Sign in instead"):
+            st.session_state.page = "login"
+            st.rerun()
         with st.form("setup"):
             col1, col2 = st.columns(2)
             with col1:
@@ -2929,7 +2945,6 @@ def setup_wizard():
             smtp_password = st.text_input("SMTP Password", type="password")
             smtp_server = st.text_input("SMTP Server (optional)", placeholder="smtp.gmail.com")
             smtp_port = st.number_input("SMTP Port", value=587)
-            st.caption("Need to stop here and sign in instead?")
             if st.form_submit_button("Create My Company"):
                 if admin_password != confirm_password:
                     st.error("Passwords do not match")
