@@ -1,7 +1,6 @@
 # Fly.io app configuration for ProfitClean.
-# See DEPLOY_FLY.md for the full setup walkthrough.
 
-app = "profitclean-appname"  # CHANGE THIS to a globally-unique name before deploying
+app = "dustbros-profitclean"
 primary_region = "iad"
 
 [build]
