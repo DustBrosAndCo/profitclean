@@ -1189,15 +1189,6 @@ def calendly_oauth_page():
 
         pending_company_id, pending_code_verifier = row
         integration = CalendlyIntegration(pending_company_id)
-        # Temporary diagnostic: confirm which credentials are actually being
-        # used for this exchange, without displaying the secret itself.
-        expected_secret = os.environ.get("CALENDLY_CLIENT_SECRET")
-        st.caption(
-            f"Debug: using client_id `{integration.client_id}`, "
-            f"secret configured: {bool(integration.client_secret)}, "
-            f"secret matches platform env var: {integration.client_secret == expected_secret if expected_secret else 'n/a (no env var found)'}, "
-            f"redirect_uri: `{integration.redirect_uri}`"
-        )
         with st.spinner("Connecting to Calendly..."):
             try:
                 integration.exchange_code_for_token(code, code_verifier=pending_code_verifier)

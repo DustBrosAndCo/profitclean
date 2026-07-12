@@ -54,7 +54,31 @@ class BaseIntegration(ABC):
             self.settings = json.loads(row[3]) if row[3] else {}
             self.enabled = bool(row[4])
 
+            # A per-company OAuth app override (client_secret) is stored
+            # encrypted -- must decrypt it here too, matching what
+            # get_company_integration() already does for admin display.
+            # Without this, a saved override silently uses the raw
+            # ciphertext as the client_secret, causing Calendly to reject
+            # it with "invalid_client" while the admin form still *shows*
+            # the correct decrypted value (since that path decrypts it).
+            if self.settings.get("client_secret"):
+                try:
+                    self.settings["client_secret"] = encryption.decrypt(self.settings["client_secret"])
+                except Exception:
+                    pass
+
     def save_config(self):
+        # self.settings holds the *decrypted* client_secret in memory (see
+        # _load_config()) -- re-encrypt a copy before persisting, or a save
+        # after a successful connection would overwrite the encrypted value
+        # with plaintext.
+        settings_to_save = dict(self.settings)
+        if settings_to_save.get("client_secret"):
+            try:
+                settings_to_save["client_secret"] = encryption.encrypt(settings_to_save["client_secret"])
+            except Exception:
+                pass
+
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute(
@@ -71,7 +95,7 @@ class BaseIntegration(ABC):
                     encryption.encrypt(self.access_token) if self.access_token else None,
                     encryption.encrypt(self.refresh_token) if self.refresh_token else None,
                     self.token_expires.isoformat() if self.token_expires else None,
-                    json.dumps(self.settings),
+                    json.dumps(settings_to_save),
                     self.settings.get("last_sync"),
                     datetime.now().isoformat(),
                     self.company_id,
@@ -88,7 +112,7 @@ class BaseIntegration(ABC):
                     encryption.encrypt(self.access_token) if self.access_token else None,
                     encryption.encrypt(self.refresh_token) if self.refresh_token else None,
                     self.token_expires.isoformat() if self.token_expires else None,
-                    json.dumps(self.settings),
+                    json.dumps(settings_to_save),
                     self.settings.get("last_sync"),
                     datetime.now().isoformat(),
                     datetime.now().isoformat(),
