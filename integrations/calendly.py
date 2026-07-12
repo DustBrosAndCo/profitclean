@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from urllib.parse import urlencode
 
-from .base import BaseIntegration, DB_PATH
+from .base import BaseIntegration, DB_PATH, IntegrationError
 
 # NOTE: There used to be a second, unused local BaseIntegration class defined
 # in this file (with its own DB_PATH pointing at a stray "external_bookings.db"
@@ -89,7 +89,12 @@ class CalendlyIntegration(BaseIntegration):
 
         if response.status_code != 200:
             self.log_event("oauth", "failed", response.text)
-            response.raise_for_status()
+            try:
+                detail = response.json()
+                message = detail.get("error_description") or detail.get("error") or response.text
+            except ValueError:
+                message = response.text
+            raise IntegrationError(f"Calendly rejected the request ({response.status_code}): {message}")
 
         token_data = response.json()
         self._update_tokens(token_data)
