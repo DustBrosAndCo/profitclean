@@ -715,6 +715,22 @@ def init_db():
         FOREIGN KEY (company_id) REFERENCES companies(id)
     )''')
 
+    # Pending OAuth authorization state (e.g. Calendly). External OAuth
+    # redirects are a full browser navigation, which starts a brand new
+    # Streamlit session server-side -- st.session_state does not survive
+    # it. This table lets the callback recover which company/user started
+    # the flow without depending on session state.
+    c.execute('''CREATE TABLE IF NOT EXISTS oauth_pending_state (
+        state TEXT PRIMARY KEY,
+        integration_type TEXT NOT NULL,
+        company_id INTEGER NOT NULL,
+        user_id INTEGER,
+        expires_at DATETIME NOT NULL,
+        created_at DATETIME,
+        FOREIGN KEY (company_id) REFERENCES companies(id),
+        FOREIGN KEY (user_id) REFERENCES users(id)
+    )''')
+
     # Indexes for the columns most frequently filtered on (tenant scoping by
     # company_id, foreign-key joins, and the login lookup).
     c.execute("CREATE INDEX IF NOT EXISTS idx_users_company ON users(company_id)")
@@ -979,5 +995,25 @@ def migrate_database():
             print("Added attempts column to password_reset_tokens")
         except sqlite3.OperationalError:
             pass
+    conn.commit()
+    conn.close()
+
+    # OAuth pending-state migration (survives the session wipe caused by a
+    # full external OAuth redirect, e.g. Calendly)
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='oauth_pending_state'")
+    if not c.fetchone():
+        c.execute('''CREATE TABLE IF NOT EXISTS oauth_pending_state (
+            state TEXT PRIMARY KEY,
+            integration_type TEXT NOT NULL,
+            company_id INTEGER NOT NULL,
+            user_id INTEGER,
+            expires_at DATETIME NOT NULL,
+            created_at DATETIME,
+            FOREIGN KEY (company_id) REFERENCES companies(id),
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )''')
+        print("Created oauth_pending_state table")
     conn.commit()
     conn.close()

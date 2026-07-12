@@ -1159,7 +1159,54 @@ def integrations_page():
 
 
 def calendly_oauth_page():
-    # Role check: Only admins can access Calendly OAuth
+    params = get_query_params_safely()
+    code = parse_query_param(params, "code")
+    state = parse_query_param(params, "state")
+
+    if code and state:
+        # Calendly redirecting back here is a full browser navigation, which
+        # starts a brand new Streamlit session server-side -- st.session_state
+        # (including login) does not survive it. Recover which company
+        # started this flow from oauth_pending_state instead of session.
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute(
+            "SELECT company_id FROM oauth_pending_state WHERE state = ? AND integration_type = 'calendly' AND expires_at > ?",
+            (state, datetime.now().isoformat())
+        )
+        row = c.fetchone()
+        if row:
+            c.execute("DELETE FROM oauth_pending_state WHERE state = ?", (state,))
+            conn.commit()
+        conn.close()
+
+        if not row:
+            st.error("❌ This authorization link has expired or was already used. Please try connecting again.")
+            if st.button("← Back to Login"):
+                st.session_state.page = "login"
+                st.rerun()
+            return
+
+        integration = CalendlyIntegration(row[0])
+        with st.spinner("Connecting to Calendly..."):
+            try:
+                integration.exchange_code_for_token(code)
+                set_query_params_safely()
+                st.success("✅ Calendly connected successfully!")
+                st.balloons()
+                st.info("Calendly's redirect logs you out of ProfitClean (a Streamlit limitation) -- please log back in to continue.")
+                if st.button("Go to Login"):
+                    st.session_state.page = "login"
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Failed to connect: {e}")
+                if st.button("← Back to Login"):
+                    st.session_state.page = "login"
+                    st.rerun()
+        return
+
+    # No code/state yet -- this is the "start the flow" view, which requires
+    # being logged in as a company admin.
     user_role = st.session_state.get('user', {}).get('role')
     if user_role not in (UserRole.SUPER_ADMIN.value, UserRole.ADMIN.value):
         st.error("❌ Access denied. Only company administrators can connect Calendly.")
@@ -1178,13 +1225,13 @@ def calendly_oauth_page():
         return
 
     integration = CalendlyIntegration(company_id)
-    
+
     # Check if credentials are configured
     if not integration.has_required_credentials():
         st.error("🔧 Calendly OAuth is not configured")
         st.info("""
         **Setup required to enable Calendly integration:**
-        
+
         1. **Create a Calendly OAuth Application**
            - Go to https://calendly.com/integrations/applications
            - Click "Create New Application"
@@ -1193,7 +1240,7 @@ def calendly_oauth_page():
              - Local: `http://localhost:8501`
              - Production: Your Streamlit Cloud app URL
            - Copy the Client ID and Secret
-        
+
         2. **Add credentials to your environment**
            - **For local development:** Create `.streamlit/secrets.toml` with:
              ```
@@ -1202,9 +1249,9 @@ def calendly_oauth_page():
              CALENDLY_REDIRECT_URI = "http://localhost:8501"
              ```
            - **For Streamlit Cloud:** Add these in Settings → Secrets
-        
+
         3. **Restart the app** after adding credentials
-        
+
         📖 See `CALENDLY_SETUP.md` for detailed instructions.
         """)
         if st.button("← Back to Integration Hub"):
@@ -1212,51 +1259,33 @@ def calendly_oauth_page():
             st.rerun()
         return
 
-    params = get_query_params_safely()
-    code = parse_query_param(params, "code")
-    state = parse_query_param(params, "state")
+    # Generate a random state and persist which company it belongs to in the
+    # DB (not session_state -- see note above about why session doesn't
+    # survive the redirect back from Calendly).
+    oauth_state = secrets.token_urlsafe(32)
+    expires_at = (datetime.now() + timedelta(minutes=15)).isoformat()
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO oauth_pending_state (state, integration_type, company_id, user_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (oauth_state, "calendly", company_id, st.session_state.user['user_id'], expires_at, datetime.now().isoformat())
+    )
+    conn.commit()
+    conn.close()
 
-    if code and state:
-        # Validate OAuth state for CSRF protection
-        stored_state = st.session_state.get('oauth_state')
-        if not stored_state or state != stored_state:
-            st.error("❌ Invalid OAuth state. Possible CSRF attack detected.")
-            st.session_state.page = "integrations"
-            st.rerun()
-            return
-        
-        with st.spinner("Connecting to Calendly..."):
-            try:
-                integration.exchange_code_for_token(code)
-                st.success("✅ Successfully connected to Calendly!")
-                st.balloons()
-                set_query_params_safely()
-                st.session_state.page = "integrations"
-                st.rerun()
-            except Exception as e:
-                st.error(f"Failed to connect: {e}")
-                if st.button("← Back to Integration Hub"):
-                    st.session_state.page = "integrations"
-                    st.rerun()
-    else:
-        # Generate and store random state for CSRF protection
-        oauth_state = secrets.token_urlsafe(32)
-        st.session_state['oauth_state'] = oauth_state
-        
-        try:
-            auth_url = integration.get_oauth_url(state=oauth_state)
-            st.code(f"Auth URL being sent: {auth_url}", language="text")
-            st.markdown(
-                f"<a href=\"{auth_url}\" target=\"_self\" style=\"display:inline-block;padding:10px 18px;border-radius:8px;background:#1f6feb;color:#fff;text-decoration:none;font-weight:600;\">Continue to Calendly</a>",
-                unsafe_allow_html=True,
-            )
-            st.caption("After authorizing, Calendly will redirect you back automatically.")
-        except Exception as e:
-            st.error(f"Unable to start OAuth flow: {e}")
+    try:
+        auth_url = integration.get_oauth_url(state=oauth_state)
+        st.markdown(
+            f"<a href=\"{auth_url}\" target=\"_self\" style=\"display:inline-block;padding:10px 18px;border-radius:8px;background:#1f6feb;color:#fff;text-decoration:none;font-weight:600;\">Continue to Calendly</a>",
+            unsafe_allow_html=True,
+        )
+        st.caption("After authorizing, Calendly will redirect you back automatically. You'll need to log back in afterward.")
+    except Exception as e:
+        st.error(f"Unable to start OAuth flow: {e}")
 
-        if st.button("← Back to Integration Hub"):
-            st.session_state.page = "integrations"
-            st.rerun()
+    if st.button("← Back to Integration Hub"):
+        st.session_state.page = "integrations"
+        st.rerun()
 
 
 def calendly_callback_page():
@@ -8037,29 +8066,35 @@ def admin_companies_page():
 # ============================================================
 
 def get_query_params_safely():
+    # st.query_params is the current stable API (values are plain strings,
+    # not lists). experimental_get_query_params() was removed in the
+    # Streamlit version this app actually runs (1.5x) -- it silently
+    # returned {} on every call, meaning query-param-based flows like the
+    # Calendly OAuth callback were never being detected at all.
+    try:
+        return dict(st.query_params)
+    except Exception:
+        pass
     if hasattr(st, "experimental_get_query_params"):
         try:
             return st.experimental_get_query_params()
-        except Exception:
-            return {}
-    if hasattr(st, "get_query_params"):
-        try:
-            return st.get_query_params()
         except Exception:
             return {}
     return {}
 
 
 def set_query_params_safely(**kwargs):
-    """Safely set query params in Streamlit."""
+    """Safely set (or clear, if called with no kwargs) query params."""
+    try:
+        st.query_params.clear()
+        for k, v in kwargs.items():
+            st.query_params[k] = v
+        return
+    except Exception:
+        pass
     if hasattr(st, "experimental_set_query_params"):
         try:
             st.experimental_set_query_params(**kwargs)
-        except Exception:
-            pass
-    elif hasattr(st, "set_query_params"):
-        try:
-            st.set_query_params(**kwargs)
         except Exception:
             pass
 
