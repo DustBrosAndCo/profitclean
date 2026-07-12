@@ -56,11 +56,15 @@ class CalendlyIntegration(BaseIntegration):
     def get_oauth_url(self, state: str = None) -> str:
         if not self.client_id or not self.redirect_uri:
             raise ValueError("Calendly OAuth credentials are not configured.")
+        # Calendly's OAuth implementation does not support per-request scopes --
+        # API access is granted based on the app's own configuration in Calendly's
+        # developer dashboard, not a `scope` param here. Sending one (even a
+        # plausible-looking one) is rejected with "The requested scope is
+        # invalid, unknown, or malformed."
         params = {
             "client_id": self.client_id,
             "response_type": "code",
             "redirect_uri": self.redirect_uri,
-            "scope": "scheduled_events:read users:read webhooks:write webhooks:read",
             "state": state or self.integration_type,
         }
         return f"{self.AUTH_URL}?{urlencode(params)}"
