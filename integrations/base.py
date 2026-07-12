@@ -5,8 +5,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any, Dict
 from encryption_manager import encryption
-
-DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "profitclean.db"))
+from constants import DB_PATH
 
 
 class BaseIntegration(ABC):
