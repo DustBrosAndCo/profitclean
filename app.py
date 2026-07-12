@@ -1171,7 +1171,7 @@ def calendly_oauth_page():
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute(
-            "SELECT company_id FROM oauth_pending_state WHERE state = ? AND integration_type = 'calendly' AND expires_at > ?",
+            "SELECT company_id, code_verifier FROM oauth_pending_state WHERE state = ? AND integration_type = 'calendly' AND expires_at > ?",
             (state, datetime.now().isoformat())
         )
         row = c.fetchone()
@@ -1187,10 +1187,11 @@ def calendly_oauth_page():
                 st.rerun()
             return
 
-        integration = CalendlyIntegration(row[0])
+        pending_company_id, pending_code_verifier = row
+        integration = CalendlyIntegration(pending_company_id)
         with st.spinner("Connecting to Calendly..."):
             try:
-                integration.exchange_code_for_token(code)
+                integration.exchange_code_for_token(code, code_verifier=pending_code_verifier)
                 set_query_params_safely()
                 st.success("✅ Calendly connected successfully!")
                 st.balloons()
@@ -1259,22 +1260,23 @@ def calendly_oauth_page():
             st.rerun()
         return
 
-    # Generate a random state and persist which company it belongs to in the
-    # DB (not session_state -- see note above about why session doesn't
-    # survive the redirect back from Calendly).
+    # Generate a random state + PKCE pair, and persist which company/verifier
+    # it belongs to in the DB (not session_state -- see note above about why
+    # session doesn't survive the redirect back from Calendly).
     oauth_state = secrets.token_urlsafe(32)
+    code_verifier, code_challenge = CalendlyIntegration.generate_pkce_pair()
     expires_at = (datetime.now() + timedelta(minutes=15)).isoformat()
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
-        "INSERT INTO oauth_pending_state (state, integration_type, company_id, user_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (oauth_state, "calendly", company_id, st.session_state.user['user_id'], expires_at, datetime.now().isoformat())
+        "INSERT INTO oauth_pending_state (state, integration_type, company_id, user_id, code_verifier, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (oauth_state, "calendly", company_id, st.session_state.user['user_id'], code_verifier, expires_at, datetime.now().isoformat())
     )
     conn.commit()
     conn.close()
 
     try:
-        auth_url = integration.get_oauth_url(state=oauth_state)
+        auth_url = integration.get_oauth_url(state=oauth_state, code_challenge=code_challenge)
         st.markdown(
             f"<a href=\"{auth_url}\" target=\"_self\" style=\"display:inline-block;padding:10px 18px;border-radius:8px;background:#1f6feb;color:#fff;text-decoration:none;font-weight:600;\">Continue to Calendly</a>",
             unsafe_allow_html=True,

@@ -725,6 +725,7 @@ def init_db():
         integration_type TEXT NOT NULL,
         company_id INTEGER NOT NULL,
         user_id INTEGER,
+        code_verifier TEXT,
         expires_at DATETIME NOT NULL,
         created_at DATETIME,
         FOREIGN KEY (company_id) REFERENCES companies(id),
@@ -1009,11 +1010,21 @@ def migrate_database():
             integration_type TEXT NOT NULL,
             company_id INTEGER NOT NULL,
             user_id INTEGER,
+            code_verifier TEXT,
             expires_at DATETIME NOT NULL,
             created_at DATETIME,
             FOREIGN KEY (company_id) REFERENCES companies(id),
             FOREIGN KEY (user_id) REFERENCES users(id)
         )''')
         print("Created oauth_pending_state table")
+    else:
+        c.execute("PRAGMA table_info(oauth_pending_state)")
+        oauth_state_columns = [col[1] for col in c.fetchall()]
+        if 'code_verifier' not in oauth_state_columns:
+            try:
+                c.execute("ALTER TABLE oauth_pending_state ADD COLUMN code_verifier TEXT")
+                print("Added code_verifier column to oauth_pending_state")
+            except sqlite3.OperationalError:
+                pass
     conn.commit()
     conn.close()

@@ -1,10 +1,12 @@
+import base64
 import hashlib
 import hmac
 import os
+import secrets
 import sqlite3
 import requests
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlencode
 
 from .base import BaseIntegration, DB_PATH, IntegrationError
@@ -53,7 +55,17 @@ class CalendlyIntegration(BaseIntegration):
     def has_required_credentials(self) -> bool:
         return bool(self.client_id and self.client_secret and self.redirect_uri)
 
-    def get_oauth_url(self, state: str = None) -> str:
+    @staticmethod
+    def generate_pkce_pair() -> Tuple[str, str]:
+        """Return (code_verifier, code_challenge) per RFC 7636. Calendly's
+        OAuth app requires PKCE -- the token exchange fails with "Missing
+        required parameter: code_verifier" without it, even for confidential
+        (Web) clients with a client_secret."""
+        verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode("ascii")
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).rstrip(b"=").decode("ascii")
+        return verifier, challenge
+
+    def get_oauth_url(self, state: str = None, code_challenge: str = None) -> str:
         if not self.client_id or not self.redirect_uri:
             raise ValueError("Calendly OAuth credentials are not configured.")
         # Calendly's OAuth implementation does not support per-request scopes --
@@ -67,22 +79,29 @@ class CalendlyIntegration(BaseIntegration):
             "redirect_uri": self.redirect_uri,
             "state": state or self.integration_type,
         }
+        if code_challenge:
+            params["code_challenge"] = code_challenge
+            params["code_challenge_method"] = "S256"
         return f"{self.AUTH_URL}?{urlencode(params)}"
 
     # === OAuth Methods (Improved) ===
-    def exchange_code_for_token(self, code: str) -> Dict:
+    def exchange_code_for_token(self, code: str, code_verifier: str = None) -> Dict:
         if not all([self.client_id, self.client_secret, self.redirect_uri]):
             raise ValueError("Calendly OAuth credentials not configured.")
 
+        token_request_data = {
+            "grant_type": "authorization_code",
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
+            "code": code,
+            "redirect_uri": self.redirect_uri,
+        }
+        if code_verifier:
+            token_request_data["code_verifier"] = code_verifier
+
         response = requests.post(
             self.TOKEN_URL,
-            data={
-                "grant_type": "authorization_code",
-                "client_id": self.client_id,
-                "client_secret": self.client_secret,
-                "code": code,
-                "redirect_uri": self.redirect_uri,
-            },
+            data=token_request_data,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
             timeout=20,
         )
